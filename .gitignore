@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+jarvis.log
+jarvis_actions.log
+jarvis_state.db
+jarvis_index.db
+jarvis_memory.json
+jarvis_benchmark.json
+jarvis_resilience.json
+.jarvis_kb/
+.tmp_tests/
+input.wav
