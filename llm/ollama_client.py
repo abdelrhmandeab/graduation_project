@@ -1,9 +1,13 @@
-import subprocess
 import time
+
+import httpx
 
 from core.config import LLM_FALLBACK_MODELS, LLM_MODEL, LLM_TIMEOUT_SECONDS
 from core.logger import logger
 from core.metrics import metrics
+
+_OLLAMA_BASE_URL = "http://localhost:11434"
+_GENERATE_ENDPOINT = f"{_OLLAMA_BASE_URL}/api/generate"
 
 
 def _candidate_models():
@@ -37,16 +41,16 @@ def ask_llm(prompt):
         last_error = ""
         for index, model_name in enumerate(models):
             try:
-                result = subprocess.run(
-                    ["ollama", "run", model_name],
-                    input=prompt,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
+                response = httpx.post(
+                    _GENERATE_ENDPOINT,
+                    json={
+                        "model": model_name,
+                        "prompt": prompt,
+                        "stream": False,
+                    },
                     timeout=LLM_TIMEOUT_SECONDS,
                 )
-            except subprocess.TimeoutExpired:
+            except httpx.TimeoutException:
                 latency = time.perf_counter() - started
                 last_error = f"timeout_after={LLM_TIMEOUT_SECONDS}s"
                 logger.error(
@@ -63,21 +67,31 @@ def ask_llm(prompt):
                     )
                     continue
                 return "The local model timed out. Try a shorter query or use a smaller model."
+            except httpx.ConnectError:
+                logger.error("Cannot connect to Ollama at %s. Is it running?", _OLLAMA_BASE_URL)
+                return "Cannot connect to Ollama. Make sure it is running."
+
             latency = time.perf_counter() - started
             logger.info("LLM latency: %.2fs (model=%s)", latency, model_name)
 
-            if result.returncode == 0:
-                response = (result.stdout or "").strip()
-                if response:
+            if response.status_code == 200:
+                data = response.json()
+                text = (data.get("response") or "").strip()
+                if text:
                     if index > 0:
                         logger.warning("LLM fallback model used: %s", model_name)
                     success = True
-                    return response
+                    return text
                 last_error = "empty_response"
                 continue
 
-            err_text = (result.stderr or "").strip()
-            last_error = err_text or f"return_code={result.returncode}"
+            err_text = ""
+            try:
+                err_text = response.json().get("error", "")
+            except Exception:
+                err_text = response.text or ""
+            last_error = err_text or f"status_code={response.status_code}"
+
             if index < len(models) - 1 and _should_try_fallback(err_text):
                 logger.warning(
                     "LLM model '%s' failed (%s). Trying fallback model '%s'.",
@@ -86,9 +100,10 @@ def ask_llm(prompt):
                     models[index + 1],
                 )
                 continue
+
             logger.error(
-                "LLM command failed with code %s (model=%s): %s",
-                result.returncode,
+                "LLM request failed with status %s (model=%s): %s",
+                response.status_code,
                 model_name,
                 last_error,
             )

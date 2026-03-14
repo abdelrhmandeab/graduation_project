@@ -14,6 +14,10 @@ class ParsedCommand:
     args: dict = field(default_factory=dict)
 
 
+# ---------------------------------------------------------------------------
+# Text normalization helpers
+# ---------------------------------------------------------------------------
+
 _COLLAPSE_WS_RE = re.compile(r"\s+")
 _MATCH_SANITIZE_RE = re.compile(r"[^a-z0-9_\s:\\/.\-]")
 _DRIVE_COLON_RE = re.compile(r"\b([a-z])\s*:", flags=re.IGNORECASE)
@@ -24,17 +28,8 @@ _OPEN_FILLER_PREFIXES = (
     r"^(?:the)\s+",
 )
 _FILESYSTEM_OPEN_HINTS = (
-    "drive",
-    "partition",
-    "folder",
-    "directory",
-    "desktop",
-    "downloads",
-    "documents",
-    "pictures",
-    "music",
-    "videos",
-    "file explorer",
+    "drive", "partition", "folder", "directory", "desktop",
+    "downloads", "documents", "pictures", "music", "videos", "file explorer",
 )
 _SPECIAL_FOLDERS = {
     "desktop": "Desktop",
@@ -113,566 +108,370 @@ def _looks_like_filesystem_target(text: str) -> bool:
     return False
 
 
-def parse_command(text: str) -> ParsedCommand:
-    raw = text or ""
-    normalized = " ".join(raw.lower().split()).strip()
-    normalized_match = _normalize_for_match(raw)
-    spoken_candidate = _strip_spoken_prefixes(normalized_match)
+# ---------------------------------------------------------------------------
+# Table-driven keyword matching
+# ---------------------------------------------------------------------------
+# Each entry: (set_of_keywords, intent, action)
+# Matched against `normalized`.
 
-    if spoken_candidate and spoken_candidate != normalized_match:
-        nested = parse_command(spoken_candidate)
-        if nested.intent != "LLM_QUERY":
-            return ParsedCommand(
-                nested.intent,
-                raw,
-                normalized,
-                action=nested.action,
-                args=dict(nested.args),
-            )
+_KEYWORD_TABLE = [
+    # Observability
+    ({"observability", "observability report", "show observability", "dashboard"},
+     "OBSERVABILITY_REPORT", ""),
+    # Benchmark
+    ({"benchmark run", "run benchmark", "benchmark quick"},
+     "BENCHMARK_COMMAND", "run"),
+    ({"resilience demo", "run resilience demo", "failure demo"},
+     "BENCHMARK_COMMAND", "resilience_demo"),
+    # Persona
+    ({"persona status", "persona show"}, "PERSONA_COMMAND", "status"),
+    ({"persona list", "list personas"}, "PERSONA_COMMAND", "list"),
+    ({"persona voice status"}, "PERSONA_COMMAND", "voice_status"),
+    ({"assistant mode", "assistant mode on"},
+     "PERSONA_COMMAND", "set", {"profile": "assistant"}),
+    # Voice
+    ({"voice status", "speech status"}, "VOICE_COMMAND", "status"),
+    ({"voice clone on", "enable voice clone"}, "VOICE_COMMAND", "clone_on"),
+    ({"voice clone off", "disable voice clone"}, "VOICE_COMMAND", "clone_off"),
+    ({"stop speaking", "interrupt speech", "be quiet", "stop talking"},
+     "VOICE_COMMAND", "interrupt"),
+    ({"speech on", "enable speech"}, "VOICE_COMMAND", "speech_on"),
+    ({"speech off", "disable speech"}, "VOICE_COMMAND", "speech_off"),
+    # Knowledge base
+    ({"kb status", "knowledge status", "knowledge base status"},
+     "KNOWLEDGE_BASE_COMMAND", "status"),
+    ({"kb quality", "knowledge quality", "kb quality report"},
+     "KNOWLEDGE_BASE_COMMAND", "quality"),
+    ({"kb clear", "knowledge clear"}, "KNOWLEDGE_BASE_COMMAND", "clear"),
+    ({"kb retrieval on", "knowledge retrieval on"},
+     "KNOWLEDGE_BASE_COMMAND", "retrieval_on"),
+    ({"kb retrieval off", "knowledge retrieval off"},
+     "KNOWLEDGE_BASE_COMMAND", "retrieval_off"),
+    # Memory
+    ({"memory status", "session memory status"}, "MEMORY_COMMAND", "status"),
+    ({"memory clear", "session memory clear"}, "MEMORY_COMMAND", "clear"),
+    ({"memory on", "enable memory"}, "MEMORY_COMMAND", "on"),
+    ({"memory off", "disable memory"}, "MEMORY_COMMAND", "off"),
+    ({"memory show", "show memory"}, "MEMORY_COMMAND", "show"),
+    # Demo
+    ({"demo mode on", "demo on"}, "DEMO_MODE", "on"),
+    ({"demo mode off", "demo off"}, "DEMO_MODE", "off"),
+    ({"demo mode status", "demo status"}, "DEMO_MODE", "status"),
+    # Metrics
+    ({"show metrics", "metrics", "metrics report"}, "METRICS_REPORT", ""),
+    # Audit
+    ({"verify audit", "verify audit log", "audit verify"}, "AUDIT_VERIFY", ""),
+    ({"audit reseal", "reseal audit", "repair audit chain"}, "AUDIT_RESEAL", ""),
+    # Policy
+    ({"policy status"}, "POLICY_COMMAND", "status"),
+    # Batch
+    ({"batch plan", "batch start", "batch begin"}, "BATCH_COMMAND", "plan"),
+    ({"batch preview", "batch show"}, "BATCH_COMMAND", "preview"),
+    ({"batch status"}, "BATCH_COMMAND", "status"),
+    ({"batch commit", "batch run"}, "BATCH_COMMAND", "commit"),
+    ({"batch abort", "batch cancel", "batch clear"}, "BATCH_COMMAND", "abort"),
+    # Search index
+    ({"index status", "search index status"}, "SEARCH_INDEX_COMMAND", "status"),
+    ({"index start", "start index"}, "SEARCH_INDEX_COMMAND", "start"),
+    # Job queue
+    ({"job worker start"}, "JOB_QUEUE_COMMAND", "worker_start"),
+    ({"job worker stop"}, "JOB_QUEUE_COMMAND", "worker_stop"),
+    ({"job worker status"}, "JOB_QUEUE_COMMAND", "worker_status"),
+    # Rollback
+    ({"undo", "rollback", "undo last action"}, "OS_ROLLBACK", ""),
+    # File nav
+    ({"current directory", "pwd"}, "OS_FILE_NAVIGATION", "pwd"),
+    ({"list drives", "drive list"}, "OS_FILE_NAVIGATION", "list_drives"),
+]
 
-    if normalized in {"observability", "observability report", "show observability", "dashboard"}:
-        return ParsedCommand("OBSERVABILITY_REPORT", raw, normalized)
 
-    if normalized in {"benchmark run", "run benchmark", "benchmark quick"}:
-        return ParsedCommand("BENCHMARK_COMMAND", raw, normalized, action="run")
-    if normalized in {"resilience demo", "run resilience demo", "failure demo"}:
-        return ParsedCommand("BENCHMARK_COMMAND", raw, normalized, action="resilience_demo")
+def _try_keyword_table(normalized, raw):
+    for entry in _KEYWORD_TABLE:
+        keywords, intent, action = entry[0], entry[1], entry[2]
+        if normalized in keywords:
+            args = entry[3] if len(entry) > 3 else {}
+            return ParsedCommand(intent, raw, normalized, action=action, args=dict(args))
+    return None
 
-    if normalized in {"persona status", "persona show"}:
-        return ParsedCommand("PERSONA_COMMAND", raw, normalized, action="status")
-    if normalized in {"persona list", "list personas"}:
-        return ParsedCommand("PERSONA_COMMAND", raw, normalized, action="list")
-    if normalized in {"persona voice status"}:
-        return ParsedCommand("PERSONA_COMMAND", raw, normalized, action="voice_status")
-    persona_voice_clone_match = re.match(
-        r"^persona voice clone\s+([a-z0-9_-]+)\s+(on|off)$",
-        normalized,
-    )
-    if persona_voice_clone_match:
-        return ParsedCommand(
-            "PERSONA_COMMAND",
-            raw,
-            normalized,
-            action="set_profile_clone_enabled",
-            args={
-                "profile": persona_voice_clone_match.group(1),
-                "enabled": persona_voice_clone_match.group(2) == "on",
-            },
-        )
-    persona_voice_provider_match = re.match(
-        r"^persona voice provider\s+([a-z0-9_-]+)\s+(xtts|voicecraft)$",
-        normalized,
-    )
-    if persona_voice_provider_match:
-        return ParsedCommand(
-            "PERSONA_COMMAND",
-            raw,
-            normalized,
-            action="set_profile_clone_provider",
-            args={
-                "profile": persona_voice_provider_match.group(1),
-                "provider": persona_voice_provider_match.group(2),
-            },
-        )
-    persona_voice_ref_match = re.match(
-        r"^persona voice reference\s+([a-z0-9_-]+)\s+(.+)$",
-        raw,
-        flags=re.IGNORECASE,
-    )
-    if persona_voice_ref_match:
-        return ParsedCommand(
-            "PERSONA_COMMAND",
-            raw,
-            normalized,
-            action="set_profile_clone_reference",
-            args={
-                "profile": persona_voice_ref_match.group(1).strip().lower(),
-                "path": persona_voice_ref_match.group(2).strip(),
-            },
-        )
-    if normalized in {"assistant mode", "assistant mode on"}:
-        return ParsedCommand("PERSONA_COMMAND", raw, normalized, action="set", args={"profile": "assistant"})
-    persona_set_match = re.match(r"^persona set\s+([a-z0-9_-]+)$", normalized)
-    if persona_set_match:
-        return ParsedCommand(
-            "PERSONA_COMMAND",
-            raw,
-            normalized,
-            action="set",
-            args={"profile": persona_set_match.group(1)},
-        )
 
-    if normalized in {"voice status", "speech status"}:
-        return ParsedCommand("VOICE_COMMAND", raw, normalized, action="status")
-    if normalized in {"voice clone on", "enable voice clone"}:
-        return ParsedCommand("VOICE_COMMAND", raw, normalized, action="clone_on")
-    if normalized in {"voice clone off", "disable voice clone"}:
-        return ParsedCommand("VOICE_COMMAND", raw, normalized, action="clone_off")
-    voice_provider_match = re.match(r"^voice clone provider\s+(xtts|voicecraft)$", normalized)
-    if voice_provider_match:
-        return ParsedCommand(
-            "VOICE_COMMAND",
-            raw,
-            normalized,
-            action="set_provider",
-            args={"provider": voice_provider_match.group(1)},
-        )
-    voice_ref_match = re.match(r"^voice clone reference\s+(.+)$", raw, flags=re.IGNORECASE)
-    if voice_ref_match:
-        return ParsedCommand(
-            "VOICE_COMMAND",
-            raw,
-            normalized,
-            action="set_reference",
-            args={"path": voice_ref_match.group(1).strip()},
-        )
-    if normalized in {"stop speaking", "interrupt speech", "be quiet", "stop talking"}:
-        return ParsedCommand("VOICE_COMMAND", raw, normalized, action="interrupt")
-    if normalized in {"speech on", "enable speech"}:
-        return ParsedCommand("VOICE_COMMAND", raw, normalized, action="speech_on")
-    if normalized in {"speech off", "disable speech"}:
-        return ParsedCommand("VOICE_COMMAND", raw, normalized, action="speech_off")
+# ---------------------------------------------------------------------------
+# Table-driven regex matching
+# ---------------------------------------------------------------------------
+# Each entry: (compiled_regex, use_raw, intent, action, args_builder)
+# If use_raw is True, the regex is matched against `raw` (case-insensitive).
+# Otherwise it's matched against `normalized`.
+# args_builder is a callable: (match) -> dict
 
-    if normalized in {"kb status", "knowledge status", "knowledge base status"}:
-        return ParsedCommand("KNOWLEDGE_BASE_COMMAND", raw, normalized, action="status")
-    kb_sync_match = re.match(r"^(?:kb sync|knowledge sync)\s+(.+)$", raw, flags=re.IGNORECASE)
-    if kb_sync_match:
-        return ParsedCommand(
-            "KNOWLEDGE_BASE_COMMAND",
-            raw,
-            normalized,
-            action="sync_dir",
-            args={"path": kb_sync_match.group(1).strip()},
-        )
-    kb_add_match = re.match(r"^(?:kb add|knowledge add)\s+(.+)$", raw, flags=re.IGNORECASE)
-    if kb_add_match:
-        return ParsedCommand(
-            "KNOWLEDGE_BASE_COMMAND",
-            raw,
-            normalized,
-            action="add_file",
-            args={"path": kb_add_match.group(1).strip()},
-        )
-    kb_index_match = re.match(r"^(?:kb index|knowledge index)\s+(.+)$", raw, flags=re.IGNORECASE)
-    if kb_index_match:
-        return ParsedCommand(
-            "KNOWLEDGE_BASE_COMMAND",
-            raw,
-            normalized,
-            action="index_dir",
-            args={"path": kb_index_match.group(1).strip()},
-        )
-    kb_search_match = re.match(r"^(?:kb search|knowledge search)\s+(.+)$", raw, flags=re.IGNORECASE)
-    if kb_search_match:
-        return ParsedCommand(
-            "KNOWLEDGE_BASE_COMMAND",
-            raw,
-            normalized,
-            action="search",
-            args={"query": kb_search_match.group(1).strip()},
-        )
-    if normalized in {"kb quality", "knowledge quality", "kb quality report"}:
-        return ParsedCommand("KNOWLEDGE_BASE_COMMAND", raw, normalized, action="quality")
-    if normalized in {"kb clear", "knowledge clear"}:
-        return ParsedCommand("KNOWLEDGE_BASE_COMMAND", raw, normalized, action="clear")
-    if normalized in {"kb retrieval on", "knowledge retrieval on"}:
-        return ParsedCommand("KNOWLEDGE_BASE_COMMAND", raw, normalized, action="retrieval_on")
-    if normalized in {"kb retrieval off", "knowledge retrieval off"}:
-        return ParsedCommand("KNOWLEDGE_BASE_COMMAND", raw, normalized, action="retrieval_off")
+_REGEX_TABLE = [
+    # Persona
+    (re.compile(r"^persona voice clone\s+([a-z0-9_-]+)\s+(on|off)$"), False,
+     "PERSONA_COMMAND", "set_profile_clone_enabled",
+     lambda m: {"profile": m.group(1), "enabled": m.group(2) == "on"}),
+    (re.compile(r"^persona voice provider\s+([a-z0-9_-]+)\s+(xtts|voicecraft)$"), False,
+     "PERSONA_COMMAND", "set_profile_clone_provider",
+     lambda m: {"profile": m.group(1), "provider": m.group(2)}),
+    (re.compile(r"^persona voice reference\s+([a-z0-9_-]+)\s+(.+)$", re.IGNORECASE), True,
+     "PERSONA_COMMAND", "set_profile_clone_reference",
+     lambda m: {"profile": m.group(1).strip().lower(), "path": m.group(2).strip()}),
+    (re.compile(r"^persona set\s+([a-z0-9_-]+)$"), False,
+     "PERSONA_COMMAND", "set",
+     lambda m: {"profile": m.group(1)}),
+    # Voice
+    (re.compile(r"^voice clone provider\s+(xtts|voicecraft)$"), False,
+     "VOICE_COMMAND", "set_provider",
+     lambda m: {"provider": m.group(1)}),
+    (re.compile(r"^voice clone reference\s+(.+)$", re.IGNORECASE), True,
+     "VOICE_COMMAND", "set_reference",
+     lambda m: {"path": m.group(1).strip()}),
+    # Knowledge base
+    (re.compile(r"^(?:kb sync|knowledge sync)\s+(.+)$", re.IGNORECASE), True,
+     "KNOWLEDGE_BASE_COMMAND", "sync_dir",
+     lambda m: {"path": m.group(1).strip()}),
+    (re.compile(r"^(?:kb add|knowledge add)\s+(.+)$", re.IGNORECASE), True,
+     "KNOWLEDGE_BASE_COMMAND", "add_file",
+     lambda m: {"path": m.group(1).strip()}),
+    (re.compile(r"^(?:kb index|knowledge index)\s+(.+)$", re.IGNORECASE), True,
+     "KNOWLEDGE_BASE_COMMAND", "index_dir",
+     lambda m: {"path": m.group(1).strip()}),
+    (re.compile(r"^(?:kb search|knowledge search)\s+(.+)$", re.IGNORECASE), True,
+     "KNOWLEDGE_BASE_COMMAND", "search",
+     lambda m: {"query": m.group(1).strip()}),
+    # Audit
+    (re.compile(r"^show audit log(?:\s+(\d+))?$"), False,
+     "AUDIT_LOG_REPORT", "",
+     lambda m: {"limit": int(m.group(1)) if m.group(1) else 10}),
+    # Policy
+    (re.compile(r"^policy profile\s+([a-z0-9_-]+)$"), False,
+     "POLICY_COMMAND", "set_profile",
+     lambda m: {"profile": m.group(1)}),
+    (re.compile(r"^policy (?:read only|readonly)\s+(on|off)$"), False,
+     "POLICY_COMMAND", "set_read_only",
+     lambda m: {"enabled": m.group(1) == "on"}),
+    (re.compile(r"^policy permission\s+([a-z_]+)\s+(on|off)$"), False,
+     "POLICY_COMMAND", "set_permission",
+     lambda m: {"permission": m.group(1), "enabled": m.group(2) == "on"}),
+    # Batch
+    (re.compile(r"^batch add\s+(.+)$", re.IGNORECASE), True,
+     "BATCH_COMMAND", "add",
+     lambda m: {"command_text": m.group(1).strip()}),
+    # Search index
+    (re.compile(r"^index refresh(?:\s+in\s+(.+))?$", re.IGNORECASE), True,
+     "SEARCH_INDEX_COMMAND", "refresh",
+     lambda m: {"root": (m.group(1) or "").strip() or None}),
+    (re.compile(r"^(?:indexed find|index find|search indexed)\s+(.+?)(?:\s+in\s+(.+))?$", re.IGNORECASE), True,
+     "SEARCH_INDEX_COMMAND", "search",
+     lambda m: {"query": m.group(1).strip(), "root": (m.group(2) or "").strip() or None}),
+    # Job queue
+    (re.compile(r"^(?:queue job|job add)\s+in\s+(\d+)\s*(?:s|sec|secs|seconds)?\s+(.+)$", re.IGNORECASE), True,
+     "JOB_QUEUE_COMMAND", "enqueue",
+     lambda m: {"delay_seconds": int(m.group(1)), "command_text": m.group(2).strip()}),
+    (re.compile(r"^(?:queue job|job add)\s+(.+)$", re.IGNORECASE), True,
+     "JOB_QUEUE_COMMAND", "enqueue",
+     lambda m: {"delay_seconds": 0, "command_text": m.group(1).strip()}),
+    (re.compile(r"^job status\s+(\d+)$"), False,
+     "JOB_QUEUE_COMMAND", "status",
+     lambda m: {"job_id": int(m.group(1))}),
+    (re.compile(r"^job cancel\s+(\d+)$"), False,
+     "JOB_QUEUE_COMMAND", "cancel",
+     lambda m: {"job_id": int(m.group(1))}),
+    (re.compile(r"^job retry\s+(\d+)(?:\s+in\s+(\d+)\s*(?:s|sec|secs|seconds)?)?$"), False,
+     "JOB_QUEUE_COMMAND", "retry",
+     lambda m: {"job_id": int(m.group(1)), "delay_seconds": int(m.group(2) or 0)}),
+    (re.compile(r"^job list(?:\s+([a-z]+|\d+))?(?:\s+(\d+))?$"), False,
+     "JOB_QUEUE_COMMAND", "list",
+     lambda m: _parse_job_list_args(m)),
+    # Confirmation
+    (re.compile(r"^confirm\s+([0-9a-f]{6})(?:\s+(?:with\s+)?(.+))?$", re.IGNORECASE), True,
+     "OS_CONFIRMATION", "",
+     lambda m: {"token": m.group(1).lower(), "second_factor": (m.group(2) or "").strip() or None}),
+    # File search
+    (re.compile(r"^find file\s+(.+?)(?:\s+in\s+(.+))?$", re.IGNORECASE), True,
+     "OS_FILE_SEARCH", "",
+     lambda m: {"filename": m.group(1).strip(), "search_path": (m.group(2) or "").strip() or None}),
+    # File nav — regex-based
+    (re.compile(r"^(?:list files|list directory|show files|show directory)(?:\s+in\s+(.+))?$", re.IGNORECASE), True,
+     "OS_FILE_NAVIGATION", "list_directory",
+     lambda m: {"path": (m.group(1) or "").strip() or None}),
+    (re.compile(r"^(?:dir|ls)(?:\s+(.+))?$", re.IGNORECASE), True,
+     "OS_FILE_NAVIGATION", "list_directory",
+     lambda m: {"path": (m.group(1) or "").strip() or None}),
+    (re.compile(r"^(?:file info|metadata)\s+(.+)$", re.IGNORECASE), True,
+     "OS_FILE_NAVIGATION", "file_info",
+     lambda m: {"path": m.group(1).strip()}),
+    (re.compile(r"^(?:create folder|make folder|mkdir)\s+(.+)$", re.IGNORECASE), True,
+     "OS_FILE_NAVIGATION", "create_directory",
+     lambda m: {"path": m.group(1).strip()}),
+    (re.compile(r"^(?:delete|remove)\s+(.+)$", re.IGNORECASE), True,
+     "OS_FILE_NAVIGATION", "delete_item",
+     lambda m: {"path": m.group(1).strip()}),
+    (re.compile(r"^move\s+(.+?)\s+to\s+(.+)$", re.IGNORECASE), True,
+     "OS_FILE_NAVIGATION", "move_item",
+     lambda m: {"source": m.group(1).strip(), "destination": m.group(2).strip()}),
+    (re.compile(r"^rename\s+(.+?)\s+to\s+(.+)$", re.IGNORECASE), True,
+     "OS_FILE_NAVIGATION", "rename_item",
+     lambda m: {"source": m.group(1).strip(), "new_name": m.group(2).strip()}),
+    # Open app explicit
+    (re.compile(r"^open app\s+(.+)$", re.IGNORECASE), True,
+     "OS_APP_OPEN", "",
+     lambda m: {"app_name": m.group(1).strip()}),
+]
 
-    if normalized in {"memory status", "session memory status"}:
-        return ParsedCommand("MEMORY_COMMAND", raw, normalized, action="status")
-    if normalized in {"memory clear", "session memory clear"}:
-        return ParsedCommand("MEMORY_COMMAND", raw, normalized, action="clear")
-    if normalized in {"memory on", "enable memory"}:
-        return ParsedCommand("MEMORY_COMMAND", raw, normalized, action="on")
-    if normalized in {"memory off", "disable memory"}:
-        return ParsedCommand("MEMORY_COMMAND", raw, normalized, action="off")
-    if normalized in {"memory show", "show memory"}:
-        return ParsedCommand("MEMORY_COMMAND", raw, normalized, action="show")
 
-    if normalized in {"demo mode on", "demo on"}:
-        return ParsedCommand("DEMO_MODE", raw, normalized, action="on")
-    if normalized in {"demo mode off", "demo off"}:
-        return ParsedCommand("DEMO_MODE", raw, normalized, action="off")
-    if normalized in {"demo mode status", "demo status"}:
-        return ParsedCommand("DEMO_MODE", raw, normalized, action="status")
+def _parse_job_list_args(m):
+    first = m.group(1)
+    second = m.group(2)
+    status = None
+    limit = 10
+    if first:
+        if first.isdigit():
+            limit = int(first)
+        else:
+            status = first
+    if second:
+        limit = int(second)
+    return {"status": status, "limit": limit}
 
-    if normalized in {"show metrics", "metrics", "metrics report"}:
-        return ParsedCommand("METRICS_REPORT", raw, normalized)
 
-    audit_match = re.match(r"^show audit log(?:\s+(\d+))?$", normalized)
-    if audit_match:
-        limit = int(audit_match.group(1)) if audit_match.group(1) else 10
-        return ParsedCommand("AUDIT_LOG_REPORT", raw, normalized, args={"limit": limit})
+def _try_regex_table(normalized, raw):
+    for pattern, use_raw, intent, action, args_builder in _REGEX_TABLE:
+        text = raw if use_raw else normalized
+        m = pattern.match(text)
+        if m:
+            return ParsedCommand(intent, raw, normalized, action=action, args=args_builder(m))
+    return None
 
-    if normalized in {"verify audit", "verify audit log", "audit verify"}:
-        return ParsedCommand("AUDIT_VERIFY", raw, normalized)
-    if normalized in {"audit reseal", "reseal audit", "repair audit chain"}:
-        return ParsedCommand("AUDIT_RESEAL", raw, normalized)
 
-    if normalized == "policy status":
-        return ParsedCommand("POLICY_COMMAND", raw, normalized, action="status")
-    profile_match = re.match(r"^policy profile\s+([a-z0-9_-]+)$", normalized)
-    if profile_match:
-        return ParsedCommand(
-            "POLICY_COMMAND",
-            raw,
-            normalized,
-            action="set_profile",
-            args={"profile": profile_match.group(1)},
-        )
-    readonly_match = re.match(r"^policy (?:read only|readonly)\s+(on|off)$", normalized)
-    if readonly_match:
-        return ParsedCommand(
-            "POLICY_COMMAND",
-            raw,
-            normalized,
-            action="set_read_only",
-            args={"enabled": readonly_match.group(1) == "on"},
-        )
-    permission_match = re.match(r"^policy permission\s+([a-z_]+)\s+(on|off)$", normalized)
-    if permission_match:
-        return ParsedCommand(
-            "POLICY_COMMAND",
-            raw,
-            normalized,
-            action="set_permission",
-            args={
-                "permission": permission_match.group(1),
-                "enabled": permission_match.group(2) == "on",
-            },
-        )
+# ---------------------------------------------------------------------------
+# Heuristic matchers (order-sensitive, cannot be table-driven)
+# ---------------------------------------------------------------------------
 
-    if normalized in {"batch plan", "batch start", "batch begin"}:
-        return ParsedCommand("BATCH_COMMAND", raw, normalized, action="plan")
-    batch_add_match = re.match(r"^batch add\s+(.+)$", raw, flags=re.IGNORECASE)
-    if batch_add_match:
-        return ParsedCommand(
-            "BATCH_COMMAND",
-            raw,
-            normalized,
-            action="add",
-            args={"command_text": batch_add_match.group(1).strip()},
-        )
-    if normalized in {"batch preview", "batch show"}:
-        return ParsedCommand("BATCH_COMMAND", raw, normalized, action="preview")
-    if normalized in {"batch status"}:
-        return ParsedCommand("BATCH_COMMAND", raw, normalized, action="status")
-    if normalized in {"batch commit", "batch run"}:
-        return ParsedCommand("BATCH_COMMAND", raw, normalized, action="commit")
-    if normalized in {"batch abort", "batch cancel", "batch clear"}:
-        return ParsedCommand("BATCH_COMMAND", raw, normalized, action="abort")
-
-    if normalized in {"index status", "search index status"}:
-        return ParsedCommand("SEARCH_INDEX_COMMAND", raw, normalized, action="status")
-    if normalized in {"index start", "start index"}:
-        return ParsedCommand("SEARCH_INDEX_COMMAND", raw, normalized, action="start")
-    index_refresh_match = re.match(r"^index refresh(?:\s+in\s+(.+))?$", raw, flags=re.IGNORECASE)
-    if index_refresh_match:
-        return ParsedCommand(
-            "SEARCH_INDEX_COMMAND",
-            raw,
-            normalized,
-            action="refresh",
-            args={"root": (index_refresh_match.group(1) or "").strip() or None},
-        )
-    indexed_search_match = re.match(
-        r"^(?:indexed find|index find|search indexed)\s+(.+?)(?:\s+in\s+(.+))?$",
-        raw,
-        flags=re.IGNORECASE,
-    )
-    if indexed_search_match:
-        return ParsedCommand(
-            "SEARCH_INDEX_COMMAND",
-            raw,
-            normalized,
-            action="search",
-            args={
-                "query": indexed_search_match.group(1).strip(),
-                "root": (indexed_search_match.group(2) or "").strip() or None,
-            },
-        )
-
-    queue_delayed_match = re.match(
-        r"^(?:queue job|job add)\s+in\s+(\d+)\s*(?:s|sec|secs|seconds)?\s+(.+)$",
-        raw,
-        flags=re.IGNORECASE,
-    )
-    if queue_delayed_match:
-        return ParsedCommand(
-            "JOB_QUEUE_COMMAND",
-            raw,
-            normalized,
-            action="enqueue",
-            args={
-                "delay_seconds": int(queue_delayed_match.group(1)),
-                "command_text": queue_delayed_match.group(2).strip(),
-            },
-        )
-    queue_match = re.match(r"^(?:queue job|job add)\s+(.+)$", raw, flags=re.IGNORECASE)
-    if queue_match:
-        return ParsedCommand(
-            "JOB_QUEUE_COMMAND",
-            raw,
-            normalized,
-            action="enqueue",
-            args={"delay_seconds": 0, "command_text": queue_match.group(1).strip()},
-        )
-    job_status_match = re.match(r"^job status\s+(\d+)$", normalized)
-    if job_status_match:
-        return ParsedCommand(
-            "JOB_QUEUE_COMMAND",
-            raw,
-            normalized,
-            action="status",
-            args={"job_id": int(job_status_match.group(1))},
-        )
-    job_cancel_match = re.match(r"^job cancel\s+(\d+)$", normalized)
-    if job_cancel_match:
-        return ParsedCommand(
-            "JOB_QUEUE_COMMAND",
-            raw,
-            normalized,
-            action="cancel",
-            args={"job_id": int(job_cancel_match.group(1))},
-        )
-    job_retry_match = re.match(
-        r"^job retry\s+(\d+)(?:\s+in\s+(\d+)\s*(?:s|sec|secs|seconds)?)?$",
-        normalized,
-    )
-    if job_retry_match:
-        return ParsedCommand(
-            "JOB_QUEUE_COMMAND",
-            raw,
-            normalized,
-            action="retry",
-            args={
-                "job_id": int(job_retry_match.group(1)),
-                "delay_seconds": int(job_retry_match.group(2) or 0),
-            },
-        )
-    if normalized in {"job worker start"}:
-        return ParsedCommand("JOB_QUEUE_COMMAND", raw, normalized, action="worker_start")
-    if normalized in {"job worker stop"}:
-        return ParsedCommand("JOB_QUEUE_COMMAND", raw, normalized, action="worker_stop")
-    if normalized in {"job worker status"}:
-        return ParsedCommand("JOB_QUEUE_COMMAND", raw, normalized, action="worker_status")
-    job_list_match = re.match(r"^job list(?:\s+([a-z]+|\d+))?(?:\s+(\d+))?$", normalized)
-    if job_list_match:
-        first = job_list_match.group(1)
-        second = job_list_match.group(2)
-        status = None
-        limit = 10
-        if first:
-            if first.isdigit():
-                limit = int(first)
-            else:
-                status = first
-        if second:
-            limit = int(second)
-        return ParsedCommand(
-            "JOB_QUEUE_COMMAND",
-            raw,
-            normalized,
-            action="list",
-            args={"status": status, "limit": limit},
-        )
-
-    confirm_match = re.match(
-        r"^confirm\s+([0-9a-f]{6})(?:\s+(?:with\s+)?(.+))?$",
-        raw,
-        flags=re.IGNORECASE,
-    )
-    if confirm_match:
-        secret = (confirm_match.group(2) or "").strip() or None
-        return ParsedCommand(
-            "OS_CONFIRMATION",
-            raw,
-            normalized,
-            args={"token": confirm_match.group(1).lower(), "second_factor": secret},
-        )
-
-    if normalized in {"undo", "rollback", "undo last action"}:
-        return ParsedCommand("OS_ROLLBACK", raw, normalized)
-
-    search_match = re.match(r"^find file\s+(.+?)(?:\s+in\s+(.+))?$", raw, flags=re.IGNORECASE)
-    if search_match:
-        return ParsedCommand(
-            "OS_FILE_SEARCH",
-            raw,
-            normalized,
-            args={
-                "filename": search_match.group(1).strip(),
-                "search_path": (search_match.group(2) or "").strip() or None,
-            },
-        )
-
+def _try_drive_open(normalized_match, raw, normalized):
     drive_letter = _extract_drive_letter(normalized_match)
     if drive_letter and _is_drive_open_request(normalized_match):
         return ParsedCommand(
-            "OS_FILE_NAVIGATION",
-            raw,
-            normalized,
-            action="list_directory",
-            args={"path": f"{drive_letter}:\\"},
+            "OS_FILE_NAVIGATION", raw, normalized,
+            action="list_directory", args={"path": f"{drive_letter}:\\"},
         )
+    return None
 
-    open_app_match = re.match(r"^open app\s+(.+)$", raw, flags=re.IGNORECASE)
-    if open_app_match:
-        return ParsedCommand(
-            "OS_APP_OPEN",
-            raw,
-            normalized,
-            args={"app_name": open_app_match.group(1).strip()},
-        )
+
+def _try_open_command(raw, normalized):
     open_match = re.match(r"^open\s+(.+)$", raw, flags=re.IGNORECASE)
-    if open_match:
-        target_raw = open_match.group(1).strip()
-        target_for_match = _strip_open_fillers(_normalize_for_match(target_raw))
+    if not open_match:
+        return None
 
-        drive_from_target = _extract_drive_letter(target_for_match)
-        if drive_from_target and _is_drive_open_request(f"open {target_for_match}"):
-            return ParsedCommand(
-                "OS_FILE_NAVIGATION",
-                raw,
-                normalized,
-                action="list_directory",
-                args={"path": f"{drive_from_target}:\\"},
-            )
+    target_raw = open_match.group(1).strip()
+    target_for_match = _strip_open_fillers(_normalize_for_match(target_raw))
 
-        special_folder = _special_folder_path(target_for_match)
-        if special_folder:
-            return ParsedCommand(
-                "OS_FILE_NAVIGATION",
-                raw,
-                normalized,
-                action="list_directory",
-                args={"path": special_folder},
-            )
-
-        if _looks_like_filesystem_target(target_for_match):
-            target_path = target_raw
-            if target_path.lower().startswith("the "):
-                target_path = target_path[4:].strip()
-            return ParsedCommand(
-                "OS_FILE_NAVIGATION",
-                raw,
-                normalized,
-                action="list_directory",
-                args={"path": target_path},
-            )
-
+    drive_from_target = _extract_drive_letter(target_for_match)
+    if drive_from_target and _is_drive_open_request(f"open {target_for_match}"):
         return ParsedCommand(
-            "OS_APP_OPEN",
-            raw,
-            normalized,
-            args={"app_name": target_raw},
+            "OS_FILE_NAVIGATION", raw, normalized,
+            action="list_directory", args={"path": f"{drive_from_target}:\\"},
         )
 
+    special_folder = _special_folder_path(target_for_match)
+    if special_folder:
+        return ParsedCommand(
+            "OS_FILE_NAVIGATION", raw, normalized,
+            action="list_directory", args={"path": special_folder},
+        )
+
+    if _looks_like_filesystem_target(target_for_match):
+        target_path = target_raw
+        if target_path.lower().startswith("the "):
+            target_path = target_path[4:].strip()
+        return ParsedCommand(
+            "OS_FILE_NAVIGATION", raw, normalized,
+            action="list_directory", args={"path": target_path},
+        )
+
+    return ParsedCommand(
+        "OS_APP_OPEN", raw, normalized,
+        args={"app_name": target_raw},
+    )
+
+
+def _try_system_action(normalized_match, normalized, raw):
     system_action = (
         normalize_system_action(normalized_match)
         or normalize_system_action(normalized)
     )
     if system_action:
         return ParsedCommand(
-            "OS_SYSTEM_COMMAND",
-            raw,
-            normalized,
+            "OS_SYSTEM_COMMAND", raw, normalized,
             args={"action_key": system_action},
         )
+    return None
 
-    if normalized in {"current directory", "pwd"}:
-        return ParsedCommand("OS_FILE_NAVIGATION", raw, normalized, action="pwd")
 
+def _try_cd_commands(normalized, raw):
     if normalized.startswith("go to "):
-        return ParsedCommand("OS_FILE_NAVIGATION", raw, normalized, action="cd", args={"path": raw[6:].strip()})
+        return ParsedCommand(
+            "OS_FILE_NAVIGATION", raw, normalized,
+            action="cd", args={"path": raw[6:].strip()},
+        )
     if normalized.startswith("change directory "):
         return ParsedCommand(
-            "OS_FILE_NAVIGATION",
-            raw,
-            normalized,
-            action="cd",
-            args={"path": raw[len("change directory ") :].strip()},
+            "OS_FILE_NAVIGATION", raw, normalized,
+            action="cd", args={"path": raw[len("change directory "):].strip()},
         )
     if normalized.startswith("cd "):
-        return ParsedCommand("OS_FILE_NAVIGATION", raw, normalized, action="cd", args={"path": raw[3:].strip()})
-
-    if normalized in {"list drives", "drive list"}:
-        return ParsedCommand("OS_FILE_NAVIGATION", raw, normalized, action="list_drives")
-
-    list_match = re.match(
-        r"^(?:list files|list directory|show files|show directory)(?:\s+in\s+(.+))?$",
-        raw,
-        flags=re.IGNORECASE,
-    )
-    if list_match:
         return ParsedCommand(
-            "OS_FILE_NAVIGATION",
-            raw,
-            normalized,
-            action="list_directory",
-            args={"path": (list_match.group(1) or "").strip() or None},
+            "OS_FILE_NAVIGATION", raw, normalized,
+            action="cd", args={"path": raw[3:].strip()},
         )
+    return None
 
-    dir_match = re.match(r"^(?:dir|ls)(?:\s+(.+))?$", raw, flags=re.IGNORECASE)
-    if dir_match:
-        return ParsedCommand(
-            "OS_FILE_NAVIGATION",
-            raw,
-            normalized,
-            action="list_directory",
-            args={"path": (dir_match.group(1) or "").strip() or None},
-        )
 
-    info_match = re.match(r"^(?:file info|metadata)\s+(.+)$", raw, flags=re.IGNORECASE)
-    if info_match:
-        return ParsedCommand(
-            "OS_FILE_NAVIGATION",
-            raw,
-            normalized,
-            action="file_info",
-            args={"path": info_match.group(1).strip()},
-        )
+# ---------------------------------------------------------------------------
+# Main parser
+# ---------------------------------------------------------------------------
 
-    mkdir_match = re.match(r"^(?:create folder|make folder|mkdir)\s+(.+)$", raw, flags=re.IGNORECASE)
-    if mkdir_match:
-        return ParsedCommand(
-            "OS_FILE_NAVIGATION",
-            raw,
-            normalized,
-            action="create_directory",
-            args={"path": mkdir_match.group(1).strip()},
-        )
+def parse_command(text: str) -> ParsedCommand:
+    raw = text or ""
+    normalized = " ".join(raw.lower().split()).strip()
+    normalized_match = _normalize_for_match(raw)
+    spoken_candidate = _strip_spoken_prefixes(normalized_match)
 
-    delete_match = re.match(r"^(?:delete|remove)\s+(.+)$", raw, flags=re.IGNORECASE)
-    if delete_match:
-        return ParsedCommand(
-            "OS_FILE_NAVIGATION",
-            raw,
-            normalized,
-            action="delete_item",
-            args={"path": delete_match.group(1).strip()},
-        )
+    # Try stripping spoken prefixes and re-parsing
+    if spoken_candidate and spoken_candidate != normalized_match:
+        nested = parse_command(spoken_candidate)
+        if nested.intent != "LLM_QUERY":
+            return ParsedCommand(
+                nested.intent, raw, normalized,
+                action=nested.action, args=dict(nested.args),
+            )
 
-    move_match = re.match(r"^move\s+(.+?)\s+to\s+(.+)$", raw, flags=re.IGNORECASE)
-    if move_match:
-        return ParsedCommand(
-            "OS_FILE_NAVIGATION",
-            raw,
-            normalized,
-            action="move_item",
-            args={"source": move_match.group(1).strip(), "destination": move_match.group(2).strip()},
-        )
+    # 1. Keyword table (exact match on normalized)
+    result = _try_keyword_table(normalized, raw)
+    if result:
+        return result
 
-    rename_match = re.match(r"^rename\s+(.+?)\s+to\s+(.+)$", raw, flags=re.IGNORECASE)
-    if rename_match:
-        return ParsedCommand(
-            "OS_FILE_NAVIGATION",
-            raw,
-            normalized,
-            action="rename_item",
-            args={"source": rename_match.group(1).strip(), "new_name": rename_match.group(2).strip()},
-        )
+    # 2. Regex table
+    result = _try_regex_table(normalized, raw)
+    if result:
+        return result
 
+    # 3. Drive open heuristic
+    result = _try_drive_open(normalized_match, raw, normalized)
+    if result:
+        return result
+
+    # 4. "open ..." disambiguation
+    result = _try_open_command(raw, normalized)
+    if result:
+        return result
+
+    # 5. System action aliases
+    result = _try_system_action(normalized_match, normalized, raw)
+    if result:
+        return result
+
+    # 6. CD / navigation commands
+    result = _try_cd_commands(normalized, raw)
+    if result:
+        return result
+
+    # 7. LLM fallback
     return ParsedCommand("LLM_QUERY", raw, normalized)

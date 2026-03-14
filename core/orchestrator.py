@@ -1,3 +1,5 @@
+import glob
+import os
 import tempfile
 import time
 import sys
@@ -159,8 +161,24 @@ def _process_utterance(audio_file, pipeline_started):
         _safe_remove(audio_file)
 
 
+def _cleanup_stale_temp_files():
+    """Remove leftover jarvis_utterance_*.wav from the temp directory."""
+    temp_dir = tempfile.gettempdir()
+    pattern = os.path.join(temp_dir, "jarvis_utterance_*.wav")
+    removed = 0
+    for path in glob.glob(pattern):
+        try:
+            os.remove(path)
+            removed += 1
+        except Exception:
+            pass
+    if removed:
+        logger.info("Cleaned up %d stale temp audio file(s).", removed)
+
+
 def run():
     setup_shutdown()
+    _cleanup_stale_temp_files()
     initialize_command_services()
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="jarvis-pipeline")
     in_flight = []
