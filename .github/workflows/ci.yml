@@ -1,0 +1,43 @@
+name: Jarvis CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Create .env for CI
+        run: |
+          echo "JARVIS_SECOND_FACTOR_PIN=2468" >> .env
+          echo "JARVIS_SECOND_FACTOR_PASSPHRASE=jarvis-confirm" >> .env
+
+      - name: Syntax check (compileall)
+        run: python -m compileall -q .
+
+      - name: Run parser fuzz tests
+        run: python tests/parser_fuzz.py
+
+      - name: Run safety suite
+        run: python tests/safety_suite.py
+
+      - name: Run phase3 smoke tests
+        run: python tests/phase3_smoke.py
+
+      - name: Run phase4 smoke tests
+        run: python tests/phase4_smoke.py

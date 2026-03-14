@@ -1,4 +1,23 @@
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load .env from project root (next to core/)
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+
+
+def _env(key, default=""):
+    """Read an environment variable with a fallback default."""
+    return os.environ.get(key, default)
+
+
+def _env_int(key, default):
+    try:
+        return int(os.environ.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
 
 # Audio
 SAMPLE_RATE = 16000
@@ -25,8 +44,8 @@ WAKE_WORD_SCORE_DEBUG_INTERVAL_SECONDS = 1.0
 WAKE_WORD_DETECTION_COOLDOWN_SECONDS = 1.0
 
 # STT
-WHISPER_MODEL = "small"
-WHISPER_DEVICE = "cpu"
+WHISPER_MODEL = _env("JARVIS_WHISPER_MODEL", "small")
+WHISPER_DEVICE = _env("JARVIS_WHISPER_DEVICE", "cpu")
 WHISPER_COMPUTE_TYPE = "int8"
 WHISPER_LANGUAGE = None  # None enables auto language detection
 WHISPER_BEAM_SIZE = 2
@@ -34,9 +53,13 @@ WHISPER_VAD_FILTER = False  # Mic VAD already trims silence; double VAD can caus
 WHISPER_CONDITION_ON_PREVIOUS_TEXT = False
 
 # LLM
-LLM_MODEL = "qwen2.5:1.5b"
-LLM_FALLBACK_MODELS = ("qwen2.5:0.5b",)
-LLM_TIMEOUT_SECONDS = 120
+LLM_MODEL = _env("JARVIS_LLM_MODEL", "qwen2.5:1.5b")
+LLM_FALLBACK_MODELS = tuple(
+    m.strip()
+    for m in _env("JARVIS_LLM_FALLBACK_MODELS", "qwen2.5:0.5b").split(",")
+    if m.strip()
+)
+LLM_TIMEOUT_SECONDS = _env_int("JARVIS_LLM_TIMEOUT_SECONDS", 120)
 LLM_APPEND_SOURCE_CITATIONS = True
 
 # Speech / TTS
@@ -105,15 +128,15 @@ RESILIENCE_SLA_SUCCESS_RATE_MIN = 0.8
 MAX_FILE_RESULTS = 5
 DEFAULT_WORKING_DIRECTORY = os.path.expanduser("~")
 DEFAULT_SEARCH_PATH = DEFAULT_WORKING_DIRECTORY
-POWERSHELL_EXECUTABLE = "powershell"
+POWERSHELL_EXECUTABLE = _env("JARVIS_POWERSHELL_EXECUTABLE", "powershell")
 ACTION_LOG_FILE = "jarvis_actions.log"
 ROLLBACK_DIR_NAME = ".jarvis_rollback"
 CONFIRMATION_TIMEOUT_SECONDS = 45
 ALLOW_DESTRUCTIVE_SYSTEM_COMMANDS = False
 STATE_DB_FILE = "jarvis_state.db"
 SECOND_FACTOR_REQUIRED_FOR_DESTRUCTIVE = True
-SECOND_FACTOR_PIN = "2468"
-SECOND_FACTOR_PASSPHRASE = "jarvis-confirm"
+SECOND_FACTOR_PIN = _env("JARVIS_SECOND_FACTOR_PIN", "")
+SECOND_FACTOR_PASSPHRASE = _env("JARVIS_SECOND_FACTOR_PASSPHRASE", "")
 SEARCH_INDEX_DB_FILE = "jarvis_index.db"
 SEARCH_INDEX_REFRESH_SECONDS = 60
 SEARCH_INDEX_MAX_RESULTS = 20

@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
+.env
 jarvis.log
 jarvis_actions.log
 jarvis_state.db
@@ -10,3 +11,4 @@ jarvis_resilience.json
 .jarvis_kb/
 .tmp_tests/
 input.wav
+jarvis_utterance_*.wav
