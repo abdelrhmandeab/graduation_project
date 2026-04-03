@@ -48,6 +48,22 @@ Expected startup for realtime mode:
 
 If wake-word models are missing, they are now downloaded automatically on first run.
 
+## Phase 0 Baseline
+
+Current baseline artifacts:
+
+- [Architecture baseline](docs/ARCHITECTURE_BASELINE.md)
+- [KPI baseline](docs/KPI_BASELINE.md)
+- [Phase 0 milestone snapshot](milestones/phase0_baseline_2026-04-04.json)
+
+Phase 0 progress board:
+
+- Freeze current repository baseline: done
+- Document architecture baseline: done
+- Capture KPI baseline: done
+- Record milestone snapshot: done
+- Prepare remaining phase deliverables: in progress
+
 ## Phase 4 Features
 
 - Voice synthesis abstraction with optional clone providers (`xtts`, `voicecraft`) and safe fallback.

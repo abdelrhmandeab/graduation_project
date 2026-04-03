@@ -1,0 +1,29 @@
+{
+  "milestone": "phase0_baseline_2026-04-04",
+  "created_at": "2026-04-04T00:00:00",
+  "note": "Phase 0 baseline freeze for the current Jarvis repository state",
+  "artifacts": [
+    "docs/ARCHITECTURE_BASELINE.md",
+    "docs/KPI_BASELINE.md",
+    "docs/SAFETY_POLICY.md",
+    "docs/INTENT_SCHEMA.md"
+  ],
+  "benchmark_summary": {
+    "scenario_count": 7,
+    "success_count": 7,
+    "success_rate": 1.0,
+    "p50_latency_ms": 0.9051000001818466,
+    "p95_latency_ms": 37.34680000025037
+  },
+  "resilience_summary": {
+    "scenario_count": 5,
+    "success_count": 5,
+    "success_rate": 1.0,
+    "p50_latency_ms": 7.386999999653199,
+    "p95_latency_ms": 81.85039999989385
+  },
+  "phase4_regression": {
+    "passed": true,
+    "checked_at": "2026-04-04"
+  }
+}
