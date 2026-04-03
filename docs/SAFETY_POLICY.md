@@ -1,19 +1,45 @@
 # Safety Policy
 
-> Auto-generated stub. To be completed during Phase 4.
+This document defines the command safety framework for Jarvis on Windows.
 
 ## Risk Tiers
 
-| Tier | Actions | Confirmation | Second Factor |
-|------|---------|-------------|---------------|
-| **Low** | open app, search files, list directory | None | No |
-| **Medium** | close app, move/rename files | Verbal confirm | No |
-| **High** | delete files, system shutdown/restart/logoff | Token confirm | PIN/passphrase |
+| Tier | Examples | Confirmation | Second Factor |
+|---|---|---|---|
+| `low` | open app, file search, list directory, metadata, indexed search | Not required | No |
+| `medium` | close app, move item, rename item, lock/sleep system command | Required (token confirmation) | No |
+| `high` | delete item (soft delete), permanent delete, shutdown/restart/logoff | Required (token confirmation) | Yes (when `SECOND_FACTOR_REQUIRED_FOR_DESTRUCTIVE=True`) |
 
-## Current Safeguards
+## Enforcement Rules
 
-- `ALLOW_DESTRUCTIVE_SYSTEM_COMMANDS = False` by default.
-- Confirmation tokens expire after 45 seconds.
-- Second-factor (PIN or passphrase) required for destructive system commands.
-- Policy engine enforces path allowlists and blocklists.
-- Audit log with hash chain for tamper evidence.
+1. High-risk actions must never execute without valid confirmation.
+2. Medium-risk actions must require confirmation, but do not require second factor.
+3. Soft delete is the default delete behavior.
+4. Permanent delete requires explicit phrasing (for example: `delete permanently <path>`) and is blocked unless `ALLOW_PERMANENT_DELETE=True`.
+5. Destructive system commands are blocked unless `ALLOW_DESTRUCTIVE_SYSTEM_COMMANDS=True`.
+
+## Confirmation State Handling
+
+1. Create a confirmation token with expiry (`CONFIRMATION_TIMEOUT_SECONDS`).
+2. Store pending confirmation payload in persistence (`confirmations` table).
+3. On `confirm <token>`, validate token, expiry, and second factor (if required).
+4. Execute only the operation encoded in payload; reject unknown payload kinds.
+5. Clear confirmation token after successful acceptance.
+
+## Audit Requirements
+
+Every risky action must emit audit entries for:
+
+1. Request: `*_request` with `risk_tier`, token, and resolved args.
+2. Confirmation acceptance/rejection.
+3. Final execution outcome (`success`, `failed`, or `blocked`).
+
+The audit log uses a hash chain (`prev_hash` + canonical payload -> `hash`) to support tamper detection.
+
+## Current Config Knobs
+
+- `ALLOW_DESTRUCTIVE_SYSTEM_COMMANDS`
+- `ALLOW_PERMANENT_DELETE`
+- `SECOND_FACTOR_REQUIRED_FOR_DESTRUCTIVE`
+- `CONFIRMATION_TIMEOUT_SECONDS`
+- policy profile permissions (`POLICY_PROFILES` / `POLICY_COMMAND_PERMISSIONS`)

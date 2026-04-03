@@ -108,6 +108,12 @@ If wake-word models are missing, they are now downloaded automatically on first 
 
 ## Test Commands
 
+Run Phase 4 safety/clarification regression in one command:
+
+```powershell
+python tests\phase4_regression.py
+```
+
 Run sequentially:
 
 ```powershell
