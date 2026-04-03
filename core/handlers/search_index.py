@@ -1,3 +1,4 @@
+from os_control.adapter_result import to_router_tuple
 from os_control.file_ops import get_current_directory
 from os_control.search_index import search_index_service
 
@@ -7,8 +8,7 @@ def handle(parsed):
     args = parsed.args
 
     if action == "start":
-        ok, message = search_index_service.start()
-        return True, message if ok else message, {}
+        return to_router_tuple(search_index_service.start_result())
 
     if action == "status":
         status = search_index_service.status()
@@ -27,14 +27,13 @@ def handle(parsed):
         root = args.get("root")
         if root is None:
             root = get_current_directory()
-        search_index_service.start()
-        ok, message = search_index_service.refresh_now(root=root)
-        return ok, message, {}
+        search_index_service.start_result()
+        return to_router_tuple(search_index_service.refresh_now_result(root=root))
 
     if action == "search":
         query = args.get("query", "")
         root = args.get("root") or get_current_directory()
-        search_index_service.start()
+        search_index_service.start_result()
         results = search_index_service.search(query, root=root)
         if not results:
             return True, "No indexed results found.", {}

@@ -133,6 +133,7 @@ ACTION_LOG_FILE = "jarvis_actions.log"
 ROLLBACK_DIR_NAME = ".jarvis_rollback"
 CONFIRMATION_TIMEOUT_SECONDS = 45
 ALLOW_DESTRUCTIVE_SYSTEM_COMMANDS = False
+ALLOW_PERMANENT_DELETE = False
 STATE_DB_FILE = "jarvis_state.db"
 SECOND_FACTOR_REQUIRED_FOR_DESTRUCTIVE = True
 SECOND_FACTOR_PIN = _env("JARVIS_SECOND_FACTOR_PIN", "")
@@ -159,6 +160,7 @@ POLICY_COMMAND_PERMISSIONS = {
     "file_navigation": True,
     "file_write": True,
     "app_open": True,
+    "app_close": True,
     "system_command": True,
     "metrics": True,
     "audit_log": True,
@@ -184,6 +186,7 @@ POLICY_PROFILES = {
             "file_navigation": True,
             "file_write": False,
             "app_open": False,
+            "app_close": False,
             "system_command": False,
             "metrics": True,
             "audit_log": True,
@@ -212,6 +215,7 @@ POLICY_PROFILES = {
             "file_navigation": True,
             "file_write": False,
             "app_open": True,
+            "app_close": True,
             "system_command": False,
             "metrics": True,
             "audit_log": True,
@@ -231,3 +235,5 @@ POLICY_PROFILES = {
 
 # Logging
 LOG_FILE = "jarvis.log"
+
+

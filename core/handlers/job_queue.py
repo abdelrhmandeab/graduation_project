@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from os_control.action_log import log_action
+from os_control.adapter_result import to_router_tuple
 from os_control.job_queue import job_queue_service
 
 
@@ -26,8 +27,7 @@ def handle(parsed):
     args = parsed.args
 
     if action == "worker_start":
-        _ok, message = job_queue_service.start()
-        return True, message, {}
+        return to_router_tuple(job_queue_service.start_result())
     if action == "worker_stop":
         job_queue_service.stop()
         return True, "Job queue worker stopped.", {}
@@ -38,25 +38,24 @@ def handle(parsed):
     if action == "enqueue":
         delay = int(args.get("delay_seconds", 0))
         command_text = args.get("command_text", "")
-        ok, message, _job = job_queue_service.enqueue(command_text, delay_seconds=delay)
-        return ok, message, {}
+        return to_router_tuple(job_queue_service.enqueue_result(command_text, delay_seconds=delay))
 
     if action == "status":
         job = job_queue_service.status(args.get("job_id"))
         if not job:
-            return False, "Job not found.", {}
+            return False, "Job not found.", {"error_code": "not_found"}
         return True, _format_job(job), {}
 
     if action == "cancel":
-        ok, message, _job = job_queue_service.cancel(args.get("job_id"))
-        return ok, message, {}
+        return to_router_tuple(job_queue_service.cancel_result(args.get("job_id")))
 
     if action == "retry":
-        ok, message, _job = job_queue_service.retry(
-            args.get("job_id"),
-            delay_seconds=args.get("delay_seconds", 0),
+        return to_router_tuple(
+            job_queue_service.retry_result(
+                args.get("job_id"),
+                delay_seconds=args.get("delay_seconds", 0),
+            )
         )
-        return ok, message, {}
 
     if action == "list":
         jobs = job_queue_service.list(limit=args.get("limit", 10), status=args.get("status"))

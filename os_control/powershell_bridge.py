@@ -9,6 +9,14 @@ POWER_SHELL_TEMPLATES = {
         "script": "Start-Process -FilePath $env:JARVIS_APP_PATH",
         "env_keys": ("JARVIS_APP_PATH",),
     },
+    "close_app": {
+        "script": (
+            "$p=$env:JARVIS_APP_PROCESS; "
+            "$n=[System.IO.Path]::GetFileNameWithoutExtension($p); "
+            "Stop-Process -Name $n -Force -ErrorAction Stop"
+        ),
+        "env_keys": ("JARVIS_APP_PROCESS",),
+    },
     "shutdown": {
         "script": "shutdown /s /t 0",
         "env_keys": (),

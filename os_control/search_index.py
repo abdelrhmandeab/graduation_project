@@ -10,6 +10,7 @@ from core.config import (
     SEARCH_INDEX_REFRESH_SECONDS,
 )
 from core.logger import logger
+from os_control.adapter_result import failure_result, success_result, to_legacy_pair
 from os_control.policy import policy_engine
 
 
@@ -73,10 +74,13 @@ class SearchIndexService:
         allowed, _reason = policy_engine.can_access_path(path, write=False)
         return allowed
 
-    def start(self):
+    def start_result(self):
         with self._state_lock:
             if self._thread and self._thread.is_alive():
-                return False, "Search index worker is already running."
+                return failure_result(
+                    "Search index worker is already running.",
+                    error_code="already_running",
+                )
             self._stop_event.clear()
             self._thread = threading.Thread(
                 target=self._worker_loop,
@@ -85,7 +89,7 @@ class SearchIndexService:
             )
             self._thread.start()
             logger.info("Search index worker started")
-            return True, "Search index worker started."
+            return success_result("Search index worker started.", debug_info={"running": True})
 
     def stop(self):
         with self._state_lock:
@@ -100,17 +104,17 @@ class SearchIndexService:
         with self._state_lock:
             return bool(self._thread and self._thread.is_alive())
 
-    def track_root(self, root_path):
+    def track_root_result(self, root_path):
         if not root_path:
-            return False, "No root path was provided."
+            return failure_result("No root path was provided.", error_code="invalid_input")
         root = os.path.abspath(os.path.expanduser(str(root_path).strip().strip('"').strip("'")))
         if not os.path.isdir(root):
-            return False, f"Directory does not exist: {root}"
+            return failure_result(f"Directory does not exist: {root}", error_code="not_found")
         if not self._is_allowed(root):
-            return False, f"Path blocked by policy: {root}"
+            return failure_result(f"Path blocked by policy: {root}", error_code="policy_blocked")
         with self._state_lock:
             self._tracked_roots.add(root)
-        return True, root
+        return success_result(root, debug_info={"root": root})
 
     def tracked_roots(self):
         with self._state_lock:
@@ -121,7 +125,6 @@ class SearchIndexService:
         started = time.time()
         indexed_at = started
 
-        # Rebuild per root to keep results deterministic and remove stale rows.
         with self._db_lock, self._connect() as conn:
             conn.execute("DELETE FROM file_index WHERE root = ?", (root,))
             rows = []
@@ -202,20 +205,26 @@ class SearchIndexService:
         elapsed = time.time() - started
         logger.info("Indexed root: %s (%.2fs)", root, elapsed)
 
-    def refresh_now(self, root=None):
+    def refresh_now_result(self, root=None):
         if root:
-            ok, value = self.track_root(root)
-            if not ok:
-                return False, value
-            targets = [value]
+            tracked = self.track_root_result(root)
+            if not tracked.get("success"):
+                return tracked
+            targets = [tracked.get("user_message")]
         else:
             targets = self.tracked_roots()
             if not targets:
-                return False, "No tracked roots. Add one with an indexed search command first."
+                return failure_result(
+                    "No tracked roots. Add one with an indexed search command first.",
+                    error_code="invalid_state",
+                )
 
         for item in targets:
             self._index_root(item)
-        return True, f"Refreshed index for {len(targets)} root(s)."
+        return success_result(
+            f"Refreshed index for {len(targets)} root(s).",
+            debug_info={"targets": targets},
+        )
 
     def search(self, query, root=None, limit=SEARCH_INDEX_MAX_RESULTS):
         needle = (query or "").strip()
@@ -224,10 +233,10 @@ class SearchIndexService:
 
         target_root = None
         if root:
-            ok, value = self.track_root(root)
-            if not ok:
+            tracked = self.track_root_result(root)
+            if not tracked.get("success"):
                 return []
-            target_root = value
+            target_root = tracked.get("user_message")
             with self._state_lock:
                 is_indexed = target_root in self._indexed_roots
             if not is_indexed:
@@ -282,6 +291,16 @@ class SearchIndexService:
             except Exception as exc:
                 logger.error("Search index worker failed: %s", exc)
             self._stop_event.wait(self._refresh_seconds)
+
+    # Legacy tuple compatibility
+    def start(self):
+        return to_legacy_pair(self.start_result())
+
+    def track_root(self, root_path):
+        return to_legacy_pair(self.track_root_result(root_path))
+
+    def refresh_now(self, root=None):
+        return to_legacy_pair(self.refresh_now_result(root=root))
 
 
 search_index_service = SearchIndexService()

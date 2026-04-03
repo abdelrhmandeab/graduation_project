@@ -52,6 +52,51 @@ def test_destructive_command_abuse_blocked():
     )
 
 
+def test_high_risk_file_delete_requires_confirmation():
+    with _workspace_tempdir() as tmp:
+        route_command(f"go to {tmp}")
+        target = Path(tmp) / "safe_delete.txt"
+        target.write_text("x", encoding="utf-8")
+
+        response = route_command("delete safe_delete.txt")
+        _assert("Confirmation required" in response, f"Unexpected response: {response}")
+
+        token_match = re.search(r"confirm\s+([0-9a-f]{6})", response, flags=re.IGNORECASE)
+        _assert(token_match is not None, "Token not found in delete confirmation response")
+        token = token_match.group(1)
+
+        missing_factor = route_command(f"confirm {token}")
+        _assert("Second factor required" in missing_factor, f"Unexpected response: {missing_factor}")
+
+        confirm_response = route_command(f"confirm {token} 2468")
+        _assert("Deleted" in confirm_response, f"Unexpected response: {confirm_response}")
+        _assert(not target.exists(), "File should be deleted after valid confirmation")
+
+
+def test_medium_risk_close_app_requires_confirmation_without_second_factor():
+    response = route_command("close app notepad")
+    _assert("Confirmation required" in response, f"Unexpected response: {response}")
+    _assert("second factor" not in response.lower(), f"Unexpected response: {response}")
+
+    token_match = re.search(r"confirm\s+([0-9a-f]{6})", response, flags=re.IGNORECASE)
+    _assert(token_match is not None, "Token not found in close-app confirmation response")
+    token = token_match.group(1)
+
+    confirm_response = route_command(f"confirm {token}")
+    _assert("Second factor required" not in confirm_response, f"Unexpected response: {confirm_response}")
+
+
+def test_permanent_delete_blocked_by_default():
+    with _workspace_tempdir() as tmp:
+        route_command(f"go to {tmp}")
+        target = Path(tmp) / "danger.txt"
+        target.write_text("danger", encoding="utf-8")
+
+        response = route_command("delete permanently danger.txt")
+        _assert("Permanent delete is disabled by configuration" in response, f"Unexpected response: {response}")
+        _assert(target.exists(), "File should not be deleted when permanent delete is blocked")
+
+
 def test_path_traversal_blocked():
     with _workspace_tempdir() as tmp:
         response = route_command(f"go to {tmp}")
@@ -97,6 +142,9 @@ def test_demo_mode_output():
 if __name__ == "__main__":
     test_invalid_confirmation_token()
     test_destructive_command_abuse_blocked()
+    test_high_risk_file_delete_requires_confirmation()
+    test_medium_risk_close_app_requires_confirmation_without_second_factor()
+    test_permanent_delete_blocked_by_default()
     test_path_traversal_blocked()
     test_read_only_mode_blocks_write()
     test_command_permission_blocks_app_open()

@@ -52,7 +52,17 @@ def test_delete_and_undo():
         target.write_text("hello", encoding="utf-8")
 
         response = route_command("delete note.txt")
-        _assert("Deleted" in response, f"Unexpected response: {response}")
+        _assert("Confirmation required" in response, f"Unexpected response: {response}")
+
+        token_match = re.search(r"confirm\s+([0-9a-f]{6})", response, flags=re.IGNORECASE)
+        _assert(token_match is not None, "Delete confirmation token was not present")
+        token = token_match.group(1)
+
+        missing_factor = route_command(f"confirm {token}")
+        _assert("Second factor required" in missing_factor, f"Unexpected response: {missing_factor}")
+
+        confirm_response = route_command(f"confirm {token} 2468")
+        _assert("Deleted" in confirm_response, f"Unexpected response: {confirm_response}")
         _assert(not target.exists(), "File should be removed after delete")
 
         response = route_command("undo")
@@ -81,6 +91,22 @@ def test_system_confirmation_flow():
 def test_drive_listing():
     response = route_command("list drives")
     _assert("\\" in response or "failed" in response.lower(), f"Unexpected response: {response}")
+
+
+def test_close_app_blocked_by_policy():
+    policy_engine.set_command_permission("app_close", False)
+    try:
+        response = route_command("close app notepad")
+        _assert("blocked by policy" in response.lower(), f"Unexpected response: {response}")
+    finally:
+        policy_engine.set_command_permission("app_close", True)
+
+
+def test_invalid_folder_name_validation():
+    with _workspace_tempdir() as tmp:
+        route_command(f"go to {tmp}")
+        response = route_command("create folder bad<name>")
+        _assert("unsupported characters" in response.lower(), f"Unexpected response: {response}")
 
 
 def test_audit_verify_and_policy():
@@ -142,6 +168,8 @@ if __name__ == "__main__":
     test_delete_and_undo()
     test_system_confirmation_flow()
     test_drive_listing()
+    test_close_app_blocked_by_policy()
+    test_invalid_folder_name_validation()
     test_audit_verify_and_policy()
     test_batch_commit()
     test_index_and_job_queue()
