@@ -14,6 +14,17 @@ from core.config import (
 )
 
 
+_BENCHMARK_EXPECTED_MARKERS = {
+    "metrics": ("metrics report", "overall success rate"),
+    "observability": ("observability dashboard", "command metrics:"),
+    "policy_status": ("policy status", "permissions:"),
+    "persona_status": ("persona status", "active_profile:"),
+    "kb_status": ("knowledge base status", "file_count:"),
+    "kb_quality": ("knowledge quality report", "ok="),
+    "audit_verify": ("audit chain is valid",),
+}
+
+
 def run_quick_benchmark(executor):
     scenarios = [
         ("metrics", "show metrics"),
@@ -90,7 +101,7 @@ def _run_scenarios(executor, scenarios):
         started = time.perf_counter()
         output = executor(command)
         elapsed = time.perf_counter() - started
-        ok = "internal error" not in (output or "").lower()
+        ok = _is_benchmark_result_ok(name, output)
         results.append(
             {
                 "name": name,
@@ -111,6 +122,18 @@ def _run_scenarios(executor, scenarios):
         "p95_latency_ms": _percentile([row["latency_ms"] for row in results], 95) or 0.0,
         "results": results,
     }
+
+
+def _is_benchmark_result_ok(name, output):
+    lowered = (output or "").lower()
+    if "internal error" in lowered:
+        return False
+
+    markers = _BENCHMARK_EXPECTED_MARKERS.get(name)
+    if markers:
+        return all(marker in lowered for marker in markers)
+
+    return bool((output or "").strip())
 
 
 def _scenario_invalid_confirmation(executor):

@@ -99,6 +99,9 @@ def test_memory_observability_and_benchmark():
     route_command("memory on")
     session_memory.add_turn("hello", "hi there")
 
+    reseal = route_command("audit reseal")
+    _assert("resealed" in reseal.lower(), f"Unexpected response: {reseal}")
+
     status = route_command("memory status")
     _assert("Memory Status" in status, f"Unexpected response: {status}")
     _assert("turn_count:" in status, f"Unexpected response: {status}")
@@ -115,6 +118,25 @@ def test_memory_observability_and_benchmark():
     _assert(benchmark_file.exists(), "Benchmark output file was not created")
     payload = json.loads(benchmark_file.read_text(encoding="utf-8"))
     _assert("results" in payload and payload["results"], "Benchmark payload missing results")
+    expected_scenarios = {
+        "metrics",
+        "observability",
+        "policy_status",
+        "persona_status",
+        "kb_status",
+        "kb_quality",
+        "audit_verify",
+    }
+    present_scenarios = {row.get("name") for row in payload["results"]}
+    _assert(
+        expected_scenarios.issubset(present_scenarios),
+        f"Benchmark payload missing expected scenarios: {expected_scenarios - present_scenarios}",
+    )
+    failed_rows = [row for row in payload["results"] if not bool(row.get("ok"))]
+    _assert(not failed_rows, f"Benchmark scenarios failed semantic checks: {failed_rows}")
+    audit_rows = [row for row in payload["results"] if row.get("name") == "audit_verify"]
+    _assert(audit_rows, "Benchmark payload missing audit_verify scenario")
+    _assert(bool(audit_rows[0].get("ok")), "audit_verify scenario should pass after reseal")
 
     quality = route_command("kb quality")
     _assert("Knowledge Quality Report" in quality, f"Unexpected response: {quality}")
@@ -130,8 +152,6 @@ def test_memory_observability_and_benchmark():
         "Resilience payload missing results",
     )
 
-    reseal = route_command("audit reseal")
-    _assert("resealed" in reseal.lower(), f"Unexpected response: {reseal}")
     verify = route_command("verify audit log")
     _assert("Audit chain is valid" in verify, f"Unexpected response: {verify}")
 

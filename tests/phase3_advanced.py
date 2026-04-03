@@ -17,6 +17,17 @@ def _assert(condition, message):
         raise AssertionError(message)
 
 
+def _wait_for_job_status(job_id, expected_fragment, timeout_seconds=10.0, poll_seconds=0.2):
+    deadline = time.monotonic() + max(1.0, float(timeout_seconds))
+    status_text = ""
+    while time.monotonic() < deadline:
+        status_text = route_command(f"job status {job_id}")
+        if expected_fragment in status_text:
+            return status_text
+        time.sleep(max(0.05, float(poll_seconds)))
+    return status_text
+
+
 @contextmanager
 def _workspace_tempdir():
     base = Path(__file__).resolve().parents[1] / ".tmp_tests"
@@ -65,12 +76,7 @@ def test_job_cancel_and_retry():
         retry_response = route_command(f"job retry {job_id}")
         _assert("re-queued" in retry_response.lower(), f"Unexpected response: {retry_response}")
 
-        status_text = ""
-        for _ in range(12):
-            time.sleep(0.5)
-            status_text = route_command(f"job status {job_id}")
-            if "status=succeeded" in status_text:
-                break
+        status_text = _wait_for_job_status(job_id, "status=succeeded", timeout_seconds=10.0, poll_seconds=0.2)
 
         _assert("status=succeeded" in status_text, f"Job did not succeed after retry: {status_text}")
         _assert((Path(tmp) / "delayed_retry").exists(), "Retried job did not execute command")
