@@ -1,3 +1,5 @@
+import os
+import re
 import time
 
 from core.command_parser import ParsedCommand, parse_command
@@ -16,6 +18,7 @@ from core.language_gate import UNSUPPORTED_LANGUAGE_MESSAGE, detect_supported_la
 from core.logger import logger
 from core.metrics import metrics
 from core.persona import persona_manager
+from core.response_templates import anti_repetition_prefixes, detect_language_hint, render_template
 from core.session_memory import session_memory
 from llm.ollama_client import ask_llm
 from llm.prompt_builder import build_prompt_package
@@ -36,6 +39,99 @@ from os_control.system_ops import execute_system_command_result, request_system_
 
 
 _JOB_QUEUE_EXECUTOR_READY = False
+
+_OPEN_FOLLOWUP_TEXTS = {
+    "open it",
+    "open this",
+    "open that",
+    "launch it",
+    "start it",
+    "افتحه",
+    "افتحها",
+    "افتحه الان",
+    "افتحها الان",
+    "شغله",
+    "شغلها",
+}
+
+_CLOSE_FOLLOWUP_TEXTS = {
+    "close it",
+    "close this",
+    "close that",
+    "terminate it",
+    "kill it",
+    "اغلقه",
+    "اغلقها",
+    "اقفله",
+    "اقفلها",
+    "سكره",
+    "سكرها",
+}
+
+_DELETE_FOLLOWUP_TEXTS = {
+    "delete it",
+    "delete this",
+    "delete that",
+    "remove it",
+    "remove this",
+    "احذفه",
+    "احذفها",
+    "امسحه",
+    "امسحها",
+    "ازله",
+    "ازلها",
+}
+
+_CONFIRM_FOLLOWUP_TEXTS = {
+    "confirm",
+    "confirm it",
+    "confirm this",
+    "confirm that",
+    "approve",
+    "approve it",
+    "اكد",
+    "أكد",
+    "تاكيد",
+    "تأكيد",
+    "اكده",
+    "أكده",
+}
+
+_CANCEL_FOLLOWUP_TEXTS = {
+    "cancel",
+    "cancel it",
+    "cancel this",
+    "cancel that",
+    "abort",
+    "abort it",
+    "stop it",
+    "الغ",
+    "الغاء",
+    "إلغاء",
+    "الغه",
+    "ألغِه",
+    "الغها",
+    "ألغِها",
+}
+
+_RENAME_IT_TO_RE = re.compile(r"^\s*(?:rename|change\s+name)\s+(?:it|this|that)\s+to\s+(.+)$", re.IGNORECASE)
+_MOVE_IT_TO_RE = re.compile(r"^\s*(?:move)\s+(?:it|this|that)\s+to\s+(.+)$", re.IGNORECASE)
+_CONFIRM_IT_WITH_FACTOR_RE = re.compile(
+    r"^\s*(?:confirm|approve)\s+(?:it|this|that)\s+(.+)$",
+    re.IGNORECASE,
+)
+_AR_RENAME_IT_TO_RE = re.compile(
+    r"^\s*(?:غيره|غيرها|غير\s+اسمه|غير\s+اسمها)\s+(?:الى|إلى)\s+(.+)$",
+    re.IGNORECASE,
+)
+_AR_MOVE_IT_TO_RE = re.compile(
+    r"^\s*(?:انقله|انقلها|حركه|حركها)\s+(?:الى|إلى)\s+(.+)$",
+    re.IGNORECASE,
+)
+_AR_CONFIRM_IT_WITH_FACTOR_RE = re.compile(
+    r"^\s*(?:اكدها|أكدها|اكده|أكده|اكد|أكد)\s+(.+)$",
+    re.IGNORECASE,
+)
 
 # Maps intents to their required permission key.
 _PERMISSION_MAP = {
@@ -79,7 +175,8 @@ def _execute_confirmed_payload(payload):
         return to_router_tuple(execute_confirmed_file_operation(payload))
     if kind == "app_operation":
         return to_router_tuple(execute_confirmed_app_operation(payload))
-    return False, "Unsupported confirmation payload.", {}
+    language = session_memory.get_preferred_language()
+    return False, render_template("unsupported_confirmation_payload", language), {}
 
 
 def _format_source_citations(sources):
@@ -96,13 +193,220 @@ def _format_source_citations(sources):
     return "\n".join(lines)
 
 
+def _normalize_repetition_text(text):
+    return " ".join((text or "").lower().split()).strip()
+
+
+def _apply_anti_repetition(response_text, language):
+    if (response_text or "").count("\n") > 3:
+        return response_text
+
+    normalized_response = _normalize_repetition_text(response_text)
+    if not normalized_response:
+        return response_text
+
+    recent = session_memory.recent(limit=3)
+    if not recent:
+        return response_text
+
+    last_assistant = _normalize_repetition_text((recent[-1] or {}).get("assistant") or "")
+    if normalized_response != last_assistant:
+        return response_text
+
+    language_key = detect_language_hint(response_text, fallback=language)
+    persona_key = persona_manager.get_profile()
+    prefixes = anti_repetition_prefixes(language_key, persona_key)
+    if not prefixes:
+        return response_text
+
+    prefix = prefixes[len(recent) % len(prefixes)]
+    if _normalize_repetition_text(prefix) and normalized_response.startswith(_normalize_repetition_text(prefix)):
+        return response_text
+    return f"{prefix}{response_text}"
+
+
+def _should_store_turn(parsed, response_text):
+    if not parsed or not response_text:
+        return False
+    if len(response_text) > 2000 or response_text.count("\n") > 20:
+        return False
+    if parsed.intent in {
+        "METRICS_REPORT",
+        "OBSERVABILITY_REPORT",
+        "AUDIT_LOG_REPORT",
+        "AUDIT_VERIFY",
+        "AUDIT_RESEAL",
+        "BENCHMARK_COMMAND",
+    }:
+        return False
+    return True
+
+
+def _rewrite_followup_command(text, language="en"):
+    raw = str(text or "").strip()
+    normalized = " ".join(raw.lower().split())
+    if not normalized:
+        return text, {}
+
+    pending_clarification = session_memory.get_pending_clarification()
+    pending_token = session_memory.get_pending_confirmation_token()
+
+    if normalized in _CANCEL_FOLLOWUP_TEXTS and pending_token and not pending_clarification:
+        return raw, {"followup_cancel_confirmation": True, "token": pending_token}
+
+    factor_match = _CONFIRM_IT_WITH_FACTOR_RE.match(raw) or _AR_CONFIRM_IT_WITH_FACTOR_RE.match(raw)
+    if factor_match:
+        if pending_token:
+            second_factor = factor_match.group(1).strip()
+            return (
+                f"confirm {pending_token} {second_factor}",
+                {"followup_rewrite": "confirmation", "token": pending_token},
+            )
+        return raw, {
+            "followup_blocked": True,
+            "followup_message": render_template("missing_pending_confirmation", language),
+        }
+
+    if normalized in _CONFIRM_FOLLOWUP_TEXTS and pending_token:
+        return f"confirm {pending_token}", {"followup_rewrite": "confirmation", "token": pending_token}
+
+    if normalized in _CONFIRM_FOLLOWUP_TEXTS and not pending_token:
+        return raw, {
+            "followup_blocked": True,
+            "followup_message": render_template("missing_pending_confirmation", language),
+        }
+
+    rename_match = _RENAME_IT_TO_RE.match(raw) or _AR_RENAME_IT_TO_RE.match(raw)
+    if rename_match:
+        last_file = session_memory.get_last_file()
+        if last_file:
+            return (
+                f"rename {last_file} to {rename_match.group(1).strip()}",
+                {"followup_rewrite": "rename_last_file", "last_file": last_file},
+            )
+        return raw, {
+            "followup_blocked": True,
+            "followup_message": render_template("missing_last_file_rename", language),
+        }
+
+    move_match = _MOVE_IT_TO_RE.match(raw) or _AR_MOVE_IT_TO_RE.match(raw)
+    if move_match:
+        last_file = session_memory.get_last_file()
+        if last_file:
+            return (
+                f"move {last_file} to {move_match.group(1).strip()}",
+                {"followup_rewrite": "move_last_file", "last_file": last_file},
+            )
+        return raw, {
+            "followup_blocked": True,
+            "followup_message": render_template("missing_last_file_move", language),
+        }
+
+    if normalized in _DELETE_FOLLOWUP_TEXTS:
+        last_file = session_memory.get_last_file()
+        if last_file:
+            return f"delete {last_file}", {"followup_rewrite": "delete_last_file", "last_file": last_file}
+        return raw, {
+            "followup_blocked": True,
+            "followup_message": render_template("missing_last_file_delete", language),
+        }
+
+    if normalized in _OPEN_FOLLOWUP_TEXTS:
+        last_file = session_memory.get_last_file()
+        last_file_ts = session_memory.get_last_file_timestamp()
+        last_app = session_memory.get_last_app()
+        last_app_ts = session_memory.get_last_app_timestamp()
+
+        candidates = []
+        if last_file:
+            if os.path.isdir(last_file):
+                candidates.append((last_file_ts, f"open {last_file}", "open_last_file", {"last_file": last_file}))
+            elif os.path.isfile(last_file):
+                candidates.append((last_file_ts, f"file info {last_file}", "file_info_last_file", {"last_file": last_file}))
+            else:
+                candidates.append((last_file_ts, f"file info {last_file}", "file_info_last_file", {"last_file": last_file}))
+        if last_app:
+            candidates.append((last_app_ts, f"open app {last_app}", "open_last_app", {"last_app": last_app}))
+
+        if candidates:
+            _ts, rewritten, rewrite_name, extra_meta = max(candidates, key=lambda row: row[0])
+            meta = {"followup_rewrite": rewrite_name}
+            meta.update(extra_meta)
+            return rewritten, meta
+
+        return raw, {
+            "followup_blocked": True,
+            "followup_message": render_template("missing_last_app_open", language),
+        }
+
+    if normalized in _CLOSE_FOLLOWUP_TEXTS:
+        last_app = session_memory.get_last_app()
+        if last_app:
+            return f"close app {last_app}", {"followup_rewrite": "close_last_app", "last_app": last_app}
+        return raw, {
+            "followup_blocked": True,
+            "followup_message": render_template("missing_last_app_close", language),
+        }
+
+    return text, {}
+
+
+def _update_short_term_context(parsed, success, message, meta):
+    token = str(meta.get("token") or "").strip().lower()
+    if token:
+        session_memory.set_pending_confirmation_token(token)
+    elif parsed.intent == "OS_CONFIRMATION" and success:
+        session_memory.clear_pending_confirmation_token()
+    elif parsed.intent == "OS_CONFIRMATION" and not success:
+        lowered_message = str(message or "").lower()
+        if "not found or expired" in lowered_message or "token expired" in lowered_message:
+            session_memory.clear_pending_confirmation_token()
+
+    if parsed.intent == "OS_FILE_SEARCH" and success and not meta.get("clarification_payload"):
+        candidate = str(message or "").strip()
+        if candidate and (":\\" in candidate or "/" in candidate):
+            session_memory.set_last_file(candidate)
+
+    if parsed.intent in {"OS_APP_OPEN", "OS_APP_CLOSE"} and success:
+        app_name = (
+            str(meta.get("target") or "").strip()
+            or str((parsed.args or {}).get("app_name") or "").strip()
+            or str(meta.get("process_name") or "").strip()
+        )
+        if app_name:
+            session_memory.set_last_app(app_name)
+
+    if parsed.intent == "OS_FILE_NAVIGATION" and success:
+        action = parsed.action
+        args = dict(parsed.args or {})
+        path = ""
+        if action in {"cd", "list_directory", "file_info", "create_directory", "delete_item", "delete_item_permanent"}:
+            path = str(args.get("path") or "").strip()
+        elif action in {"move_item", "rename_item"}:
+            path = str(args.get("destination") or args.get("source") or "").strip()
+        if path:
+            session_memory.set_last_file(path)
+
+    if parsed.intent == "OS_CONFIRMATION" and success:
+        operation = str(meta.get("operation") or "").strip()
+        if operation == "close_app":
+            app_name = str(meta.get("target") or meta.get("process_name") or "").strip()
+            if app_name:
+                session_memory.set_last_app(app_name)
+        if operation in {"delete_item", "delete_item_permanent", "move_item", "rename_item", "create_directory", "file_info"}:
+            candidate_path = str(meta.get("path") or meta.get("destination") or meta.get("source") or "").strip()
+            if candidate_path:
+                session_memory.set_last_file(candidate_path)
+
+
 def _build_app_runtime_clarification(app_query, candidates, *, operation="open"):
     operation_mode = "close" if operation == "close" else "open"
     intent = "OS_APP_CLOSE" if operation_mode == "close" else "OS_APP_OPEN"
     option_prefix = "close_app_runtime" if operation_mode == "close" else "open_app_runtime"
+    language = session_memory.get_preferred_language()
 
     options = []
-    lines = [f"I found multiple app matches. Which one should I {operation_mode}?"]
+    lines = [render_template(f"app_ambiguous_{operation_mode}_intro", language)]
     for index, candidate in enumerate(candidates[:3], start=1):
         canonical = candidate.get("canonical_name") or candidate.get("executable")
         executable = candidate.get("executable")
@@ -124,14 +428,14 @@ def _build_app_runtime_clarification(app_query, candidates, *, operation="open")
                 ],
             }
         )
-    lines.append("Reply with the number (for example `1`) or `cancel`.")
+    lines.append(render_template("reply_with_number_or_cancel", language))
     prompt = "\n".join(lines)
     payload = {
         "reason": "app_close_ambiguous" if operation_mode == "close" else "app_name_ambiguous",
         "prompt": prompt,
         "options": options,
         "source_text": app_query,
-        "language": session_memory.get_preferred_language(),
+        "language": language,
         "confidence": 0.58,
         "entity_scores": {"app_name": 0.62},
     }
@@ -139,8 +443,9 @@ def _build_app_runtime_clarification(app_query, candidates, *, operation="open")
 
 
 def _build_file_search_runtime_clarification(filename, matches):
+    language = session_memory.get_preferred_language()
     options = []
-    lines = [f"I found multiple files for '{filename}'. Which one do you mean?"]
+    lines = [render_template("file_ambiguous_intro", language, filename=filename)]
     for index, match in enumerate(matches[:5], start=1):
         lines.append(f"{index}) {match}")
         options.append(
@@ -153,14 +458,14 @@ def _build_file_search_runtime_clarification(filename, matches):
                 "reply_tokens": [str(index), str(match).lower()],
             }
         )
-    lines.append("Reply with the number (for example `1`) or `cancel`.")
+    lines.append(render_template("reply_with_number_or_cancel", language))
     prompt = "\n".join(lines)
     payload = {
         "reason": "file_search_multiple_matches",
         "prompt": prompt,
         "options": options,
         "source_text": filename,
-        "language": session_memory.get_preferred_language(),
+        "language": language,
         "confidence": 0.60,
         "entity_scores": {"filename": 0.66},
     }
@@ -216,6 +521,7 @@ def _execute_job_command(command_text):
 
 def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True):
     logger.info("Command parsed: %s (%s)", parsed.intent, parsed.action or "no-action")
+    language = session_memory.get_preferred_language()
 
     if parsed.intent == "DEMO_MODE":
         if parsed.action == "on":
@@ -239,13 +545,15 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True)
             if "Second factor required" in message and token:
                 return (
                     False,
-                    (
-                        f"Confirmation failed: {message} "
-                        f"Use `confirm {token} <PIN_or_passphrase>`."
+                    render_template(
+                        "confirmation_failed_with_usage",
+                        language,
+                        message=message,
+                        token=token,
                     ),
                     {},
                 )
-            return False, f"Confirmation failed: {message}", {}
+            return False, render_template("confirmation_failed", language, message=message), {}
         return _execute_confirmed_payload(payload)
 
     if parsed.intent == "OS_ROLLBACK":
@@ -255,7 +563,7 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True)
     if parsed.intent == "OS_FILE_SEARCH":
         filename = parsed.args.get("filename", "")
         if not filename:
-            return False, "Please provide a filename to search for.", {}
+            return False, render_template("missing_filename_search", language), {}
         root = parsed.args.get("search_path") or get_current_directory()
         search_index_service.start()
         indexed_results = search_index_service.search(filename, root=root)
@@ -268,7 +576,7 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True)
         if len(results) > 1:
             prompt, payload = _build_file_search_runtime_clarification(filename, results)
             return True, prompt, {"indexed_search": False, "clarification_payload": payload}
-        message = results[0] if results else "File not found."
+        message = results[0] if results else render_template("file_not_found", language)
         return True, message, {"indexed_search": False}
 
     if parsed.intent == "OS_FILE_NAVIGATION":
@@ -277,7 +585,7 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True)
     if parsed.intent == "OS_APP_OPEN":
         app_name = parsed.args.get("app_name", "")
         if not app_name:
-            return False, "Please provide an app name to open.", {}
+            return False, render_template("missing_app_name_open", language), {}
         resolution = resolve_app_request(app_name)
         if resolution.get("status") == "ambiguous":
             prompt, payload = _build_app_runtime_clarification(
@@ -290,7 +598,7 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True)
     if parsed.intent == "OS_APP_CLOSE":
         app_name = parsed.args.get("app_name", "")
         if not app_name:
-            return False, "Please provide an app name to close.", {}
+            return False, render_template("missing_app_name_close", language), {}
         resolution = resolve_app_request(app_name)
         if resolution.get("status") == "ambiguous":
             prompt, payload = _build_app_runtime_clarification(
@@ -359,7 +667,6 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True)
     # LLM fallback
     package = build_prompt_package(parsed.raw)
     response = (ask_llm(package["prompt"]) or "").strip()
-    session_memory.add_turn(parsed.raw, response)
     if LLM_APPEND_SOURCE_CITATIONS and package["kb_sources"]:
         response += _format_source_citations(package["kb_sources"])
     return (
@@ -454,6 +761,19 @@ def route_command(text):
     effective_text = language_result.normalized_text or original_text
     session_memory.set_preferred_language(language_result.language)
 
+    effective_text, followup_meta = _rewrite_followup_command(
+        effective_text,
+        language=language_result.language,
+    )
+
+    if followup_meta.get("followup_cancel_confirmation"):
+        token = str(followup_meta.get("token") or "").strip().lower()
+        ok, _cancel_message = confirmation_manager.cancel(token)
+        session_memory.clear_pending_confirmation_token()
+        if ok:
+            return render_template("confirmation_cancelled", language_result.language)
+        return render_template("missing_pending_confirmation", language_result.language)
+
     pending = session_memory.get_pending_clarification()
     if pending:
         resolution = resolve_clarification_reply(effective_text, pending)
@@ -466,7 +786,7 @@ def route_command(text):
                 "success",
                 details={"source_text": pending.get("source_text"), "language": language_result.language},
             )
-            return resolution.message or "Clarification cancelled."
+            return render_template("clarification_cancelled", language_result.language)
 
         if resolution.status == "resolved":
             session_memory.clear_pending_clarification()
@@ -495,16 +815,28 @@ def route_command(text):
                 response = "Sorry, I had an internal error."
                 success = False
 
+            _update_short_term_context(parsed, success, response, meta)
             latency = time.perf_counter() - start
             metrics.record_command(parsed.intent, success, latency)
+            if success:
+                response = _apply_anti_repetition(response, language_result.language)
+                if _should_store_turn(parsed, response):
+                    session_memory.add_turn(original_text, response)
             return _format_demo_output(parsed, success, response, meta)
 
         if resolution.status == "needs_clarification":
             latency = time.perf_counter() - start
             metrics.record_command("INTENT_CLARIFICATION", False, latency)
-            return resolution.message or pending.get("prompt") or "Please clarify your intent."
+            return (
+                resolution.message
+                or pending.get("prompt")
+                or render_template("please_clarify_intent", language_result.language)
+            )
 
         session_memory.clear_pending_clarification()
+
+    if followup_meta.get("followup_blocked"):
+        return str(followup_meta.get("followup_message") or "")
 
     parsed = parse_command(effective_text)
     parsed.raw = original_text
@@ -535,6 +867,8 @@ def route_command(text):
     success = False
     response = ""
     meta = {"language": language_result.language, "intent_confidence": assessment.confidence}
+    if followup_meta:
+        meta.update(followup_meta)
     if assessment.entity_scores:
         meta["entity_scores"] = dict(assessment.entity_scores)
 
@@ -564,8 +898,13 @@ def route_command(text):
         response = "Sorry, I had an internal error."
         success = False
 
+    _update_short_term_context(parsed, success, response, meta)
     latency = time.perf_counter() - start
     metrics.record_command(parsed.intent, success, latency)
+    if success:
+        response = _apply_anti_repetition(response, language_result.language)
+        if _should_store_turn(parsed, response):
+            session_memory.add_turn(original_text, response)
     return _format_demo_output(parsed, success, response, meta)
 
 

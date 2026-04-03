@@ -2,6 +2,7 @@ import re
 from dataclasses import dataclass, field
 
 from os_control.app_ops import resolve_app_request
+from core.response_templates import render_template
 
 
 _ARABIC_CHAR_RE = re.compile(r"[\u0600-\u06FF]")
@@ -219,10 +220,12 @@ def _min_entity_score(entity_scores):
     return min(float(v) for v in entity_scores.values())
 
 
-def _build_open_path_vs_app_disambiguation(target, prefer_app=False):
+def _build_open_path_vs_app_disambiguation(target, prefer_app=False, language="en"):
+    app_label = render_template("open_target_option_app", language, target=target)
+    path_label = render_template("open_target_option_path", language, target=target)
     app_option = ClarificationOption(
         id="open_app",
-        label=f"Open application '{target}'",
+        label=app_label,
         intent="OS_APP_OPEN",
         action="",
         args={"app_name": target},
@@ -230,7 +233,7 @@ def _build_open_path_vs_app_disambiguation(target, prefer_app=False):
     )
     path_option = ClarificationOption(
         id="open_path",
-        label=f"Open folder/path '{target}'",
+        label=path_label,
         intent="OS_FILE_NAVIGATION",
         action="list_directory",
         args={"path": target},
@@ -238,16 +241,17 @@ def _build_open_path_vs_app_disambiguation(target, prefer_app=False):
     )
     options = [app_option, path_option] if prefer_app else [path_option, app_option]
     return options, (
-        "I want to confirm before acting. Did you mean:\n"
+        render_template("open_target_ambiguous_intro", language)
+        + "\n"
         f"1) {options[0].label}\n"
         f"2) {options[1].label}\n"
-        "Reply with `1`, `2`, `app`, `folder`, or `cancel`."
+        + render_template("reply_with_1_2_app_folder_or_cancel", language)
     )
 
 
-def _build_app_candidate_disambiguation(query, candidates):
+def _build_app_candidate_disambiguation(query, candidates, language="en"):
     options = []
-    lines = ["I found multiple app matches. Which one should I open?"]
+    lines = [render_template("app_ambiguous_open_intro", language)]
     for index, candidate in enumerate(candidates[:3], start=1):
         canonical_name = candidate.get("canonical_name") or candidate.get("executable")
         executable = candidate.get("executable")
@@ -269,7 +273,7 @@ def _build_app_candidate_disambiguation(query, candidates):
             )
         )
         lines.append(f"{index}) {label}")
-    lines.append("Reply with the number (for example `1`) or `cancel`.")
+    lines.append(render_template("reply_with_number_or_cancel", language))
     return options, "\n".join(lines)
 
 
@@ -286,11 +290,7 @@ def assess_intent_confidence(raw_text, parsed, language="en"):
                 confidence=confidence,
                 should_clarify=True,
                 reason="low_confidence_action_like_query",
-                prompt=(
-                    "I am not fully sure which action you want. "
-                    "Please rephrase as one clear command (for example: "
-                    "`open app notepad`, `find file notes.txt`, or `delete file.txt`)."
-                ),
+                prompt=render_template("low_confidence_action_like_query", language),
                 mixed_language=mixed_language,
                 entity_scores=entity_scores,
             )
@@ -328,10 +328,7 @@ def assess_intent_confidence(raw_text, parsed, language="en"):
             confidence=max(0.0, confidence),
             should_clarify=True,
             reason="multiple_actions_detected",
-            prompt=(
-                "I detected more than one action in one command. "
-                "Please split it into one step at a time."
-            ),
+            prompt=render_template("multiple_actions_detected", language),
             mixed_language=mixed_language,
             entity_scores=entity_scores,
         )
@@ -344,6 +341,7 @@ def assess_intent_confidence(raw_text, parsed, language="en"):
                 options, prompt = _build_app_candidate_disambiguation(
                     app_name,
                     resolution.get("candidates") or [],
+                    language=language,
                 )
                 return IntentAssessment(
                     confidence=0.58,
@@ -361,7 +359,11 @@ def assess_intent_confidence(raw_text, parsed, language="en"):
                 and not _has_explicit_app_intent(raw_text)
                 and looks_fs
             ):
-                options, prompt = _build_open_path_vs_app_disambiguation(app_name, prefer_app=True)
+                options, prompt = _build_open_path_vs_app_disambiguation(
+                    app_name,
+                    prefer_app=True,
+                    language=language,
+                )
                 return IntentAssessment(
                     confidence=0.48,
                     should_clarify=True,
@@ -392,7 +394,11 @@ def assess_intent_confidence(raw_text, parsed, language="en"):
                 and not any(hint in lowered_path for hint in _FS_HINTS)
             )
             if plain_name:
-                options, prompt = _build_open_path_vs_app_disambiguation(path_value, prefer_app=False)
+                options, prompt = _build_open_path_vs_app_disambiguation(
+                    path_value,
+                    prefer_app=False,
+                    language=language,
+                )
                 return IntentAssessment(
                     confidence=0.50,
                     should_clarify=True,
@@ -442,9 +448,10 @@ def resolve_clarification_reply(reply_text, pending_payload):
         )
 
     if any(token in reply_norm for token in _CANCEL_REPLY_TOKENS):
+        language = str((pending_payload or {}).get("language") or "en")
         return ClarificationResolution(
             status="cancelled",
-            message="Clarification cancelled.",
+            message=render_template("clarification_cancelled", language),
         )
 
     options = list((pending_payload or {}).get("options") or [])

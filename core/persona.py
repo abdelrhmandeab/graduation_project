@@ -36,6 +36,33 @@ PERSONA_PROFILES = {
         "speech_style": "friendly",
         "speech_rate": 185,
     },
+    "professional": {
+        "label": "Professional",
+        "system_prompt": (
+            "Respond in a professional and pragmatic style. "
+            "Keep answers actionable, concise, and structured when needed."
+        ),
+        "speech_style": "calm",
+        "speech_rate": 165,
+    },
+    "friendly": {
+        "label": "Friendly",
+        "system_prompt": (
+            "Respond in a warm and human-like style while remaining accurate and safe. "
+            "Prefer short and supportive phrasing."
+        ),
+        "speech_style": "friendly",
+        "speech_rate": 182,
+    },
+    "brief": {
+        "label": "Brief",
+        "system_prompt": (
+            "Respond with minimal words while preserving correctness and safety. "
+            "Avoid long explanations unless explicitly requested."
+        ),
+        "speech_style": "neutral",
+        "speech_rate": 190,
+    },
 }
 
 

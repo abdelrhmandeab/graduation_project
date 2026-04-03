@@ -15,6 +15,12 @@ def handle(parsed):
             f"file: {status['file']}",
             f"preferred_language: {status.get('preferred_language', 'en')}",
             f"pending_clarification: {status.get('pending_clarification', False)}",
+            f"last_app: {status.get('last_app') or 'none'}",
+            f"last_app_updated_at: {status.get('last_app_updated_at') or 0.0}",
+            f"last_file: {status.get('last_file') or 'none'}",
+            f"last_file_updated_at: {status.get('last_file_updated_at') or 0.0}",
+            f"pending_confirmation_token: {status.get('pending_confirmation_token') or 'none'}",
+            f"pending_confirmation_updated_at: {status.get('pending_confirmation_updated_at') or 0.0}",
         ]
         return True, "\n".join(lines), {}
 

@@ -8,6 +8,7 @@ def build_prompt_package(user_text):
     query = (user_text or "").strip()
     persona_prompt = persona_manager.get_system_prompt()
     memory_context = session_memory.build_context(max_chars=MEMORY_MAX_CONTEXT_CHARS)
+    context_slots = session_memory.context_snapshot()
     kb_package = knowledge_base_service.retrieve_for_prompt(
         query,
         top_k=KB_TOP_K,
@@ -34,6 +35,17 @@ def build_prompt_package(user_text):
                 "",
                 "RECENT SESSION MEMORY:",
                 memory_context,
+            ]
+        )
+
+    if context_slots.get("last_app") or context_slots.get("last_file") or context_slots.get("pending_confirmation_token"):
+        sections.extend(
+            [
+                "",
+                "SHORT-TERM CONTEXT:",
+                f"- last_app: {context_slots.get('last_app') or 'none'}",
+                f"- last_file: {context_slots.get('last_file') or 'none'}",
+                f"- pending_confirmation_token: {context_slots.get('pending_confirmation_token') or 'none'}",
             ]
         )
 
