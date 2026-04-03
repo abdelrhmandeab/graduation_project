@@ -3,6 +3,7 @@ from difflib import SequenceMatcher
 
 from core.config import CONFIRMATION_TIMEOUT_SECONDS
 from core.logger import logger
+from core.response_templates import format_confirmation_prompt
 from os_control.action_log import log_action
 from os_control.adapter_result import confirmation_result, failure_result, success_result, to_legacy_pair
 from os_control.confirmation import confirmation_manager
@@ -539,9 +540,12 @@ def request_close_app_result(app_name):
         },
     )
 
-    message = (
-        f"Confirmation required (risk: {risk_tier}) for: {description}. "
-        f"Say `confirm {token}` within {CONFIRMATION_TIMEOUT_SECONDS} seconds."
+    message = format_confirmation_prompt(
+        description,
+        token,
+        risk_tier=risk_tier,
+        timeout_seconds=CONFIRMATION_TIMEOUT_SECONDS,
+        require_second_factor=False,
     )
     return confirmation_result(
         message,

@@ -11,7 +11,7 @@ from os_control.persistence import (
     get_confirmation,
     store_confirmation,
 )
-from os_control.second_factor import verify_second_factor
+from os_control.second_factor import clear_second_factor_attempts, verify_second_factor
 
 
 class ConfirmationManager:
@@ -39,10 +39,12 @@ class ConfirmationManager:
         cleanup_expired_confirmations()
         pending = get_confirmation(token)
         if not pending:
+            clear_second_factor_attempts(token)
             return False, "Confirmation token not found or expired.", None
 
         if time.time() > pending["expires_at"]:
             delete_confirmation(token)
+            clear_second_factor_attempts(token)
             return False, "Confirmation token expired.", None
 
         payload = pending["payload"] or {}
@@ -50,6 +52,7 @@ class ConfirmationManager:
             return False, "Second factor required for this action.", payload
 
         delete_confirmation(token)
+        clear_second_factor_attempts(token)
         log_action(
             "confirmation_accepted",
             "success",
@@ -61,23 +64,26 @@ class ConfirmationManager:
         cleanup_expired_confirmations()
         pending = get_confirmation(token)
         if not pending:
+            clear_second_factor_attempts(token)
             return False, "Confirmation token not found or expired.", None
 
         if time.time() > pending["expires_at"]:
             delete_confirmation(token)
+            clear_second_factor_attempts(token)
             return False, "Confirmation token expired.", None
 
         payload = pending["payload"] or {}
         if payload.get("require_second_factor"):
             if not second_factor_secret:
                 return False, "Second factor required for this action.", payload
-            if not verify_second_factor(second_factor_secret):
+            factor_ok, factor_message = verify_second_factor(second_factor_secret, token=token)
+            if not factor_ok:
                 log_action(
                     "confirmation_second_factor",
                     "failed",
                     details={"action_name": pending["action_name"], "token": token},
                 )
-                return False, "Second factor verification failed.", payload
+                return False, factor_message or "Second factor verification failed.", payload
 
             log_action(
                 "confirmation_second_factor",
@@ -86,6 +92,7 @@ class ConfirmationManager:
             )
 
         delete_confirmation(token)
+        clear_second_factor_attempts(token)
         log_action(
             "confirmation_accepted",
             "success",
@@ -96,6 +103,21 @@ class ConfirmationManager:
     def pending_count(self):
         cleanup_expired_confirmations()
         return count_pending_confirmations()
+
+    def cancel(self, token):
+        cleanup_expired_confirmations()
+        pending = get_confirmation(token)
+        if not pending:
+            return False, "Confirmation token not found or expired."
+
+        delete_confirmation(token)
+        clear_second_factor_attempts(token)
+        log_action(
+            "confirmation_cancelled",
+            "success",
+            details={"action_name": pending["action_name"], "token": token},
+        )
+        return True, "Pending confirmation cancelled."
 
 
 confirmation_manager = ConfirmationManager()

@@ -14,6 +14,7 @@ from core.config import (
     SECOND_FACTOR_REQUIRED_FOR_DESTRUCTIVE,
 )
 from core.logger import logger
+from core.response_templates import format_confirmation_prompt
 from os_control.action_log import log_action
 from os_control.adapter_result import (
     confirmation_result,
@@ -262,13 +263,13 @@ def _request_file_operation_confirmation(operation, description, resolved_args):
         },
     )
 
-    message = (
-        f"Confirmation required (risk: {risk_tier}) for: {description}. "
-        f"Say `confirm {token}`"
+    message = format_confirmation_prompt(
+        description,
+        token,
+        risk_tier=risk_tier,
+        timeout_seconds=CONFIRMATION_TIMEOUT_SECONDS,
+        require_second_factor=require_second_factor,
     )
-    if require_second_factor:
-        message += " and provide PIN/passphrase as second factor."
-    message += f" within {CONFIRMATION_TIMEOUT_SECONDS} seconds."
     return confirmation_result(
         message,
         token=token,

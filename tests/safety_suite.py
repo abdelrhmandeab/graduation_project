@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core.command_router import route_command
+from core.config import SECOND_FACTOR_MAX_ATTEMPTS_PER_TOKEN
 from core.demo_mode import set_enabled as set_demo_mode
 from os_control.policy import policy_engine
 
@@ -50,6 +51,30 @@ def test_destructive_command_abuse_blocked():
         "Blocked by configuration" in confirm_response,
         f"Unexpected response: {confirm_response}",
     )
+
+
+def test_second_factor_lockout_after_repeated_failures():
+    response = route_command("shutdown computer")
+    _assert("Confirmation required" in response, f"Unexpected response: {response}")
+
+    token_match = re.search(r"confirm\s+([0-9a-f]{6})", response, flags=re.IGNORECASE)
+    _assert(token_match is not None, "Token not found in confirmation response")
+    token = token_match.group(1)
+
+    attempts = max(1, int(SECOND_FACTOR_MAX_ATTEMPTS_PER_TOKEN or 1))
+    final = ""
+    for _ in range(attempts):
+        final = route_command(f"confirm {token} 0000")
+
+    _assert("too many failed second-factor attempts" in final.lower(), f"Unexpected response: {final}")
+
+    still_blocked = route_command(f"confirm {token} 2468")
+    _assert(
+        "too many failed second-factor attempts" in still_blocked.lower(),
+        f"Unexpected response: {still_blocked}",
+    )
+
+    route_command("cancel")
 
 
 def test_high_risk_file_delete_requires_confirmation():
@@ -142,6 +167,7 @@ def test_demo_mode_output():
 if __name__ == "__main__":
     test_invalid_confirmation_token()
     test_destructive_command_abuse_blocked()
+    test_second_factor_lockout_after_repeated_failures()
     test_high_risk_file_delete_requires_confirmation()
     test_medium_risk_close_app_requires_confirmation_without_second_factor()
     test_permanent_delete_blocked_by_default()
