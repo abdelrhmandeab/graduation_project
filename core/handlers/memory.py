@@ -13,6 +13,8 @@ def handle(parsed):
             f"turn_count: {status['turn_count']}",
             f"max_turns: {status['max_turns']}",
             f"file: {status['file']}",
+            f"preferred_language: {status.get('preferred_language', 'en')}",
+            f"pending_clarification: {status.get('pending_clarification', False)}",
         ]
         return True, "\n".join(lines), {}
 

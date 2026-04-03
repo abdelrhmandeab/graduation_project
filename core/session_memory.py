@@ -17,6 +17,8 @@ _LOW_VALUE_ASSISTANT_PATTERNS = (
     "i'm sorry, but i can't assist with that",
     "sorry, but i can't assist with that",
 )
+_SUPPORTED_LANGUAGES = {"ar", "en"}
+_DEFAULT_CLARIFICATION_TTL_SECONDS = 90
 
 
 def _sanitize_assistant_text(text):
@@ -34,26 +36,61 @@ def _is_low_value_assistant_text(text):
     return any(pattern in lowered for pattern in _LOW_VALUE_ASSISTANT_PATTERNS)
 
 
+def _normalize_language_tag(language):
+    key = (language or "").strip().lower()
+    if key in _SUPPORTED_LANGUAGES:
+        return key
+    return "en"
+
+
 class SessionMemory:
     def __init__(self):
         self._lock = threading.Lock()
         self._enabled = bool(MEMORY_ENABLED)
         self._turns = []
+        self._preferred_language = "en"
+        self._pending_clarification = None
         self._load()
 
     def _load(self):
         try:
             with open(MEMORY_FILE, "r", encoding="utf-8") as handle:
                 payload = json.load(handle)
+
             if isinstance(payload, list):
                 self._turns = payload
+                self._preferred_language = "en"
+                self._pending_clarification = None
+                return
+
+            if isinstance(payload, dict):
+                turns = payload.get("turns")
+                if isinstance(turns, list):
+                    self._turns = turns
+                else:
+                    self._turns = []
+                self._preferred_language = _normalize_language_tag(payload.get("preferred_language", "en"))
+                pending = payload.get("pending_clarification")
+                self._pending_clarification = pending if isinstance(pending, dict) else None
+                return
+
+            self._turns = []
+            self._preferred_language = "en"
+            self._pending_clarification = None
         except Exception:
             self._turns = []
+            self._preferred_language = "en"
+            self._pending_clarification = None
 
     def _save(self):
+        payload = {
+            "preferred_language": self._preferred_language,
+            "turns": self._turns,
+            "pending_clarification": self._pending_clarification,
+        }
         try:
             with open(MEMORY_FILE, "w", encoding="utf-8") as handle:
-                json.dump(self._turns, handle, ensure_ascii=True, indent=2)
+                json.dump(payload, handle, ensure_ascii=True, indent=2)
         except Exception as exc:
             logger.error("Failed writing memory file: %s", exc)
 
@@ -65,6 +102,44 @@ class SessionMemory:
     def is_enabled(self):
         with self._lock:
             return self._enabled
+
+    def set_preferred_language(self, language):
+        with self._lock:
+            self._preferred_language = _normalize_language_tag(language)
+            self._save()
+        return True, f"Language preference set to: {self._preferred_language}"
+
+    def get_preferred_language(self):
+        with self._lock:
+            return self._preferred_language
+
+    def set_pending_clarification(self, clarification_payload, ttl_seconds=_DEFAULT_CLARIFICATION_TTL_SECONDS):
+        payload = dict(clarification_payload or {})
+        now_ts = time.time()
+        payload.setdefault("created_at", now_ts)
+        payload["expires_at"] = now_ts + max(5, int(ttl_seconds))
+        with self._lock:
+            self._pending_clarification = payload
+            self._save()
+        return True, "Clarification pending."
+
+    def clear_pending_clarification(self):
+        with self._lock:
+            self._pending_clarification = None
+            self._save()
+        return True, "Clarification cleared."
+
+    def get_pending_clarification(self):
+        with self._lock:
+            pending = dict(self._pending_clarification or {}) if self._pending_clarification else None
+            if not pending:
+                return None
+            expires_at = float(pending.get("expires_at") or 0.0)
+            if expires_at and time.time() > expires_at:
+                self._pending_clarification = None
+                self._save()
+                return None
+            return pending
 
     def add_turn(self, user_text, assistant_text):
         if not self.is_enabled():
@@ -89,6 +164,7 @@ class SessionMemory:
     def clear(self):
         with self._lock:
             self._turns = []
+            self._pending_clarification = None
             self._save()
         return True, "Memory cleared."
 
@@ -123,11 +199,15 @@ class SessionMemory:
         with self._lock:
             count = len(self._turns)
             enabled = self._enabled
+            language = self._preferred_language
+            has_pending = bool(self._pending_clarification)
         return {
             "enabled": enabled,
             "turn_count": count,
             "max_turns": int(MEMORY_MAX_TURNS),
             "file": MEMORY_FILE,
+            "preferred_language": language,
+            "pending_clarification": has_pending,
         }
 
 

@@ -57,6 +57,16 @@ def test_parser_known_commands():
         "i want you to open the desktop file for me": "OS_FILE_NAVIGATION",
         "please shut down computer.": "OS_SYSTEM_COMMAND",
         "jarvis can you open app calculator": "OS_APP_OPEN",
+        "افتح تطبيق المفكرة": "OS_APP_OPEN",
+        "اعرض الاقراص": "OS_FILE_NAVIGATION",
+        "اذهب الى سطح المكتب": "OS_FILE_NAVIGATION",
+        "انشئ مجلد تجربة": "OS_FILE_NAVIGATION",
+        "احذف ملف.txt": "OS_FILE_NAVIGATION",
+        "انقل a.txt الى b.txt": "OS_FILE_NAVIGATION",
+        "اعد تسمية old.txt الى new.txt": "OS_FILE_NAVIGATION",
+        "تاكيد abc123 2468": "OS_CONFIRMATION",
+        "ابحث عن ملف notes.txt في desktop": "OS_FILE_SEARCH",
+        "اطفي الكمبيوتر": "OS_SYSTEM_COMMAND",
     }
     for text, expected_intent in samples.items():
         parsed = parse_command(text)
