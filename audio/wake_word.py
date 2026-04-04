@@ -12,11 +12,13 @@ else:
     _SOUNDDEVICE_IMPORT_ERROR = None
 
 from core.config import (
+    BARGE_IN_INTERRUPT_ON_WAKE,
     SAMPLE_RATE,
     WAKE_WORD,
     WAKE_WORD_AUDIO_GAIN,
     WAKE_WORD_CHUNK_SIZE,
     WAKE_WORD_DETECTION_COOLDOWN_SECONDS,
+    WAKE_WORD_IGNORE_WHILE_SPEAKING,
     WAKE_WORD_INPUT_DEVICE,
     WAKE_WORD_SCORE_DEBUG,
     WAKE_WORD_SCORE_DEBUG_INTERVAL_SECONDS,
@@ -26,6 +28,44 @@ from core.config import (
 _model = None
 _last_detection_ts = 0.0
 _OPENWAKEWORD_RELEASE = "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1"
+_runtime_wake_word_settings = {
+    "threshold": float(WAKE_WORD_THRESHOLD),
+    "audio_gain": float(WAKE_WORD_AUDIO_GAIN),
+    "detection_cooldown_seconds": float(WAKE_WORD_DETECTION_COOLDOWN_SECONDS),
+}
+_runtime_wake_word_behavior = {
+    "ignore_while_speaking": bool(WAKE_WORD_IGNORE_WHILE_SPEAKING),
+    "barge_in_interrupt_on_wake": bool(BARGE_IN_INTERRUPT_ON_WAKE),
+}
+
+
+def get_runtime_wake_word_settings():
+    return dict(_runtime_wake_word_settings)
+
+
+def set_runtime_wake_word_settings(*, threshold=None, audio_gain=None, detection_cooldown_seconds=None):
+    if threshold is not None:
+        _runtime_wake_word_settings["threshold"] = max(0.05, min(0.95, float(threshold)))
+    if audio_gain is not None:
+        _runtime_wake_word_settings["audio_gain"] = max(0.5, min(3.0, float(audio_gain)))
+    if detection_cooldown_seconds is not None:
+        _runtime_wake_word_settings["detection_cooldown_seconds"] = max(
+            0.2,
+            min(3.0, float(detection_cooldown_seconds)),
+        )
+    return get_runtime_wake_word_settings()
+
+
+def get_runtime_wake_word_behavior():
+    return dict(_runtime_wake_word_behavior)
+
+
+def set_runtime_wake_word_behavior(*, ignore_while_speaking=None, barge_in_interrupt_on_wake=None):
+    if ignore_while_speaking is not None:
+        _runtime_wake_word_behavior["ignore_while_speaking"] = bool(ignore_while_speaking)
+    if barge_in_interrupt_on_wake is not None:
+        _runtime_wake_word_behavior["barge_in_interrupt_on_wake"] = bool(barge_in_interrupt_on_wake)
+    return get_runtime_wake_word_behavior()
 
 
 def _download_file(url, target_path):
@@ -129,6 +169,10 @@ def listen_for_wake_word():
         ) from _SOUNDDEVICE_IMPORT_ERROR
 
     model = _get_model()
+    runtime = get_runtime_wake_word_settings()
+    wake_threshold = float(runtime["threshold"])
+    wake_audio_gain = float(runtime["audio_gain"])
+    wake_cooldown = float(runtime["detection_cooldown_seconds"])
     input_device = _resolve_input_device()
     print(f"[WakeWord] Waiting for wake word... device={input_device if input_device is not None else 'default'}")
 
@@ -143,8 +187,8 @@ def listen_for_wake_word():
         while True:
             audio_chunk, _ = stream.read(WAKE_WORD_CHUNK_SIZE)
             audio_chunk = np.asarray(audio_chunk).reshape(-1).astype(np.int16, copy=False)
-            if WAKE_WORD_AUDIO_GAIN and WAKE_WORD_AUDIO_GAIN != 1.0:
-                boosted = audio_chunk.astype(np.float32) * float(WAKE_WORD_AUDIO_GAIN)
+            if wake_audio_gain and wake_audio_gain != 1.0:
+                boosted = audio_chunk.astype(np.float32) * wake_audio_gain
                 audio_chunk = np.clip(boosted, -32768, 32767).astype(np.int16, copy=False)
 
             prediction = model.predict(audio_chunk)
@@ -157,14 +201,14 @@ def listen_for_wake_word():
                 if now - last_debug_ts >= float(WAKE_WORD_SCORE_DEBUG_INTERVAL_SECONDS):
                     rms = float(np.sqrt(np.mean(np.square(audio_chunk.astype(np.float32) / 32768.0))))
                     print(
-                        f"[WakeWord] score={float(score):.6f} threshold={float(WAKE_WORD_THRESHOLD):.3f} "
+                        f"[WakeWord] score={float(score):.6f} threshold={wake_threshold:.3f} "
                         f"rms={rms:.4f}"
                     )
                     last_debug_ts = now
 
-            if score is not None and score > WAKE_WORD_THRESHOLD:
+            if score is not None and score > wake_threshold:
                 now = time.perf_counter()
-                if now - _last_detection_ts < float(WAKE_WORD_DETECTION_COOLDOWN_SECONDS):
+                if now - _last_detection_ts < wake_cooldown:
                     continue
                 _last_detection_ts = now
                 print("[WakeWord] Wake word detected.")

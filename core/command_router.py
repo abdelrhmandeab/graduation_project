@@ -15,7 +15,7 @@ from core.intent_confidence import (
     resolve_clarification_reply,
 )
 from core.language_gate import UNSUPPORTED_LANGUAGE_MESSAGE, detect_supported_language
-from core.logger import logger
+from core.logger import logger, log_structured
 from core.metrics import metrics
 from core.persona import persona_manager
 from core.response_templates import anti_repetition_prefixes, detect_language_hint, render_template
@@ -156,6 +156,13 @@ _PERMISSION_MAP = {
     "OBSERVABILITY_REPORT": "observability",
     "BENCHMARK_COMMAND": "benchmark",
 }
+
+
+def _truncate_text(value, max_chars=180):
+    text = " ".join(str(value or "").split())
+    if len(text) > max_chars:
+        return text[: max_chars - 3] + "..."
+    return text
 
 
 def _required_permission(parsed):
@@ -747,7 +754,14 @@ def route_command(text):
     )
     if not language_result.supported:
         latency = time.perf_counter() - start
-        metrics.record_command("LANGUAGE_GATE_BLOCK", False, latency)
+        metrics.record_command("LANGUAGE_GATE_BLOCK", False, latency, language="unsupported")
+        log_structured(
+            "route_language_gate_block",
+            level="warning",
+            text=_truncate_text(original_text),
+            reason=language_result.reason,
+            latency_ms=latency * 1000.0,
+        )
         log_action(
             "language_gate_block",
             "blocked",
@@ -780,7 +794,13 @@ def route_command(text):
         if resolution.status == "cancelled":
             session_memory.clear_pending_clarification()
             latency = time.perf_counter() - start
-            metrics.record_command("INTENT_CLARIFICATION", True, latency)
+            metrics.record_command("INTENT_CLARIFICATION", True, latency, language=language_result.language)
+            log_structured(
+                "route_clarification_cancelled",
+                language=language_result.language,
+                latency_ms=latency * 1000.0,
+                source_text=_truncate_text(pending.get("source_text") or original_text),
+            )
             log_action(
                 "intent_clarification_cancelled",
                 "success",
@@ -817,7 +837,19 @@ def route_command(text):
 
             _update_short_term_context(parsed, success, response, meta)
             latency = time.perf_counter() - start
-            metrics.record_command(parsed.intent, success, latency)
+            metrics.record_command(parsed.intent, success, latency, language=language_result.language)
+            log_structured(
+                "route_command_result",
+                language=language_result.language,
+                intent=parsed.intent,
+                action=parsed.action or "",
+                success=bool(success),
+                latency_ms=latency * 1000.0,
+                confidence=float(meta.get("intent_confidence") or 0.0),
+                clarified=True,
+                user_text=_truncate_text(original_text),
+                response_preview=_truncate_text(response),
+            )
             if success:
                 response = _apply_anti_repetition(response, language_result.language)
                 if _should_store_turn(parsed, response):
@@ -826,7 +858,14 @@ def route_command(text):
 
         if resolution.status == "needs_clarification":
             latency = time.perf_counter() - start
-            metrics.record_command("INTENT_CLARIFICATION", False, latency)
+            metrics.record_command("INTENT_CLARIFICATION", False, latency, language=language_result.language)
+            log_structured(
+                "route_clarification_reprompt",
+                level="warning",
+                language=language_result.language,
+                latency_ms=latency * 1000.0,
+                source_text=_truncate_text(pending.get("source_text") or original_text),
+            )
             return (
                 resolution.message
                 or pending.get("prompt")
@@ -849,7 +888,18 @@ def route_command(text):
         )
         session_memory.set_pending_clarification(clarification_payload)
         latency = time.perf_counter() - start
-        metrics.record_command("INTENT_CLARIFICATION", False, latency)
+        metrics.record_command("INTENT_CLARIFICATION", False, latency, language=language_result.language)
+        log_structured(
+            "route_clarification_requested",
+            level="warning",
+            language=language_result.language,
+            intent=parsed.intent,
+            action=parsed.action or "",
+            confidence=float(assessment.confidence),
+            reason=assessment.reason,
+            latency_ms=latency * 1000.0,
+            user_text=_truncate_text(original_text),
+        )
         log_action(
             "intent_clarification_requested",
             "pending",
@@ -880,7 +930,18 @@ def route_command(text):
                 clarification_payload = dispatch_meta["clarification_payload"]
                 session_memory.set_pending_clarification(clarification_payload)
                 latency = time.perf_counter() - start
-                metrics.record_command("INTENT_CLARIFICATION", False, latency)
+                metrics.record_command("INTENT_CLARIFICATION", False, latency, language=language_result.language)
+                log_structured(
+                    "route_runtime_clarification_requested",
+                    level="warning",
+                    language=language_result.language,
+                    intent=parsed.intent,
+                    action=parsed.action or "",
+                    reason=clarification_payload.get("reason", "runtime_disambiguation"),
+                    confidence=float(clarification_payload.get("confidence") or 0.0),
+                    latency_ms=latency * 1000.0,
+                    user_text=_truncate_text(original_text),
+                )
                 log_action(
                     "intent_clarification_requested",
                     "pending",
@@ -900,7 +961,19 @@ def route_command(text):
 
     _update_short_term_context(parsed, success, response, meta)
     latency = time.perf_counter() - start
-    metrics.record_command(parsed.intent, success, latency)
+    metrics.record_command(parsed.intent, success, latency, language=language_result.language)
+    log_structured(
+        "route_command_result",
+        language=language_result.language,
+        intent=parsed.intent,
+        action=parsed.action or "",
+        success=bool(success),
+        latency_ms=latency * 1000.0,
+        confidence=float(meta.get("intent_confidence") or 0.0),
+        clarified=False,
+        user_text=_truncate_text(original_text),
+        response_preview=_truncate_text(response),
+    )
     if success:
         response = _apply_anti_repetition(response, language_result.language)
         if _should_store_turn(parsed, response):
@@ -909,6 +982,7 @@ def route_command(text):
 
 
 def initialize_command_services():
+    voice.initialize_runtime_profiles()
     _ensure_job_queue_executor()
     job_queue_service.start()
     search_index_service.start()

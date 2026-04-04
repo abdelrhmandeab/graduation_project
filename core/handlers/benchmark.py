@@ -6,6 +6,7 @@ def handle(parsed, route_command_fn):
     if action == "run":
         payload = run_quick_benchmark(route_command_fn)
         sla = payload.get("sla") or {}
+        history = payload.get("history") or {}
         lines = [
             "Benchmark Report",
             f"scenarios: {payload['scenario_count']}",
@@ -14,6 +15,15 @@ def handle(parsed, route_command_fn):
             f"p95_latency_ms: {payload['p95_latency_ms']:.1f}",
             f"sla_passed: {sla.get('passed')}",
         ]
+        if history:
+            lines.extend(
+                [
+                    f"history_file: {history.get('history_file')}",
+                    f"history_runs: {history.get('run_count')}",
+                    f"history_daily_points: {history.get('daily_points')}",
+                    f"history_weekly_points: {history.get('weekly_points')}",
+                ]
+            )
         for check in sla.get("checks", []):
             lines.append(
                 f"- sla {check.get('name')}: actual={check.get('actual')}, "
@@ -31,6 +41,7 @@ def handle(parsed, route_command_fn):
     if action == "resilience_demo":
         payload = run_resilience_demo(route_command_fn)
         sla = payload.get("sla") or {}
+        history = payload.get("history") or {}
         lines = [
             "Resilience Report",
             f"scenarios: {payload['scenario_count']}",
@@ -39,6 +50,15 @@ def handle(parsed, route_command_fn):
             f"p95_latency_ms: {payload['p95_latency_ms']:.1f}",
             f"sla_passed: {sla.get('passed')}",
         ]
+        if history:
+            lines.extend(
+                [
+                    f"history_file: {history.get('history_file')}",
+                    f"history_runs: {history.get('run_count')}",
+                    f"history_daily_points: {history.get('daily_points')}",
+                    f"history_weekly_points: {history.get('weekly_points')}",
+                ]
+            )
         for check in sla.get("checks", []):
             lines.append(
                 f"- sla {check.get('name')}: actual={check.get('actual')}, "

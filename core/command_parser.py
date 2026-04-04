@@ -73,6 +73,10 @@ _SPECIAL_FOLDER_ALIASES = {
     "video": "Videos",
     "\u0627\u0644\u0641\u064a\u062f\u064a\u0648\u0647\u0627\u062a": "Videos",
 }
+_SEARCH_PATH_ALIASES = {
+    **_SPECIAL_FOLDER_ALIASES,
+    "\u0627\u0644\u0645\u0643\u062a\u0628": "Desktop",
+}
 
 
 def _normalize_for_match(text: str) -> str:
@@ -87,12 +91,13 @@ def _strip_spoken_prefixes(normalized_text: str) -> str:
         r"^(?:hey|ok|okay)\s+jarvis\s+",
         r"^(?:hey|ok|okay)\s+",
         r"^jarvis\s+",
+        r"^please\s+",
         r"^(?:please\s+)?(?:can|could|would|will)\s+you\s+",
         r"^(?:please\s+)?(?:i need you to|i want you to|i want to)\s+",
         r"^(?:\u064a\u0627\s+)?\u062c\u0627\u0631\u0641\u064a\u0633\s+",
         r"^(?:\u0645\u0646 \u0641\u0636\u0644\u0643|\u0644\u0648 \u0633\u0645\u062d\u062a|\u0631\u062c\u0627\u0621|\u0627\u0644\u0631\u062c\u0627\u0621)\s+",
         r"^(?:\u0647\u0644 \u064a\u0645\u0643\u0646\u0643|\u0647\u0644 \u062a\u0633\u062a\u0637\u064a\u0639|\u0645\u0645\u0643\u0646)\s+",
-        r"^(?:\u0627\u0631\u064a\u062f\u0643 \u0627\u0646|\u0627\u0631\u064a\u062f|\u0639\u0627\u064a\u0632\u0643)\s+",
+        r"^(?:\u0627\u0631\u064a\u062f\u0643 \u0627\u0646|\u0623\u0631\u064a\u062f\u0643 \u0623\u0646|\u0627\u0631\u064a\u062f|\u0623\u0631\u064a\u062f|\u0639\u0627\u064a\u0632\u0643|\u0639\u0627\u064a\u0632)\s+(?:\u0627\u0646|\u0623\u0646)?\s*",
     )
     for pattern in patterns:
         candidate = re.sub(pattern, "", candidate, flags=re.IGNORECASE).strip()
@@ -167,6 +172,37 @@ def _looks_like_filesystem_target(text: str) -> bool:
     return False
 
 
+def _collapse_repeated_phrase(text: str) -> str:
+    candidate = " ".join((text or "").split()).strip()
+    if not candidate:
+        return ""
+
+    tokens = candidate.split(" ")
+    if len(tokens) >= 2 and len(tokens) % 2 == 0:
+        half = len(tokens) // 2
+        if tokens[:half] == tokens[half:]:
+            return " ".join(tokens[:half])
+
+    lower = candidate.lower()
+    for sep in (" in ", " on ", " inside ", " \u0641\u064a ", " \u062f\u0627\u062e\u0644 "):
+        parts = [segment.strip() for segment in lower.split(sep) if segment.strip()]
+        if len(parts) >= 2 and len(set(parts)) == 1:
+            return parts[0]
+    return candidate
+
+
+def _normalize_search_path_hint(path_hint: str):
+    candidate = _collapse_repeated_phrase(path_hint)
+    if not candidate:
+        return None
+
+    lowered = candidate.lower().strip()
+    alias = _SEARCH_PATH_ALIASES.get(lowered)
+    if alias:
+        return os.path.join(os.path.expanduser("~"), alias)
+    return candidate
+
+
 # ---------------------------------------------------------------------------
 # Table-driven keyword matching
 # ---------------------------------------------------------------------------
@@ -185,9 +221,24 @@ _KEYWORD_TABLE = [
     ({"persona voice status"}, "PERSONA_COMMAND", "voice_status"),
     ({"assistant mode", "assistant mode on"}, "PERSONA_COMMAND", "set", {"profile": "assistant"}),
     # Voice
-    ({"voice status", "speech status"}, "VOICE_COMMAND", "status"),
+    ({"voice status", "speech status", "حالة الصوت", "حالة النطق"}, "VOICE_COMMAND", "status"),
+    ({"voice diagnostic", "voice diagnostics", "speech diagnostic", "tts diagnostic"}, "VOICE_COMMAND", "diagnostic"),
+    ({"audio ux status", "audio profile status", "voice audio status", "حالة تجربة الصوت", "حالة ملف تجربة الصوت"}, "VOICE_COMMAND", "audio_ux_status"),
+    ({"audio ux profiles", "audio ux profile list", "list audio ux profiles", "قائمة ملفات تجربة الصوت", "ملفات تجربة الصوت"}, "VOICE_COMMAND", "audio_ux_profiles"),
+    ({"audio ux profile balanced", "audio profile balanced", "set audio profile balanced", "ملف تجربة الصوت متوازن", "وضع تجربة الصوت متوازن", "وضع الصوت متوازن"}, "VOICE_COMMAND", "audio_ux_profile_set", {"profile": "balanced"}),
+    ({"audio ux profile responsive", "audio profile responsive", "set audio profile responsive", "ملف تجربة الصوت سريع", "وضع تجربة الصوت سريع", "وضع الصوت سريع"}, "VOICE_COMMAND", "audio_ux_profile_set", {"profile": "responsive"}),
+    ({"audio ux profile robust", "audio profile robust", "set audio profile robust", "ملف تجربة الصوت قوي", "وضع تجربة الصوت قوي", "وضع الصوت قوي", "وضع الصوت ثابت"}, "VOICE_COMMAND", "audio_ux_profile_set", {"profile": "robust"}),
+    ({"voice quality status", "speech quality status", "tts quality status", "حالة جودة الصوت", "حالة جودة النطق"}, "VOICE_COMMAND", "voice_quality_status"),
+    ({"voice quality natural", "speech quality natural", "tts quality natural", "natural voice mode", "جودة الصوت طبيعي", "وضع الصوت طبيعي", "وضع النطق طبيعي"}, "VOICE_COMMAND", "voice_quality_set", {"mode": "natural"}),
+    ({"voice quality standard", "speech quality standard", "tts quality standard", "robot voice mode", "robotic voice mode", "جودة الصوت قياسي", "وضع الصوت قياسي", "وضع الصوت روبوتي"}, "VOICE_COMMAND", "voice_quality_set", {"mode": "standard"}),
+    ({"stt profile status", "speech profile status", "voice stt profile status", "حالة ملف الاستماع"}, "VOICE_COMMAND", "stt_profile_status"),
+    ({"stt profile quiet", "speech profile quiet", "ملف الاستماع هادئ", "وضع الاستماع هادئ"}, "VOICE_COMMAND", "stt_profile_set", {"profile": "quiet"}),
+    ({"stt profile noisy", "speech profile noisy", "ملف الاستماع ضوضاء", "وضع الاستماع ضوضاء"}, "VOICE_COMMAND", "stt_profile_set", {"profile": "noisy"}),
     ({"voice clone on", "enable voice clone"}, "VOICE_COMMAND", "clone_on"),
     ({"voice clone off", "disable voice clone"}, "VOICE_COMMAND", "clone_off"),
+    ({"hf profile status", "huggingface profile status", "voice hf profile status"}, "VOICE_COMMAND", "hf_profile_status"),
+    ({"hf profile arabic", "huggingface profile arabic", "speech hf profile arabic"}, "VOICE_COMMAND", "hf_profile_set", {"profile": "arabic"}),
+    ({"hf profile english", "huggingface profile english", "speech hf profile english"}, "VOICE_COMMAND", "hf_profile_set", {"profile": "english"}),
     ({"stop speaking", "interrupt speech", "be quiet", "stop talking"}, "VOICE_COMMAND", "interrupt"),
     ({"speech on", "enable speech"}, "VOICE_COMMAND", "speech_on"),
     ({"speech off", "disable speech"}, "VOICE_COMMAND", "speech_off"),
@@ -319,6 +370,113 @@ _REGEX_TABLE = [
         "VOICE_COMMAND",
         "set_provider",
         lambda m: {"provider": m.group(1)},
+    ),
+    (
+        re.compile(r"^(?:set\s+)?(?:voice\s+)?(?:stt|speech)\s+profile(?:\s+to)?\s+(quiet|noisy)(?:\s+room)?$"),
+        False,
+        "VOICE_COMMAND",
+        "stt_profile_set",
+        lambda m: {"profile": m.group(1)},
+    ),
+    (
+        re.compile(
+            r"^(?:set\s+)?(?:(?:voice|speech)\s+)?(?:hf|huggingface)\s+profile(?:\s+to)?\s+(arabic|english|ar|en|عربي|العربية|انجليزي|الانجليزية|الإنجليزية)(?:\s+mode)?$",
+            re.IGNORECASE,
+        ),
+        True,
+        "VOICE_COMMAND",
+        "hf_profile_set",
+        lambda m: {"profile": m.group(1)},
+    ),
+    (
+        re.compile(
+            r"^(?:set\s+)?(?:voice|speech|tts)\s+quality(?:\s+to)?\s+(natural|standard|balanced|default|human|robot|robotic)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "VOICE_COMMAND",
+        "voice_quality_set",
+        lambda m: {"mode": m.group(1)},
+    ),
+    (
+        re.compile(
+            r"^(?:اضبط|حدد|غير|غيّر|اجعل)\s+(?:جودة|وضع)\s+(?:الصوت|النطق)(?:\s+(?:الى|إلى))?\s+(طبيعي|قياسي|افتراضي|روبوت|روبوتي)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "VOICE_COMMAND",
+        "voice_quality_set",
+        lambda m: {"mode": m.group(1)},
+    ),
+    (
+        re.compile(
+            r"^(?:set\s+)?(?:audio|voice)\s+(?:ux\s+)?profile(?:\s+to)?\s+(balanced|responsive|robust|fast|low\s*latency|low_latency|stable|reliable|noisy)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "VOICE_COMMAND",
+        "audio_ux_profile_set",
+        lambda m: {"profile": m.group(1).replace(" ", "_")},
+    ),
+    (
+        re.compile(
+            r"^(?:اضبط|حدد|غير|غيّر|اجعل)\s+(?:ملف|وضع)\s+(?:تجربة\s+)?(?:الصوت|النطق)(?:\s+(?:الى|إلى))?\s+(متوازن|سريع(?:\s*الاستجابة)?|منخفض\s*الكمون|قوي|ثابت|موثوق)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "VOICE_COMMAND",
+        "audio_ux_profile_set",
+        lambda m: {"profile": m.group(1).replace(" ", "_")},
+    ),
+    (
+        re.compile(
+            r"^(?:set\s+)?(?:audio\s+ux\s+)?(?:mic|microphone|vad)\s+(?:energy\s+)?threshold(?:\s+to)?\s+([0-9]+(?:\.[0-9]+)?)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "VOICE_COMMAND",
+        "audio_ux_mic_threshold_set",
+        lambda m: {"value": m.group(1)},
+    ),
+    (
+        re.compile(
+            r"^(?:set\s+)?(?:audio\s+ux\s+)?(?:wake(?:\s*[-_]?word)?\s+threshold)(?:\s+to)?\s+([0-9]+(?:\.[0-9]+)?)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "VOICE_COMMAND",
+        "audio_ux_wake_threshold_set",
+        lambda m: {"value": m.group(1)},
+    ),
+    (
+        re.compile(
+            r"^(?:set\s+)?(?:audio\s+ux\s+)?(?:wake(?:\s*[-_]?word)?\s+gain)(?:\s+to)?\s+([0-9]+(?:\.[0-9]+)?)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "VOICE_COMMAND",
+        "audio_ux_wake_gain_set",
+        lambda m: {"value": m.group(1)},
+    ),
+    (
+        re.compile(
+            r"^(?:set\s+)?(?:(?:voice|speech|tts|audio\s+ux)\s+)?pause\s+scale(?:\s+to)?\s+([0-9]+(?:\.[0-9]+)?)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "VOICE_COMMAND",
+        "audio_ux_pause_scale_set",
+        lambda m: {"value": m.group(1)},
+    ),
+    (
+        re.compile(
+            r"^(?:set\s+)?(?:(?:voice|speech|tts|audio\s+ux)\s+)?rate\s+offset(?:\s+to)?\s+([+-]?\d+)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "VOICE_COMMAND",
+        "audio_ux_rate_offset_set",
+        lambda m: {"value": m.group(1)},
     ),
     (
         re.compile(r"^voice clone reference\s+(.+)$", re.IGNORECASE),
@@ -615,7 +773,7 @@ def _try_drive_open(normalized_match, raw, normalized):
 
 def _try_open_command(raw, normalized):
     open_match = re.match(
-        r"^(?:open|\u0627\u0641\u062a\u062d|\u0634\u063a\u0644)\s+(.+)$",
+        r"^(?:open|launch|start|\u0627\u0641\u062a\u062d|\u0634\u063a\u0644)\s+(.+)$",
         raw,
         flags=re.IGNORECASE,
     )
@@ -660,6 +818,81 @@ def _try_open_command(raw, normalized):
         )
 
     return ParsedCommand("OS_APP_OPEN", raw, normalized, args={"app_name": target_raw})
+
+
+def _try_close_command(raw, normalized):
+    close_match = re.match(
+        (
+            r"^(?:close|terminate|kill|quit|exit|\u0627\u063a\u0644\u0642|\u0627\u0642\u0641\u0644|\u0633\u0643\u0631|\u0627\u0646\u0647\u064a)\s+"
+            r"(?:app\s+|application\s+|program\s+|\u062a\u0637\u0628\u064a\u0642\s+)?(.+)$"
+        ),
+        raw,
+        flags=re.IGNORECASE,
+    )
+    if not close_match:
+        return None
+
+    target_raw = close_match.group(1).strip()
+    if not target_raw:
+        return None
+
+    blocked_system_targets = {
+        "computer",
+        "pc",
+        "system",
+        "الجهاز",
+        "الكمبيوتر",
+        "النظام",
+    }
+    normalized_target = _normalize_for_match(target_raw)
+    if normalized_target in blocked_system_targets:
+        return None
+
+    return ParsedCommand("OS_APP_CLOSE", raw, normalized, args={"app_name": target_raw})
+
+
+def _try_natural_file_search(raw, normalized):
+    patterns = (
+        re.compile(
+            r"^(?:find|search|look\s+for|locate)\s+(?:for\s+)?(?:file\s+)?(.+?)(?:\s+(?:in|on|inside)\s+(.+))?$",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            (
+                r"^(?:(?:i\s+)?(?:want|need)\s+(?:to\s+)?)"
+                r"(?:find|search|look\s+for|locate)\s+(?:for\s+)?(?:file\s+)?"
+                r"(.+?)(?:\s+(?:in|on|inside)\s+(.+))?$"
+            ),
+            re.IGNORECASE,
+        ),
+        re.compile(
+            (
+                r"^(?:(?:\u0627\u0631\u064a\u062f|\u0623\u0631\u064a\u062f|\u0639\u0627\u064a\u0632|\u0627\u0628\u063a\u0649|\u0623\u0628\u063a\u0649)\s+(?:\u0627\u0646|\u0623\u0646)?\s+)?"
+                r"(?:\u0627\u062c\u062f|\u0623\u062c\u062f|\u0627\u062f\u0648\u0631|\u0623\u062f\u0648\u0631|\u0627\u0628\u062d\u062b|\u0623\u0628\u062d\u062b)(?:\s+\u0639\u0646)?\s+(?:\u0645\u0644\u0641\s+)?"
+                r"(.+?)(?:\s+(?:\u0641\u064a|\u062f\u0627\u062e\u0644)\s+(.+))?$"
+            ),
+            re.IGNORECASE,
+        ),
+    )
+
+    for pattern in patterns:
+        match = pattern.match(raw)
+        if not match:
+            continue
+
+        filename = _collapse_repeated_phrase(match.group(1) or "")
+        filename = filename.strip().strip('"').strip("'")
+        if not filename:
+            return None
+
+        search_path = _normalize_search_path_hint(match.group(2) or "")
+        return ParsedCommand(
+            "OS_FILE_SEARCH",
+            raw,
+            normalized,
+            args={"filename": filename, "search_path": search_path},
+        )
+    return None
 
 
 def _try_system_action(normalized_match, normalized, raw):
@@ -749,27 +982,37 @@ def parse_command(text: str) -> ParsedCommand:
     if result:
         return result
 
-    # 3. Drive open heuristic.
+    # 3. Natural file search phrasing.
+    result = _try_natural_file_search(raw, normalized)
+    if result:
+        return result
+
+    # 4. Drive open heuristic.
     result = _try_drive_open(normalized_match, raw, normalized)
     if result:
         return result
 
-    # 4. "open ..." disambiguation.
+    # 5. "open ..." disambiguation.
     result = _try_open_command(raw, normalized)
     if result:
         return result
 
-    # 5. System action aliases.
+    # 6. System action aliases.
     result = _try_system_action(normalized_match, normalized, raw)
     if result:
         return result
 
-    # 6. CD / navigation commands.
+    # 7. Natural close-app phrasing.
+    result = _try_close_command(raw, normalized)
+    if result:
+        return result
+
+    # 8. CD / navigation commands.
     result = _try_cd_commands(normalized, raw)
     if result:
         return result
 
-    # 7. LLM fallback.
+    # 9. LLM fallback.
     return ParsedCommand("LLM_QUERY", raw, normalized)
 
 

@@ -1,6 +1,5 @@
 from datetime import datetime, timezone
 
-from os_control.action_log import log_action
 from os_control.adapter_result import to_router_tuple
 from os_control.job_queue import job_queue_service
 

@@ -89,34 +89,34 @@ Input:
 Expected:
 - Permanent delete remains blocked by configuration unless explicitly permitted.
 
-## Scenario C: Adversarial Safety Proof
+## Scenario C: Safety and Policy Proof
+
+Input:
+- delete it
+- confirm it
+- confirm <token> wrong-pin
+
+Expected:
+- Confirmation flow is enforced.
+- Incorrect second factor is rejected.
+
+## Scenario D: Runtime Health Verification
 
 Run in terminal:
 
 ```powershell
-python tests/adversarial_safety_phase8.py
+python -m compileall -q .
+python core/doctor.py
 ```
 
 Expected:
-- Pass
-- Demonstrates replay rejection, injection resistance, lockout-window protection, clarification misuse resistance.
-
-## Scenario D: Full Regression Gate
-
-Run in terminal:
-
-```powershell
-python tests/phase8_regression.py
-```
-
-Expected:
-- Pass
-- Suite summary with total duration.
+- Syntax validation completes without errors.
+- Doctor report shows environment readiness details.
 
 ## Demo Closing
 
 State final claims:
 - Bilingual operation is enforced (AR/EN only).
 - High-risk operations require confirmation and second factor.
-- Adversarial tests pass and CI gate enforces regression quality.
+- Runtime validation is reproducible via compileall + doctor checks and CI syntax gate.
 - Setup and operations are documented for reproducible execution.

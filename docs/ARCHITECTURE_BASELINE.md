@@ -16,7 +16,7 @@ This document freezes the current repository shape as the Phase 0 baseline for t
 | `core/` | Orchestrator, command parsing/routing, language gate, confidence, memory, metrics, persona, demo mode |
 | `llm/` | Ollama client, prompt construction |
 | `os_control/` | File ops, app ops, system ops, policy, confirmations, second factor, audit |
-| `tests/` | Smoke, safety, fuzz, latency, regression suites |
+| `scripts/` | Setup and operational helper scripts |
 
 ## Runtime Data Flow
 
@@ -53,12 +53,10 @@ Wake Word / Text Input
 ## Current Baseline Status
 
 - Phase 0 documentation exists after this update.
-- Phase 1 through Phase 4 functionality is implemented and currently regression-tested.
-- Phase 5 functionality is implemented and smoke-tested.
-- Phase 6 functionality is implemented and smoke-tested.
-- Phase 7 observability baseline is implemented (language/intent metrics, benchmark rollups, doctor integration).
-- Phase 8 comprehensive QA hardening is implemented (adversarial, e2e, SLA gates, CI regression gate).
+- Phase 1 through Phase 7 runtime functionality is implemented (language gate, clarification, safety policy, observability, doctor integration).
+- Phase 8 QA hardening evidence is archived in docs/PHASE8_QA_SIGNOFF.md after repository cleanup.
 - Phase 9 packaging and demo-readiness documentation artifacts are completed.
+- CI currently runs dependency install plus compileall syntax validation on push/PR/manual triggers.
 
 ## Evidence
 

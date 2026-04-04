@@ -18,6 +18,11 @@ openwakeword==0.6.0
 # Text-to-speech
 pyttsx3==2.99
 
+# Hugging Face STT/TTS backends
+transformers==4.57.0
+huggingface-hub==0.35.3
+sentencepiece==0.2.1
+
 # System monitoring
 psutil==7.2.2
 

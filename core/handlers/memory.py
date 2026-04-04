@@ -21,6 +21,12 @@ def handle(parsed):
             f"last_file_updated_at: {status.get('last_file_updated_at') or 0.0}",
             f"pending_confirmation_token: {status.get('pending_confirmation_token') or 'none'}",
             f"pending_confirmation_updated_at: {status.get('pending_confirmation_updated_at') or 0.0}",
+            f"stt_profile: {status.get('stt_profile') or 'default'}",
+            f"stt_profile_updated_at: {status.get('stt_profile_updated_at') or 0.0}",
+            f"hf_profile: {status.get('hf_profile') or 'custom'}",
+            f"hf_profile_updated_at: {status.get('hf_profile_updated_at') or 0.0}",
+            f"audio_ux_profile: {status.get('audio_ux_profile') or 'custom'}",
+            f"audio_ux_profile_updated_at: {status.get('audio_ux_profile_updated_at') or 0.0}",
         ]
         return True, "\n".join(lines), {}
 

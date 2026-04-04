@@ -1,4 +1,6 @@
+import json
 import logging
+import time
 from core.config import LOG_FILE
 
 logger = logging.getLogger("jarvis")
@@ -17,3 +19,17 @@ if not logger.handlers:
 
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
+
+
+def log_structured(event, level="info", **fields):
+    payload = {
+        "event": str(event or "unknown"),
+        "timestamp": float(fields.pop("timestamp", time.time())),
+    }
+    for key, value in fields.items():
+        payload[str(key)] = value
+
+    message = json.dumps(payload, ensure_ascii=True, sort_keys=True)
+    log_func = getattr(logger, str(level or "info").lower(), logger.info)
+    log_func(message)
+    return payload

@@ -29,6 +29,40 @@ from core.config import (
 )
 
 
+_runtime_vad_settings = {
+    "energy_threshold": float(VAD_ENERGY_THRESHOLD),
+    "silence_seconds": float(VAD_SILENCE_SECONDS),
+    "min_speech_seconds": float(VAD_MIN_SPEECH_SECONDS),
+    "pre_roll_seconds": float(VAD_PREROLL_SECONDS),
+    "start_timeout_seconds": float(VAD_START_TIMEOUT_SECONDS),
+}
+
+
+def get_runtime_vad_settings():
+    return dict(_runtime_vad_settings)
+
+
+def set_runtime_vad_settings(
+    *,
+    energy_threshold=None,
+    silence_seconds=None,
+    min_speech_seconds=None,
+    pre_roll_seconds=None,
+    start_timeout_seconds=None,
+):
+    if energy_threshold is not None:
+        _runtime_vad_settings["energy_threshold"] = max(0.001, float(energy_threshold))
+    if silence_seconds is not None:
+        _runtime_vad_settings["silence_seconds"] = max(0.05, float(silence_seconds))
+    if min_speech_seconds is not None:
+        _runtime_vad_settings["min_speech_seconds"] = max(0.05, float(min_speech_seconds))
+    if pre_roll_seconds is not None:
+        _runtime_vad_settings["pre_roll_seconds"] = max(0.0, float(pre_roll_seconds))
+    if start_timeout_seconds is not None:
+        _runtime_vad_settings["start_timeout_seconds"] = max(0.2, float(start_timeout_seconds))
+    return get_runtime_vad_settings()
+
+
 def _seconds_to_chunks(seconds):
     if seconds <= 0:
         return 1
@@ -57,11 +91,11 @@ def _write_wav_file(filename, sample_rate, audio_int16):
 def record_utterance(
     filename="input.wav",
     max_duration=MAX_RECORD_DURATION,
-    energy_threshold=VAD_ENERGY_THRESHOLD,
-    silence_seconds=VAD_SILENCE_SECONDS,
-    min_speech_seconds=VAD_MIN_SPEECH_SECONDS,
-    pre_roll_seconds=VAD_PREROLL_SECONDS,
-    start_timeout_seconds=VAD_START_TIMEOUT_SECONDS,
+    energy_threshold=None,
+    silence_seconds=None,
+    min_speech_seconds=None,
+    pre_roll_seconds=None,
+    start_timeout_seconds=None,
 ):
     if sd is None:
         raise RuntimeError(
@@ -70,6 +104,19 @@ def record_utterance(
 
     print("[Mic] Listening (VAD)...")
     started_at = time.perf_counter()
+
+    runtime = get_runtime_vad_settings()
+    if energy_threshold is None:
+        energy_threshold = runtime["energy_threshold"]
+    if silence_seconds is None:
+        silence_seconds = runtime["silence_seconds"]
+    if min_speech_seconds is None:
+        min_speech_seconds = runtime["min_speech_seconds"]
+    if pre_roll_seconds is None:
+        pre_roll_seconds = runtime["pre_roll_seconds"]
+    if start_timeout_seconds is None:
+        start_timeout_seconds = runtime["start_timeout_seconds"]
+
     pre_roll = deque(maxlen=_seconds_to_chunks(pre_roll_seconds))
     captured_chunks = []
 

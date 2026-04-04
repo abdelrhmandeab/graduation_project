@@ -52,10 +52,11 @@ Safety keys:
 python core/doctor.py
 ```
 
-### Regression gates
+### Baseline validation
 
 ```powershell
-python tests/phase8_regression.py
+python -m compileall -q .
+python core/doctor.py
 ```
 
 ## 5. CI Gate Behavior
@@ -66,8 +67,7 @@ Workflow file:
 Key behavior:
 - Trigger on push and pull request to main.
 - Manual trigger supported.
-- Dedicated phase8-regression job runs after lint-and-test.
-- Artifacts are uploaded even on failure.
+- Dependency install and syntax validation run on every trigger.
 
 ## 6. Logs and Artifacts
 

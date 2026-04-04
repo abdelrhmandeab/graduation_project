@@ -2,12 +2,18 @@ import json
 import os
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from core.config import (
+    BENCHMARK_HISTORY_FILE,
+    BENCHMARK_HISTORY_MAX_DAILY_POINTS,
+    BENCHMARK_HISTORY_MAX_RUNS,
+    BENCHMARK_HISTORY_MAX_WEEKLY_POINTS,
     BENCHMARK_OUTPUT_FILE,
     BENCHMARK_SLA_P95_MS,
     BENCHMARK_SLA_SUCCESS_RATE_MIN,
+    RESILIENCE_HISTORY_FILE,
     RESILIENCE_OUTPUT_FILE,
     RESILIENCE_SLA_P95_MS,
     RESILIENCE_SLA_SUCCESS_RATE_MIN,
@@ -42,6 +48,7 @@ def run_quick_benchmark(executor):
         p95_limit_ms=float(BENCHMARK_SLA_P95_MS),
         success_rate_min=float(BENCHMARK_SLA_SUCCESS_RATE_MIN),
     )
+    payload["history"] = _update_history(BENCHMARK_HISTORY_FILE, payload, kind="benchmark")
     _write_json(BENCHMARK_OUTPUT_FILE, payload)
     return payload
 
@@ -91,6 +98,7 @@ def run_resilience_demo(executor):
         p95_limit_ms=float(RESILIENCE_SLA_P95_MS),
         success_rate_min=float(RESILIENCE_SLA_SUCCESS_RATE_MIN),
     )
+    payload["history"] = _update_history(RESILIENCE_HISTORY_FILE, payload, kind="resilience")
     _write_json(RESILIENCE_OUTPUT_FILE, payload)
     return payload
 
@@ -163,9 +171,9 @@ def _scenario_interrupt_no_speech(executor):
 
 
 def _scenario_batch_rollback_recovery(executor):
-    test_root = Path(".tmp_tests")
-    test_root.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=str(test_root)) as tmp:
+    temp_root = Path(".tmp_workspace")
+    temp_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=str(temp_root)) as tmp:
         tmp_path = Path(tmp)
         folder = tmp_path / "batch_ok"
 
@@ -183,6 +191,119 @@ def _scenario_batch_rollback_recovery(executor):
 def _write_json(path, payload):
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, ensure_ascii=True, indent=2)
+
+
+def _read_json(path, default=None):
+    if not os.path.exists(path):
+        return default if default is not None else {}
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except Exception:
+        return default if default is not None else {}
+
+
+def _build_run_entry(payload, kind):
+    timestamp = float(payload.get("timestamp") or time.time())
+    dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+    iso_year, iso_week, _iso_weekday = dt.isocalendar()
+    return {
+        "timestamp": timestamp,
+        "kind": kind,
+        "date_utc": dt.strftime("%Y-%m-%d"),
+        "week_utc": f"{iso_year}-W{iso_week:02d}",
+        "scenario_count": int(payload.get("scenario_count") or 0),
+        "success_count": int(payload.get("success_count") or 0),
+        "success_rate": float(payload.get("success_rate") or 0.0),
+        "p50_latency_ms": float(payload.get("p50_latency_ms") or 0.0),
+        "p95_latency_ms": float(payload.get("p95_latency_ms") or 0.0),
+        "sla_passed": bool((payload.get("sla") or {}).get("passed")),
+    }
+
+
+def _rollup_runs(runs, key_name, max_points):
+    grouped = {}
+    for run in runs:
+        key = str(run.get(key_name) or "")
+        if not key:
+            continue
+        bucket = grouped.setdefault(
+            key,
+            {
+                "count": 0,
+                "scenario_count_total": 0,
+                "success_rate_total": 0.0,
+                "p95_latency_total": 0.0,
+                "max_p95_latency_ms": 0.0,
+                "min_success_rate": 1.0,
+                "sla_pass_count": 0,
+                "last_timestamp": 0.0,
+            },
+        )
+        success_rate = float(run.get("success_rate") or 0.0)
+        p95_latency_ms = float(run.get("p95_latency_ms") or 0.0)
+        bucket["count"] += 1
+        bucket["scenario_count_total"] += int(run.get("scenario_count") or 0)
+        bucket["success_rate_total"] += success_rate
+        bucket["p95_latency_total"] += p95_latency_ms
+        bucket["max_p95_latency_ms"] = max(bucket["max_p95_latency_ms"], p95_latency_ms)
+        bucket["min_success_rate"] = min(bucket["min_success_rate"], success_rate)
+        if bool(run.get("sla_passed")):
+            bucket["sla_pass_count"] += 1
+        bucket["last_timestamp"] = max(bucket["last_timestamp"], float(run.get("timestamp") or 0.0))
+
+    rows = []
+    for key in sorted(grouped.keys(), reverse=True):
+        bucket = grouped[key]
+        count = int(bucket["count"])
+        rows.append(
+            {
+                key_name: key,
+                "count": count,
+                "scenario_count_total": int(bucket["scenario_count_total"]),
+                "avg_success_rate": (float(bucket["success_rate_total"]) / float(count)) if count else 0.0,
+                "min_success_rate": float(bucket["min_success_rate"]) if count else 0.0,
+                "avg_p95_latency_ms": (float(bucket["p95_latency_total"]) / float(count)) if count else 0.0,
+                "max_p95_latency_ms": float(bucket["max_p95_latency_ms"]),
+                "sla_pass_rate": (float(bucket["sla_pass_count"]) / float(count)) if count else 0.0,
+                "last_timestamp": float(bucket["last_timestamp"]),
+            }
+        )
+    return rows[: max(1, int(max_points))]
+
+
+def _update_history(path, payload, *, kind):
+    history = _read_json(path, default={})
+    runs = list(history.get("runs") or [])
+    runs.append(_build_run_entry(payload, kind=kind))
+
+    max_runs = max(20, int(BENCHMARK_HISTORY_MAX_RUNS))
+    if len(runs) > max_runs:
+        runs = runs[-max_runs:]
+
+    daily = _rollup_runs(runs, "date_utc", max_points=int(BENCHMARK_HISTORY_MAX_DAILY_POINTS))
+    weekly = _rollup_runs(runs, "week_utc", max_points=int(BENCHMARK_HISTORY_MAX_WEEKLY_POINTS))
+    latest = runs[-1] if runs else {}
+
+    payload_to_write = {
+        "schema": "phase7_history_v1",
+        "kind": kind,
+        "updated_at": time.time(),
+        "latest": latest,
+        "runs": runs,
+        "daily": daily,
+        "weekly": weekly,
+    }
+    _write_json(path, payload_to_write)
+
+    return {
+        "history_file": path,
+        "run_count": len(runs),
+        "daily_points": len(daily),
+        "weekly_points": len(weekly),
+        "latest_daily": daily[0] if daily else {},
+        "latest_weekly": weekly[0] if weekly else {},
+    }
 
 
 def _evaluate_sla(payload, p95_limit_ms, success_rate_min):

@@ -14,6 +14,30 @@ Optional (only if you want Silero VAD backend instead of fallback):
 python -m pip install torch silero-vad
 ```
 
+Optional (if you want Hugging Face speech models for both STT and TTS):
+
+```powershell
+python -m pip install transformers huggingface-hub sentencepiece
+```
+
+Set backends in `.env`:
+
+```env
+JARVIS_STT_BACKEND=huggingface
+JARVIS_STT_HF_MODEL=openai/whisper-small
+JARVIS_STT_HF_MODE=manual
+JARVIS_TTS_BACKEND=huggingface
+JARVIS_TTS_HF_MODEL=facebook/mms-tts-eng
+JARVIS_TTS_QUALITY_MODE=natural
+```
+
+This is optional after first setup: you can switch and persist HF speech profiles at runtime with voice commands (no `.env` edit required each time).
+
+Notes:
+- First run downloads model files from Hugging Face and may take time.
+- For Arabic TTS, try `facebook/mms-tts-ara` for `JARVIS_TTS_HF_MODEL`.
+- `JARVIS_TTS_QUALITY_MODE=natural` makes Jarvis prefer tuned system voices before HF-TTS when possible.
+
 If audio/wake-word dependencies are missing, `core/orchestrator.py` now falls back to text mode automatically.
 
 ## Realtime Run
@@ -62,13 +86,13 @@ Phase 0 progress board:
 - Document architecture baseline: done
 - Capture KPI baseline: done
 - Record milestone snapshot: done
-- Prepare remaining phase deliverables: in progress
+- Prepare remaining phase deliverables: completed through Phase 9 docs and setup assets
 
-## Phase 4 Features
+## Current Features
 
 - Voice synthesis abstraction with optional clone providers (`xtts`, `voicecraft`) and safe fallback.
 - Interruptible speech output (`stop speaking`).
-- Multi-persona profiles (`assistant`, `formal`, `casual`).
+- Multi-persona profiles (`assistant`, `formal`, `casual`, `professional`, `friendly`, `brief`).
 - Offline knowledge base with vector retrieval (FAISS when available, local fallback otherwise).
 - Hybrid retrieval reranking + prompt-injection-safe context sanitization.
 - Incremental KB sync and deduplicated ingestion.
@@ -76,14 +100,17 @@ Phase 0 progress board:
 - Session memory + observability dashboard + quick benchmark runner.
 - Real-time core capture with VAD endpointing and async utterance processing.
 - Benchmark and resilience SLA evaluation blocks in JSON reports.
+- Per-language and per-intent/per-language metrics in observability output.
+- Daily and weekly benchmark/resilience rollups in history artifacts.
+- Startup + scheduled doctor diagnostics integrated in realtime orchestrator.
+- Structured JSON route events in logs for incident analysis.
 
-## Phase 4 Commands
+## Core Commands
 
 - Persona:
   - `persona list`
   - `persona status`
-  - `persona set formal`
-  - `persona set casual`
+  - `persona set <assistant|formal|casual|professional|friendly|brief>`
   - `assistant mode`
   - `persona voice status`
   - `persona voice clone <profile> on|off`
@@ -91,11 +118,34 @@ Phase 0 progress board:
   - `persona voice reference <profile> <path_to_wav>`
 - Voice / Speech:
   - `voice status`
+  - `voice diagnostic`
   - `voice clone on`
   - `voice clone off`
   - `voice clone provider xtts`
   - `voice clone provider voicecraft`
   - `voice clone reference <path_to_wav>`
+  - `voice quality natural`
+  - `voice quality standard`
+  - `voice quality status`
+  - `audio ux profile balanced`
+  - `audio ux profile responsive`
+  - `audio ux profile robust`
+  - `audio ux profiles`
+  - `audio ux status`
+  - `set mic threshold to 0.012`
+  - `set wake threshold to 0.38`
+  - `set wake gain to 1.6`
+  - `set pause scale to 0.9`
+  - `set rate offset to -8`
+  - `stt profile quiet`
+  - `stt profile noisy`
+  - `stt profile status`
+  - selected STT profile is persisted and restored on next startup
+  - `hf profile arabic`
+  - `hf profile english`
+  - `hf profile status`
+  - `set hf profile to ar|en`
+  - selected HF profile is persisted, restored on next startup, and forces runtime STT/TTS backends to `huggingface`
   - `speech on`
   - `speech off`
   - `stop speaking`
@@ -122,26 +172,18 @@ Phase 0 progress board:
   - `verify audit log`
   - `audit reseal`
 
-## Test Commands
+## Validation Commands
 
-Run Phase 4 safety/clarification regression in one command:
-
-```powershell
-python tests\phase4_regression.py
-```
-
-Run sequentially:
+Run static runtime validation:
 
 ```powershell
 python -m compileall -q .
-python tests\phase3_smoke.py
-python tests\safety_suite.py
-python tests\parser_fuzz.py
-python tests\phase3_advanced.py
-python tests\phase4_smoke.py
-python tests\phase4_exceptional.py
-python tests\latency_sla.py
+python core\doctor.py
 ```
+
+CI automation:
+
+- GitHub Actions workflow [Jarvis CI](.github/workflows/ci.yml) runs dependency install and syntax validation on every push/PR to `main` and manual dispatch.
 
 ## Milestone Freeze
 

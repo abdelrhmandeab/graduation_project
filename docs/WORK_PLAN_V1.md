@@ -3,6 +3,8 @@
 **Date:** 2026-03-14  
 **Scope:** Improve the **existing** project into a reliable, human-like **Windows desktop voice assistant** supporting **Arabic and English only**.
 
+> Historical planning artifact: this file captures the original rollout plan. Current operational state is documented in `README.md`, `docs/ARCHITECTURE_BASELINE.md`, `docs/USER_GUIDE.md`, and `docs/ADMIN_GUIDE.md`.
+
 ---
 
 ## 1) Vision & Success Criteria
@@ -30,7 +32,7 @@ You already have a strong foundation:
 - `core/` — parser, classifier, router, orchestrator, memory, metrics
 - `os_control/` — policy, confirmation, second factor, file/app/system ops
 - `llm/` — prompt building + local model client
-- `tests/` — smoke, safety, latency, fuzz
+- validation suites — smoke, safety, latency, fuzz
 - persistence/logging artifacts (`jarvis_*.json`, `.db`, `.log`)
 
 **Decision:** We will **not** create a new project. We will evolve this architecture incrementally.
@@ -433,4 +435,3 @@ Project is considered complete when:
 
 This plan is intentionally built to **upgrade your current repository in-place**.  
 No rewrite, no new project.  
-](#)

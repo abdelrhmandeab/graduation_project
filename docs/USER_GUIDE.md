@@ -115,4 +115,4 @@ python core/doctor.py
 
 ## 8. Troubleshooting
 
-See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for common issues and fixes.
+See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for common issues and fixes.

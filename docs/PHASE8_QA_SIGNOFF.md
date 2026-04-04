@@ -1,7 +1,9 @@
 # Phase 8 QA Sign-off Report
 
 Date: 2026-04-04
-Status: approved
+Status: approved (archived)
+
+This report captures the approved pre-cleanup Phase 8 QA state. The dedicated test files and gate script referenced originally were removed during the repository cleanup pass.
 
 ## Scope
 
@@ -11,14 +13,14 @@ Phase 8 focuses on regression prevention before finalization:
 - End-to-end regression scenarios
 - Performance SLA gate tests
 
-## Test Packs
+## Test Packs (Historical)
 
-- tests/english_commands_smoke.py
-- tests/arabic_commands_smoke.py
-- tests/adversarial_safety_phase8.py
-- tests/e2e_regression_phase8.py
-- tests/performance_gates_phase8.py
-- tests/phase8_regression.py
+- english_commands_smoke.py
+- arabic_commands_smoke.py
+- adversarial_safety_phase8.py
+- e2e_regression_phase8.py
+- performance_gates_phase8.py
+- phase8_regression.py
 
 ## Gate Thresholds
 
@@ -27,24 +29,22 @@ Phase 8 focuses on regression prevention before finalization:
 - Benchmark SLA block must pass
 - Resilience SLA block must pass
 
-## Run Command
+## Run Command (Historical)
 
-```powershell
-python tests\phase8_regression.py
-```
+The original command used during sign-off was the Phase 8 regression entrypoint script for that snapshot.
 
 ## Latest Execution
 
-- Command: C:/Python314/python.exe tests/phase8_regression.py
+- Command: C:/Python314/python.exe phase8_regression.py
 - Result: pass
 - Total duration: 34.72s
 - Suite durations:
-	- tests/english_commands_smoke.py: 0.16s
-	- tests/arabic_commands_smoke.py: 0.17s
-	- tests/adversarial_safety_phase8.py: 9.52s
-	- tests/e2e_regression_phase8.py: 8.58s
-	- tests/performance_gates_phase8.py: 7.93s
-	- tests/phase7_smoke.py: 8.36s
+	- english_commands_smoke.py: 0.16s
+	- arabic_commands_smoke.py: 0.17s
+	- adversarial_safety_phase8.py: 9.52s
+	- e2e_regression_phase8.py: 8.58s
+	- performance_gates_phase8.py: 7.93s
+	- phase7_smoke.py: 8.36s
 - Notes: Post-hardening Phase 8 regression suites passed, including added adversarial coverage for second-factor lockout-window bypass attempts and clarification alias misuse.
 
 ## Sign-off Checklist
@@ -59,4 +59,4 @@ python tests\phase8_regression.py
 ## Approval
 
 - Final QA sign-off approved on 2026-04-04 after successful post-hardening full Phase 8 regression.
-- CI gate for this scope is active in .github/workflows/ci.yml via the phase8-regression job.
+- This QA report is retained as historical evidence; current CI workflow uses compileall syntax validation and runtime docs-guided health checks.

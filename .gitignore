@@ -8,7 +8,10 @@ jarvis_index.db
 jarvis_memory.json
 jarvis_benchmark.json
 jarvis_resilience.json
+jarvis_benchmark_history.json
+jarvis_resilience_history.json
 .jarvis_kb/
 .tmp_tests/
 input.wav
 jarvis_utterance_*.wav
+hf_e2e_test.wav

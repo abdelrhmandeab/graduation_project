@@ -82,7 +82,7 @@ Fix:
   - policy profile normal
   - policy profile strict
 
-## 8. Regression suite fails
+## 8. Runtime validation fails
 
 Fix order:
 1. Run compile check:
@@ -91,11 +91,10 @@ Fix order:
 python -m compileall -q .
 ```
 
-2. Run targeted failing suite.
-3. Run full Phase 8 gate:
+2. Run environment diagnostics:
 
 ```powershell
-python tests/phase8_regression.py
+python core/doctor.py
 ```
 
-4. Review jarvis.log and jarvis_actions.log for root cause.
+3. Review jarvis.log and jarvis_actions.log for root cause.

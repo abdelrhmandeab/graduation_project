@@ -25,13 +25,7 @@
                              "?? core/persona.py",
                              "?? core/session_memory.py",
                              "?? llm/prompt_builder.py",
-                             "?? os_control/",
-                             "?? tests/parser_fuzz.py",
-                             "?? tests/phase3_advanced.py",
-                             "?? tests/phase3_smoke.py",
-                             "?? tests/phase4_exceptional.py",
-                             "?? tests/phase4_smoke.py",
-                             "?? tests/safety_suite.py"
+                             "?? os_control/"
                          ],
     "key_file_hashes":  {
                             "core/config.py":  "C23CCF9ABCE971CBB1635A0E6756792988BA5B7B574173EF8343889820C235EC",

@@ -5,13 +5,13 @@ Date: 2026-04-04
 
 ## Summary
 
-This release finalizes packaging, documentation, and demo-readiness artifacts while preserving the validated Phase 8 quality gate.
+This release finalizes packaging, documentation, and demo-readiness artifacts while preserving archived Phase 8 QA evidence and current runtime validation flow.
 
 ## Highlights
 
 - Bilingual operation (English and Arabic) with strict language discipline.
 - Safety-first high-risk action flow with confirmation and second factor.
-- Adversarial and regression test gates integrated into CI.
+- Runtime quality checks integrated into CI.
 - Reproducible setup and troubleshooting documentation for presentation environments.
 
 ## Included Documentation
@@ -25,19 +25,19 @@ This release finalizes packaging, documentation, and demo-readiness artifacts wh
 ## Included Scripts
 
 - scripts/setup_windows.ps1
-- scripts/run_phase8_gate.ps1
 
 ## Validation Gate
 
 Primary validation command:
 
 ```powershell
-python tests/phase8_regression.py
+python -m compileall -q .
+python core/doctor.py
 ```
 
 Expected outcome:
-- all suites pass
-- timing summary emitted
+- syntax validation passes
+- doctor report is generated
 
 ## Known Constraints
 

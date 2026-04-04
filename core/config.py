@@ -19,6 +19,13 @@ def _env_int(key, default):
         return default
 
 
+def _env_float(key, default):
+    try:
+        return float(os.environ.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
 # Audio
 SAMPLE_RATE = 16000
 MAX_RECORD_DURATION = 10
@@ -44,6 +51,11 @@ WAKE_WORD_SCORE_DEBUG_INTERVAL_SECONDS = 1.0
 WAKE_WORD_DETECTION_COOLDOWN_SECONDS = 1.0
 
 # STT
+STT_BACKEND = _env("JARVIS_STT_BACKEND", "faster_whisper")  # faster_whisper | huggingface
+STT_HF_MODEL = _env("JARVIS_STT_HF_MODEL", "openai/whisper-small")
+STT_HF_MODE = _env("JARVIS_STT_HF_MODE", "auto")  # auto | manual | pipeline
+STT_HF_CHUNK_LENGTH_S = _env_float("JARVIS_STT_HF_CHUNK_LENGTH_S", 20.0)
+STT_HF_BATCH_SIZE = _env_int("JARVIS_STT_HF_BATCH_SIZE", 8)
 WHISPER_MODEL = _env("JARVIS_WHISPER_MODEL", "small")
 WHISPER_DEVICE = _env("JARVIS_WHISPER_DEVICE", "cpu")
 WHISPER_COMPUTE_TYPE = "int8"
@@ -64,7 +76,10 @@ LLM_APPEND_SOURCE_CITATIONS = True
 
 # Speech / TTS
 TTS_ENABLED = True
-TTS_DEFAULT_BACKEND = "console"  # console | pyttsx3 | xtts | voicecraft
+TTS_DEFAULT_BACKEND = _env("JARVIS_TTS_BACKEND", "auto")  # auto | console | pyttsx3 | huggingface | xtts | voicecraft
+TTS_QUALITY_MODE = _env("JARVIS_TTS_QUALITY_MODE", "natural")  # natural | standard
+TTS_HF_MODEL = _env("JARVIS_TTS_HF_MODEL", "facebook/mms-tts-eng")
+TTS_HF_SAMPLE_RATE = _env_int("JARVIS_TTS_HF_SAMPLE_RATE", 0)  # 0 => use model sampling rate
 TTS_DEFAULT_RATE = 175
 TTS_SIMULATED_CHAR_DELAY = 0.02
 TTS_EXTERNAL_TIMEOUT_SECONDS = 45
@@ -119,10 +134,18 @@ MEMORY_MAX_CONTEXT_CHARS = 1400
 OBSERVABILITY_RESOURCE_SAMPLING_SECONDS = 10
 BENCHMARK_OUTPUT_FILE = "jarvis_benchmark.json"
 RESILIENCE_OUTPUT_FILE = "jarvis_resilience.json"
+BENCHMARK_HISTORY_FILE = "jarvis_benchmark_history.json"
+RESILIENCE_HISTORY_FILE = "jarvis_resilience_history.json"
+BENCHMARK_HISTORY_MAX_RUNS = 180
+BENCHMARK_HISTORY_MAX_DAILY_POINTS = 42
+BENCHMARK_HISTORY_MAX_WEEKLY_POINTS = 16
 BENCHMARK_SLA_P95_MS = 1500.0
 BENCHMARK_SLA_SUCCESS_RATE_MIN = 0.95
 RESILIENCE_SLA_P95_MS = 2000.0
 RESILIENCE_SLA_SUCCESS_RATE_MIN = 0.8
+DOCTOR_STARTUP_ENABLED = True
+DOCTOR_SCHEDULE_INTERVAL_SECONDS = 900
+DOCTOR_INCLUDE_MODEL_LOAD_CHECKS = False
 
 # OS
 MAX_FILE_RESULTS = 5

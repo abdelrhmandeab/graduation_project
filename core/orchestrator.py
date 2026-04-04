@@ -1,4 +1,5 @@
 import glob
+import json
 import os
 import tempfile
 import time
@@ -13,15 +14,18 @@ if str(PROJECT_ROOT) not in sys.path:
 from audio.mic import record_utterance
 from audio.stt import transcribe_streaming
 from audio.tts import speech_engine
-from audio.wake_word import listen_for_wake_word
+from audio.vad import is_speech
+from audio.wake_word import get_runtime_wake_word_behavior, listen_for_wake_word
 from core.command_router import initialize_command_services, route_command
+from core.doctor import collect_diagnostics
 from core.config import (
-    BARGE_IN_INTERRUPT_ON_WAKE,
+    DOCTOR_INCLUDE_MODEL_LOAD_CHECKS,
+    DOCTOR_SCHEDULE_INTERVAL_SECONDS,
+    DOCTOR_STARTUP_ENABLED,
     MAX_RECORD_DURATION,
     REALTIME_BACKPRESSURE_POLL_SECONDS,
     REALTIME_DROP_WHEN_BUSY,
     REALTIME_MAX_PENDING_UTTERANCES,
-    WAKE_WORD_IGNORE_WHILE_SPEAKING,
 )
 from core.logger import logger
 from core.metrics import metrics
@@ -135,6 +139,17 @@ def _process_utterance(audio_file, pipeline_started):
     text = ""
     route_success = False
     try:
+        speech_guard_started = time.perf_counter()
+        try:
+            looks_like_speech = bool(is_speech(audio_file))
+        except Exception as exc:
+            logger.warning("Speech guard failed; continuing with STT: %s", exc)
+            looks_like_speech = True
+        metrics.record_stage("speech_guard", time.perf_counter() - speech_guard_started, success=looks_like_speech)
+        if not looks_like_speech:
+            logger.warning("Captured audio appears to be non-speech noise; skipping STT")
+            return
+
         stt_started = time.perf_counter()
         text = transcribe_streaming(audio_file, on_partial=_on_partial_transcript)
         metrics.record_stage("stt", time.perf_counter() - stt_started, success=bool(text))
@@ -176,10 +191,39 @@ def _cleanup_stale_temp_files():
         logger.info("Cleaned up %d stale temp audio file(s).", removed)
 
 
+def _run_doctor_diagnostics(trigger):
+    started = time.perf_counter()
+    try:
+        payload = collect_diagnostics(include_model_load_checks=bool(DOCTOR_INCLUDE_MODEL_LOAD_CHECKS))
+        ok = bool(payload.get("ok"))
+        metrics.record_diagnostic(f"doctor_{trigger}", ok, time.perf_counter() - started)
+        encoded = json.dumps(payload, ensure_ascii=True)
+        if len(encoded) > 2000:
+            encoded = encoded[:1997] + "..."
+        logger.info("Doctor diagnostics (%s): %s", trigger, encoded)
+        if not ok:
+            logger.warning("Doctor diagnostics reported failures for trigger=%s", trigger)
+        return payload
+    except Exception as exc:
+        metrics.record_diagnostic(f"doctor_{trigger}", False, time.perf_counter() - started)
+        logger.warning("Doctor diagnostics failed for trigger=%s: %s", trigger, exc)
+        return {
+            "ok": False,
+            "error": str(exc),
+            "trigger": trigger,
+        }
+
+
 def run():
     setup_shutdown()
     _cleanup_stale_temp_files()
     initialize_command_services()
+    if DOCTOR_STARTUP_ENABLED:
+        _run_doctor_diagnostics("startup")
+
+    doctor_interval_seconds = max(0.0, float(DOCTOR_SCHEDULE_INTERVAL_SECONDS))
+    next_doctor_run_at = time.time() + doctor_interval_seconds if doctor_interval_seconds > 0 else 0.0
+
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="jarvis-pipeline")
     in_flight = []
     output_encoding = (getattr(sys.stdout, "encoding", "") or "").lower()
@@ -193,13 +237,18 @@ def run():
 
     try:
         while True:
+            if doctor_interval_seconds > 0 and time.time() >= next_doctor_run_at:
+                _run_doctor_diagnostics("scheduled")
+                next_doctor_run_at = time.time() + doctor_interval_seconds
+
             in_flight = _prune_futures(in_flight)
             busy = len(in_flight) >= max(1, int(REALTIME_MAX_PENDING_UTTERANCES))
             if busy and REALTIME_DROP_WHEN_BUSY:
                 time.sleep(float(REALTIME_BACKPRESSURE_POLL_SECONDS))
                 metrics.record_stage("backpressure_wait", float(REALTIME_BACKPRESSURE_POLL_SECONDS), success=True)
                 continue
-            if WAKE_WORD_IGNORE_WHILE_SPEAKING and speech_engine.is_speaking():
+            wake_behavior = get_runtime_wake_word_behavior()
+            if wake_behavior.get("ignore_while_speaking") and speech_engine.is_speaking():
                 time.sleep(0.1)
                 continue
 
@@ -214,7 +263,7 @@ def run():
                 _run_text_fallback_loop()
                 return
 
-            if BARGE_IN_INTERRUPT_ON_WAKE and speech_engine.is_speaking():
+            if wake_behavior.get("barge_in_interrupt_on_wake") and speech_engine.is_speaking():
                 speech_engine.interrupt()
                 logger.info("Speech interrupted due to wake-word barge-in.")
 
