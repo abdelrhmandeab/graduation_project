@@ -54,7 +54,11 @@ Wake Word / Text Input
 
 - Phase 0 documentation exists after this update.
 - Phase 1 through Phase 4 functionality is implemented and currently regression-tested.
-- Phase 5 through Phase 9 remain partially implemented or documentation-complete only.
+- Phase 5 functionality is implemented and smoke-tested.
+- Phase 6 functionality is implemented and smoke-tested.
+- Phase 7 observability baseline is implemented (language/intent metrics, benchmark rollups, doctor integration).
+- Phase 8 comprehensive QA hardening is implemented (adversarial, e2e, SLA gates, CI regression gate).
+- Phase 9 packaging and demo-readiness documentation artifacts are completed.
 
 ## Evidence
 
