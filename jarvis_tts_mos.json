@@ -1,0 +1,64 @@
+{
+  "timestamp": 1775665794.2916298,
+  "source_csv": "C:\\Users\\abdel\\Desktop\\jarvis\\benchmarks\\tts_mos_sample_ratings.csv",
+  "rating_count": 6,
+  "rater_count": 2,
+  "raters": [
+    "rater_a",
+    "rater_b"
+  ],
+  "overall": {
+    "count": 6,
+    "mos": 4.277777777777778,
+    "min": 4.0,
+    "max": 4.666666666666667
+  },
+  "by_scenario": {
+    "ar_status_overview": {
+      "count": 2,
+      "mos": 4.166666666666666,
+      "min": 4.0,
+      "max": 4.333333333333333
+    },
+    "en_short_ack": {
+      "count": 2,
+      "mos": 4.166666666666666,
+      "min": 4.0,
+      "max": 4.333333333333333
+    },
+    "en_status_overview": {
+      "count": 2,
+      "mos": 4.5,
+      "min": 4.333333333333333,
+      "max": 4.666666666666667
+    }
+  },
+  "by_backend": {
+    "edge_tts": {
+      "count": 4,
+      "mos": 4.333333333333333,
+      "min": 4.0,
+      "max": 4.666666666666667
+    },
+    "kokoro": {
+      "count": 2,
+      "mos": 4.166666666666666,
+      "min": 4.0,
+      "max": 4.333333333333333
+    }
+  },
+  "by_language": {
+    "ar": {
+      "count": 2,
+      "mos": 4.166666666666666,
+      "min": 4.0,
+      "max": 4.333333333333333
+    },
+    "en": {
+      "count": 4,
+      "mos": 4.333333333333333,
+      "min": 4.0,
+      "max": 4.666666666666667
+    }
+  }
+}

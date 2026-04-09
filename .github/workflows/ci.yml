@@ -28,3 +28,21 @@ jobs:
 
       - name: Syntax check (compileall)
         run: python -m compileall -q .
+
+      - name: Benchmark freshness policy (checked-in artifacts)
+        run: python scripts/check_benchmark_freshness.py --max-age-hours 336
+
+      - name: Regenerate benchmark artifacts (mock-safe)
+        run: |
+          python scripts/benchmark_wake_reliability.py
+          python scripts/benchmark_stt_reliability.py --mode mock
+          python scripts/aggregate_tts_mos.py --csv benchmarks/tts_mos_sample_ratings.csv --output jarvis_tts_mos.json
+          python scripts/benchmark_tts_quality.py --mode mock --backend auto
+          python scripts/benchmark_phase5_dialogue.py --pack benchmarks/phase5_transcripts.json --output jarvis_phase5_dialogue_benchmark.json
+          python scripts/benchmark_phase5_dialogue.py --pack benchmarks/phase5_transcripts_long_horizon.json --output jarvis_phase5_dialogue_long_horizon_benchmark.json
+
+      - name: Benchmark freshness policy (generated artifacts)
+        run: python scripts/check_benchmark_freshness.py --max-age-hours 2
+
+      - name: Unit tests (ResourceWarning as error)
+        run: python -W error::ResourceWarning -m unittest discover -s tests -p "test_*.py"

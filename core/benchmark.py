@@ -17,7 +17,34 @@ from core.config import (
     RESILIENCE_OUTPUT_FILE,
     RESILIENCE_SLA_P95_MS,
     RESILIENCE_SLA_SUCCESS_RATE_MIN,
+    WAKE_BENCHMARK_HISTORY_FILE,
+    WAKE_BENCHMARK_OUTPUT_FILE,
+    WAKE_BENCHMARK_HISTORY_SERIES_VERSION,
+    WAKE_BENCHMARK_SLA_DETECTION_RATE_MIN,
+    WAKE_BENCHMARK_SLA_FALSE_POSITIVE_RATE_MAX,
+    WAKE_BENCHMARK_SLA_P95_MS,
+    STT_BENCHMARK_OUTPUT_FILE,
+    STT_BENCHMARK_HISTORY_FILE,
+    STT_BENCHMARK_SLA_P95_MS,
+    STT_BENCHMARK_SLA_AVG_WER_MAX,
+    STT_BENCHMARK_SLA_AVG_CER_MAX,
+    STT_BENCHMARK_SLA_SUCCESS_RATE_MIN,
+    STT_BENCHMARK_HISTORY_SERIES_VERSION,
+    TTS_BENCHMARK_OUTPUT_FILE,
+    TTS_BENCHMARK_HISTORY_FILE,
+    TTS_BENCHMARK_SLA_P95_MS,
+    TTS_BENCHMARK_SLA_AVG_RTF_MAX,
+    TTS_BENCHMARK_SLA_AVG_QUALITY_SCORE_MIN,
+    TTS_BENCHMARK_SLA_FALLBACK_RELIABILITY_MIN,
+    TTS_BENCHMARK_SLA_SUCCESS_RATE_MIN,
+    TTS_BENCHMARK_HISTORY_SERIES_VERSION,
+    TTS_MOS_OUTPUT_FILE,
+    TTS_MOS_CHECKLIST_MIN_RATINGS,
+    TTS_MOS_CHECKLIST_MIN_RATERS,
 )
+from core.stt_benchmark import run_stt_reliability_scenarios
+from core.tts_benchmark import run_tts_quality_scenarios
+from core.wake_benchmark import run_wake_reliability_scenarios
 
 
 _BENCHMARK_EXPECTED_MARKERS = {
@@ -100,6 +127,52 @@ def run_resilience_demo(executor):
     )
     payload["history"] = _update_history(RESILIENCE_HISTORY_FILE, payload, kind="resilience")
     _write_json(RESILIENCE_OUTPUT_FILE, payload)
+    return payload
+
+
+def run_wake_reliability_benchmark(*, scenarios_per_language=None):
+    payload = run_wake_reliability_scenarios(target_per_language=scenarios_per_language)
+    payload["sla"] = _evaluate_wake_sla(
+        payload,
+        p95_limit_ms=float(WAKE_BENCHMARK_SLA_P95_MS),
+        detection_rate_min=float(WAKE_BENCHMARK_SLA_DETECTION_RATE_MIN),
+        false_positive_rate_max=float(WAKE_BENCHMARK_SLA_FALSE_POSITIVE_RATE_MAX),
+    )
+    payload["history_series"] = _wake_history_series(payload)
+    payload["history"] = _update_history(WAKE_BENCHMARK_HISTORY_FILE, payload, kind="wake")
+    _write_json(WAKE_BENCHMARK_OUTPUT_FILE, payload)
+    return payload
+
+
+def run_stt_reliability_benchmark(*, corpus_path=None, mode="auto"):
+    payload = run_stt_reliability_scenarios(corpus_path=corpus_path, mode=mode)
+    payload["sla"] = _evaluate_stt_sla(
+        payload,
+        p95_limit_ms=float(STT_BENCHMARK_SLA_P95_MS),
+        avg_wer_max=float(STT_BENCHMARK_SLA_AVG_WER_MAX),
+        avg_cer_max=float(STT_BENCHMARK_SLA_AVG_CER_MAX),
+        success_rate_min=float(STT_BENCHMARK_SLA_SUCCESS_RATE_MIN),
+    )
+    payload["history_series"] = _stt_history_series(payload)
+    payload["history"] = _update_history(STT_BENCHMARK_HISTORY_FILE, payload, kind="stt")
+    _write_json(STT_BENCHMARK_OUTPUT_FILE, payload)
+    return payload
+
+
+def run_tts_quality_benchmark(*, corpus_path=None, mode="auto", backend="auto"):
+    payload = run_tts_quality_scenarios(corpus_path=corpus_path, mode=mode, backend=backend)
+    payload["mos_checklist"] = _evaluate_tts_mos_checklist()
+    payload["sla"] = _evaluate_tts_sla(
+        payload,
+        p95_limit_ms=float(TTS_BENCHMARK_SLA_P95_MS),
+        avg_rtf_max=float(TTS_BENCHMARK_SLA_AVG_RTF_MAX),
+        avg_quality_score_min=float(TTS_BENCHMARK_SLA_AVG_QUALITY_SCORE_MIN),
+        fallback_reliability_min=float(TTS_BENCHMARK_SLA_FALLBACK_RELIABILITY_MIN),
+        success_rate_min=float(TTS_BENCHMARK_SLA_SUCCESS_RATE_MIN),
+    )
+    payload["history_series"] = _tts_history_series(payload)
+    payload["history"] = _update_history(TTS_BENCHMARK_HISTORY_FILE, payload, kind="tts")
+    _write_json(TTS_BENCHMARK_OUTPUT_FILE, payload)
     return payload
 
 
@@ -207,7 +280,7 @@ def _build_run_entry(payload, kind):
     timestamp = float(payload.get("timestamp") or time.time())
     dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
     iso_year, iso_week, _iso_weekday = dt.isocalendar()
-    return {
+    entry = {
         "timestamp": timestamp,
         "kind": kind,
         "date_utc": dt.strftime("%Y-%m-%d"),
@@ -219,6 +292,10 @@ def _build_run_entry(payload, kind):
         "p95_latency_ms": float(payload.get("p95_latency_ms") or 0.0),
         "sla_passed": bool((payload.get("sla") or {}).get("passed")),
     }
+    history_series = str(payload.get("history_series") or "").strip()
+    if history_series:
+        entry["history_series"] = history_series
+    return entry
 
 
 def _rollup_runs(runs, key_name, max_points):
@@ -275,7 +352,15 @@ def _rollup_runs(runs, key_name, max_points):
 def _update_history(path, payload, *, kind):
     history = _read_json(path, default={})
     runs = list(history.get("runs") or [])
-    runs.append(_build_run_entry(payload, kind=kind))
+    latest_entry = _build_run_entry(payload, kind=kind)
+    runs.append(latest_entry)
+
+    dropped_incompatible_runs = 0
+    active_series = str(latest_entry.get("history_series") or "").strip()
+    if kind in {"wake", "stt", "tts"} and active_series:
+        filtered_runs = [row for row in runs if str(row.get("history_series") or "").strip() == active_series]
+        dropped_incompatible_runs = max(0, len(runs) - len(filtered_runs))
+        runs = filtered_runs
 
     max_runs = max(20, int(BENCHMARK_HISTORY_MAX_RUNS))
     if len(runs) > max_runs:
@@ -286,9 +371,10 @@ def _update_history(path, payload, *, kind):
     latest = runs[-1] if runs else {}
 
     payload_to_write = {
-        "schema": "phase7_history_v1",
+        "schema": "phase7_history_v2",
         "kind": kind,
         "updated_at": time.time(),
+        "history_series": active_series,
         "latest": latest,
         "runs": runs,
         "daily": daily,
@@ -298,12 +384,62 @@ def _update_history(path, payload, *, kind):
 
     return {
         "history_file": path,
+        "history_series": active_series,
+        "dropped_incompatible_runs": dropped_incompatible_runs,
         "run_count": len(runs),
         "daily_points": len(daily),
         "weekly_points": len(weekly),
         "latest_daily": daily[0] if daily else {},
         "latest_weekly": weekly[0] if weekly else {},
     }
+
+
+def _wake_history_series(payload):
+    pack = dict(payload.get("scenario_pack") or {})
+    pack_name = str(pack.get("name") or "wake_reliability_pack").strip().lower()
+    pack_version = str(pack.get("version") or "unknown").strip().lower()
+    per_language = int(pack.get("target_per_language") or 0)
+    return (
+        f"wake:{WAKE_BENCHMARK_HISTORY_SERIES_VERSION}:"
+        f"{pack_name}:{pack_version}:tpl={per_language}:"
+        f"p95<={float(WAKE_BENCHMARK_SLA_P95_MS):.1f}:"
+        f"dr>={float(WAKE_BENCHMARK_SLA_DETECTION_RATE_MIN):.2f}:"
+        f"fp<={float(WAKE_BENCHMARK_SLA_FALSE_POSITIVE_RATE_MAX):.2f}"
+    )
+
+
+def _stt_history_series(payload):
+    corpus = dict(payload.get("corpus") or {})
+    corpus_name = str(corpus.get("name") or "stt_reliability_pack").strip().lower()
+    corpus_version = str(corpus.get("version") or "unknown").strip().lower()
+    corpus_mode = str(corpus.get("mode") or "auto").strip().lower()
+    scenario_count = int(payload.get("scenario_count") or 0)
+    return (
+        f"stt:{STT_BENCHMARK_HISTORY_SERIES_VERSION}:"
+        f"{corpus_name}:{corpus_version}:{corpus_mode}:sc={scenario_count}:"
+        f"p95<={float(STT_BENCHMARK_SLA_P95_MS):.1f}:"
+        f"wer<={float(STT_BENCHMARK_SLA_AVG_WER_MAX):.2f}:"
+        f"cer<={float(STT_BENCHMARK_SLA_AVG_CER_MAX):.2f}:"
+        f"sr>={float(STT_BENCHMARK_SLA_SUCCESS_RATE_MIN):.2f}"
+    )
+
+
+def _tts_history_series(payload):
+    corpus = dict(payload.get("corpus") or {})
+    corpus_name = str(corpus.get("name") or "tts_quality_pack").strip().lower()
+    corpus_version = str(corpus.get("version") or "unknown").strip().lower()
+    corpus_mode = str(corpus.get("mode") or "auto").strip().lower()
+    corpus_backend = str(corpus.get("backend") or "auto").strip().lower()
+    scenario_count = int(payload.get("scenario_count") or 0)
+    return (
+        f"tts:{TTS_BENCHMARK_HISTORY_SERIES_VERSION}:"
+        f"{corpus_name}:{corpus_version}:{corpus_mode}:{corpus_backend}:sc={scenario_count}:"
+        f"p95<={float(TTS_BENCHMARK_SLA_P95_MS):.1f}:"
+        f"rtf<={float(TTS_BENCHMARK_SLA_AVG_RTF_MAX):.2f}:"
+        f"qs>={float(TTS_BENCHMARK_SLA_AVG_QUALITY_SCORE_MIN):.2f}:"
+        f"fr>={float(TTS_BENCHMARK_SLA_FALLBACK_RELIABILITY_MIN):.2f}:"
+        f"sr>={float(TTS_BENCHMARK_SLA_SUCCESS_RATE_MIN):.2f}"
+    )
 
 
 def _evaluate_sla(payload, p95_limit_ms, success_rate_min):
@@ -331,6 +467,211 @@ def _evaluate_sla(payload, p95_limit_ms, success_rate_min):
         "thresholds": {
             "p95_latency_ms": p95_limit_ms,
             "success_rate_min": success_rate_min,
+        },
+    }
+
+
+def _evaluate_stt_sla(payload, p95_limit_ms, avg_wer_max, avg_cer_max, success_rate_min):
+    p95_latency = float(payload.get("p95_latency_ms") or 0.0)
+    avg_wer = float(payload.get("avg_wer") or 1.0)
+    avg_cer = float(payload.get("avg_cer") or 1.0)
+    success_rate = float(payload.get("success_rate") or 0.0)
+    checks = [
+        {
+            "name": "p95_latency_ms",
+            "actual": p95_latency,
+            "threshold": p95_limit_ms,
+            "operator": "<=",
+            "passed": p95_latency <= p95_limit_ms,
+        },
+        {
+            "name": "avg_wer",
+            "actual": avg_wer,
+            "threshold": avg_wer_max,
+            "operator": "<=",
+            "passed": avg_wer <= avg_wer_max,
+        },
+        {
+            "name": "avg_cer",
+            "actual": avg_cer,
+            "threshold": avg_cer_max,
+            "operator": "<=",
+            "passed": avg_cer <= avg_cer_max,
+        },
+        {
+            "name": "success_rate",
+            "actual": success_rate,
+            "threshold": success_rate_min,
+            "operator": ">=",
+            "passed": success_rate >= success_rate_min,
+        },
+    ]
+    return {
+        "passed": all(item["passed"] for item in checks),
+        "checks": checks,
+        "thresholds": {
+            "p95_latency_ms": p95_limit_ms,
+            "avg_wer_max": avg_wer_max,
+            "avg_cer_max": avg_cer_max,
+            "success_rate_min": success_rate_min,
+        },
+    }
+
+
+def _evaluate_tts_mos_checklist():
+    payload = _read_json(TTS_MOS_OUTPUT_FILE, default={})
+    artifact_exists = bool(os.path.exists(TTS_MOS_OUTPUT_FILE))
+
+    rating_count = int((payload or {}).get("rating_count") or 0)
+    rater_count = int((payload or {}).get("rater_count") or 0)
+    by_backend = dict((payload or {}).get("by_backend") or {})
+    by_language = dict((payload or {}).get("by_language") or {})
+
+    checks = [
+        {
+            "name": "artifact_exists",
+            "actual": artifact_exists,
+            "threshold": True,
+            "operator": "==",
+            "passed": artifact_exists,
+        },
+        {
+            "name": "rating_count",
+            "actual": rating_count,
+            "threshold": int(TTS_MOS_CHECKLIST_MIN_RATINGS),
+            "operator": ">=",
+            "passed": rating_count >= int(TTS_MOS_CHECKLIST_MIN_RATINGS),
+        },
+        {
+            "name": "rater_count",
+            "actual": rater_count,
+            "threshold": int(TTS_MOS_CHECKLIST_MIN_RATERS),
+            "operator": ">=",
+            "passed": rater_count >= int(TTS_MOS_CHECKLIST_MIN_RATERS),
+        },
+        {
+            "name": "backend_breakdown_present",
+            "actual": bool(by_backend),
+            "threshold": True,
+            "operator": "==",
+            "passed": bool(by_backend),
+        },
+        {
+            "name": "language_breakdown_present",
+            "actual": bool(by_language),
+            "threshold": True,
+            "operator": "==",
+            "passed": bool(by_language),
+        },
+    ]
+    return {
+        "passed": all(item.get("passed") for item in checks),
+        "checks": checks,
+        "source": str((payload or {}).get("source_csv") or ""),
+        "rating_count": rating_count,
+        "rater_count": rater_count,
+    }
+
+
+def _evaluate_tts_sla(payload, p95_limit_ms, avg_rtf_max, avg_quality_score_min, fallback_reliability_min, success_rate_min):
+    p95_latency = float(payload.get("p95_latency_ms") or 0.0)
+    avg_rtf = float(payload.get("avg_rtf") or 99.0)
+    avg_quality_score = float(payload.get("avg_quality_score") or 0.0)
+    fallback_reliability = float(payload.get("fallback_reliability") or 0.0)
+    success_rate = float(payload.get("success_rate") or 0.0)
+    mos_checklist = dict(payload.get("mos_checklist") or {})
+    mos_passed = bool(mos_checklist.get("passed"))
+    checks = [
+        {
+            "name": "p95_latency_ms",
+            "actual": p95_latency,
+            "threshold": p95_limit_ms,
+            "operator": "<=",
+            "passed": p95_latency <= p95_limit_ms,
+        },
+        {
+            "name": "avg_rtf",
+            "actual": avg_rtf,
+            "threshold": avg_rtf_max,
+            "operator": "<=",
+            "passed": avg_rtf <= avg_rtf_max,
+        },
+        {
+            "name": "avg_quality_score",
+            "actual": avg_quality_score,
+            "threshold": avg_quality_score_min,
+            "operator": ">=",
+            "passed": avg_quality_score >= avg_quality_score_min,
+        },
+        {
+            "name": "fallback_reliability",
+            "actual": fallback_reliability,
+            "threshold": fallback_reliability_min,
+            "operator": ">=",
+            "passed": fallback_reliability >= fallback_reliability_min,
+        },
+        {
+            "name": "success_rate",
+            "actual": success_rate,
+            "threshold": success_rate_min,
+            "operator": ">=",
+            "passed": success_rate >= success_rate_min,
+        },
+        {
+            "name": "mos_checklist",
+            "actual": mos_passed,
+            "threshold": True,
+            "operator": "==",
+            "passed": mos_passed,
+        },
+    ]
+    return {
+        "passed": all(item["passed"] for item in checks),
+        "checks": checks,
+        "thresholds": {
+            "p95_latency_ms": p95_limit_ms,
+            "avg_rtf_max": avg_rtf_max,
+            "avg_quality_score_min": avg_quality_score_min,
+            "fallback_reliability_min": fallback_reliability_min,
+            "success_rate_min": success_rate_min,
+        },
+    }
+
+
+def _evaluate_wake_sla(payload, p95_limit_ms, detection_rate_min, false_positive_rate_max):
+    p95_latency = float(payload.get("p95_latency_ms") or 0.0)
+    detection_rate = float(payload.get("detection_rate") or 0.0)
+    false_positive_rate = float(payload.get("false_positive_rate") or 0.0)
+    checks = [
+        {
+            "name": "p95_latency_ms",
+            "actual": p95_latency,
+            "threshold": p95_limit_ms,
+            "operator": "<=",
+            "passed": p95_latency <= p95_limit_ms,
+        },
+        {
+            "name": "detection_rate",
+            "actual": detection_rate,
+            "threshold": detection_rate_min,
+            "operator": ">=",
+            "passed": detection_rate >= detection_rate_min,
+        },
+        {
+            "name": "false_positive_rate",
+            "actual": false_positive_rate,
+            "threshold": false_positive_rate_max,
+            "operator": "<=",
+            "passed": false_positive_rate <= false_positive_rate_max,
+        },
+    ]
+    return {
+        "passed": all(item["passed"] for item in checks),
+        "checks": checks,
+        "thresholds": {
+            "p95_latency_ms": p95_limit_ms,
+            "detection_rate_min": detection_rate_min,
+            "false_positive_rate_max": false_positive_rate_max,
         },
     }
 
