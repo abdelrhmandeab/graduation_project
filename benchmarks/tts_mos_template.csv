@@ -1,0 +1,13 @@
+scenario_id,language,backend,text,audio_file,rater_id,naturalness,clarity,pronunciation,overall,notes
+en_status_overview,en,edge_tts,System status is healthy and all benchmark checks passed.,,,,,,,
+en_calendar_reminder,en,edge_tts,Reminder set for your calendar meeting at ten thirty AM.,,,,,,,
+en_navigation_help,en,edge_tts,I found three documents in your desktop reports folder.,,,,,,,
+en_action_confirmation,en,edge_tts,Action completed successfully and the file was moved.,,,,,,,
+en_short_ack,en,edge_tts,Done. Anything else?,,,,,,,
+en_long_reply,en,edge_tts,I can also run a full diagnostics report and share any missing dependencies before you continue.,,,,,,,
+ar_status_overview,ar,edge_tts,حالة النظام ممتازة وجميع اختبارات الاعتمادية نجحت.,,,,,,,
+ar_calendar_reminder,ar,edge_tts,تم ضبط تذكير لاجتماع التقويم الساعة العاشرة والنصف.,,,,,,,
+ar_navigation_help,ar,edge_tts,وجدت ثلاثة ملفات في مجلد التقارير على سطح المكتب.,,,,,,,
+ar_action_confirmation,ar,edge_tts,تم تنفيذ الأمر بنجاح ونقل الملف إلى المكان المطلوب.,,,,,,,
+ar_short_ack,ar,edge_tts,تم. هل تحتاج شيئاً آخر؟,,,,,,,
+ar_long_reply,ar,edge_tts,يمكنني أيضاً تشغيل فحص شامل وإظهار أي تبعيات ناقصة قبل المتابعة.,,,,,,,

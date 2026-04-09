@@ -1,0 +1,126 @@
+{
+  "name": "tts_quality_pack_v1",
+  "version": "2026-04-06",
+  "scenarios": [
+    {
+      "name": "en_status_overview",
+      "language": "en",
+      "text": "System status is healthy and all benchmark checks passed.",
+      "backend": "auto",
+      "mock_latency_ms": 520,
+      "mock_duration_s": 2.2,
+      "mock_rms_db": -18.4,
+      "mock_clipping_ratio": 0.001
+    },
+    {
+      "name": "en_calendar_reminder",
+      "language": "en",
+      "text": "Reminder set for your calendar meeting at ten thirty AM.",
+      "backend": "auto",
+      "mock_latency_ms": 610,
+      "mock_duration_s": 2.6,
+      "mock_rms_db": -19.0,
+      "mock_clipping_ratio": 0.002
+    },
+    {
+      "name": "en_navigation_help",
+      "language": "en",
+      "text": "I found three documents in your desktop reports folder.",
+      "backend": "auto",
+      "mock_latency_ms": 680,
+      "mock_duration_s": 2.9,
+      "mock_rms_db": -18.7,
+      "mock_clipping_ratio": 0.001
+    },
+    {
+      "name": "en_action_confirmation",
+      "language": "en",
+      "text": "Action completed successfully and the file was moved.",
+      "backend": "auto",
+      "mock_latency_ms": 590,
+      "mock_duration_s": 2.4,
+      "mock_rms_db": -18.1,
+      "mock_clipping_ratio": 0.001
+    },
+    {
+      "name": "en_short_ack",
+      "language": "en",
+      "text": "Done. Anything else?",
+      "backend": "auto",
+      "mock_latency_ms": 440,
+      "mock_duration_s": 1.1,
+      "mock_rms_db": -17.9,
+      "mock_clipping_ratio": 0.001
+    },
+    {
+      "name": "en_long_reply",
+      "language": "en",
+      "text": "I can also run a full diagnostics report and share any missing dependencies before you continue.",
+      "backend": "auto",
+      "mock_latency_ms": 760,
+      "mock_duration_s": 3.5,
+      "mock_rms_db": -19.3,
+      "mock_clipping_ratio": 0.002
+    },
+    {
+      "name": "ar_status_overview",
+      "language": "ar",
+      "text": "حالة النظام ممتازة وجميع اختبارات الاعتمادية نجحت.",
+      "backend": "auto",
+      "mock_latency_ms": 700,
+      "mock_duration_s": 2.8,
+      "mock_rms_db": -20.1,
+      "mock_clipping_ratio": 0.003
+    },
+    {
+      "name": "ar_calendar_reminder",
+      "language": "ar",
+      "text": "تم ضبط تذكير لاجتماع التقويم الساعة العاشرة والنصف.",
+      "backend": "auto",
+      "mock_latency_ms": 820,
+      "mock_duration_s": 3.2,
+      "mock_rms_db": -20.4,
+      "mock_clipping_ratio": 0.003
+    },
+    {
+      "name": "ar_navigation_help",
+      "language": "ar",
+      "text": "وجدت ثلاثة ملفات في مجلد التقارير على سطح المكتب.",
+      "backend": "auto",
+      "mock_latency_ms": 790,
+      "mock_duration_s": 3.1,
+      "mock_rms_db": -19.8,
+      "mock_clipping_ratio": 0.003
+    },
+    {
+      "name": "ar_action_confirmation",
+      "language": "ar",
+      "text": "تم تنفيذ الأمر بنجاح ونقل الملف إلى المكان المطلوب.",
+      "backend": "auto",
+      "mock_latency_ms": 760,
+      "mock_duration_s": 3.0,
+      "mock_rms_db": -19.7,
+      "mock_clipping_ratio": 0.002
+    },
+    {
+      "name": "ar_short_ack",
+      "language": "ar",
+      "text": "تم. هل تحتاج شيئاً آخر؟",
+      "backend": "auto",
+      "mock_latency_ms": 540,
+      "mock_duration_s": 1.4,
+      "mock_rms_db": -19.2,
+      "mock_clipping_ratio": 0.002
+    },
+    {
+      "name": "ar_long_reply",
+      "language": "ar",
+      "text": "يمكنني أيضاً تشغيل فحص شامل وإظهار أي تبعيات ناقصة قبل المتابعة.",
+      "backend": "auto",
+      "mock_latency_ms": 880,
+      "mock_duration_s": 3.6,
+      "mock_rms_db": -20.6,
+      "mock_clipping_ratio": 0.003
+    }
+  ]
+}
