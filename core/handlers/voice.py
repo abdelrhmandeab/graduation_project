@@ -3,7 +3,9 @@ from audio import stt as stt_runtime
 from audio import vad as vad_runtime
 from audio import wake_word as wake_word_runtime
 from audio.tts import speech_engine
+from core.config import TTS_DEFAULT_BACKEND
 from core.logger import logger
+from core.metrics import metrics
 from core.persona import persona_manager
 from core.session_memory import session_memory
 from os_control.action_log import log_action
@@ -16,6 +18,7 @@ _STT_PROFILE_PRESETS = {
             "silence_seconds": 0.95,
             "min_speech_seconds": 0.30,
             "start_timeout_seconds": 5.0,
+            "max_speech_seconds": 8.0,
         },
         "stt": {
             "beam_size": 2,
@@ -32,6 +35,7 @@ _STT_PROFILE_PRESETS = {
             "silence_seconds": 0.60,
             "min_speech_seconds": 0.45,
             "start_timeout_seconds": 3.2,
+            "max_speech_seconds": 6.5,
         },
         "stt": {
             "beam_size": 4,
@@ -44,12 +48,19 @@ _STT_PROFILE_PRESETS = {
     },
 }
 _HF_SPEECH_PROFILE_PRESETS = {
-    "arabic": {
+    "egyptian": {
+        "mic": {
+            "silence_seconds": 1.10,
+            "min_speech_seconds": 0.45,
+            "max_speech_seconds": 6.8,
+        },
+        "speech_guard_threshold": 0.011,
         "stt": {
             "model": "openai/whisper-small",
             "mode": "manual",
             "chunk_length_s": 12.0,
             "batch_size": 4,
+            "language_hint": "auto",
         },
         "tts": {
             "model": "facebook/mms-tts-ara",
@@ -57,11 +68,18 @@ _HF_SPEECH_PROFILE_PRESETS = {
         },
     },
     "english": {
+        "mic": {
+            "silence_seconds": 0.80,
+            "min_speech_seconds": 0.35,
+            "max_speech_seconds": 6.2,
+        },
+        "speech_guard_threshold": 0.012,
         "stt": {
-            "model": "openai/whisper-small.en",
+            "model": "openai/whisper-small",
             "mode": "manual",
-            "chunk_length_s": 10.0,
+            "chunk_length_s": 12.0,
             "batch_size": 4,
+            "language_hint": "auto",
         },
         "tts": {
             "model": "facebook/mms-tts-eng",
@@ -72,10 +90,11 @@ _HF_SPEECH_PROFILE_PRESETS = {
 _AUDIO_UX_PROFILE_PRESETS = {
     "balanced": {
         "mic": {
-            "energy_threshold": 0.012,
-            "silence_seconds": 0.80,
-            "min_speech_seconds": 0.35,
-            "start_timeout_seconds": 4.0,
+            "energy_threshold": 0.015,
+            "silence_seconds": 0.55,
+            "min_speech_seconds": 0.28,
+            "start_timeout_seconds": 3.0,
+            "max_speech_seconds": 6.0,
         },
         "speech_guard_threshold": 0.012,
         "wake_word": {
@@ -95,16 +114,17 @@ _AUDIO_UX_PROFILE_PRESETS = {
     },
     "responsive": {
         "mic": {
-            "energy_threshold": 0.009,
-            "silence_seconds": 0.55,
+            "energy_threshold": 0.014,
+            "silence_seconds": 0.40,
             "min_speech_seconds": 0.25,
-            "start_timeout_seconds": 3.0,
+            "start_timeout_seconds": 2.5,
+            "max_speech_seconds": 5.0,
         },
         "speech_guard_threshold": 0.009,
         "wake_word": {
             "threshold": 0.30,
             "audio_gain": 1.55,
-            "detection_cooldown_seconds": 0.8,
+            "detection_cooldown_seconds": 0.6,
         },
         "wake_behavior": {
             "ignore_while_speaking": False,
@@ -112,8 +132,8 @@ _AUDIO_UX_PROFILE_PRESETS = {
         },
         "tts": {
             "quality_mode": "natural",
-            "rate_offset": 8,
-            "pause_scale": 0.9,
+            "rate_offset": 12,
+            "pause_scale": 0.85,
         },
     },
     "robust": {
@@ -122,6 +142,7 @@ _AUDIO_UX_PROFILE_PRESETS = {
             "silence_seconds": 0.95,
             "min_speech_seconds": 0.45,
             "start_timeout_seconds": 4.5,
+            "max_speech_seconds": 7.5,
         },
         "speech_guard_threshold": 0.020,
         "wake_word": {
@@ -163,13 +184,13 @@ def _normalize_profile_name(value):
 def _normalize_hf_profile_name(value):
     profile = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
     aliases = {
-        "ar": "arabic",
-        "arabic_first": "arabic",
-        "arabic_mode": "arabic",
-        "arabicprofile": "arabic",
-        "arabic_profile": "arabic",
-        "عربي": "arabic",
-        "العربية": "arabic",
+        "eg": "egyptian",
+        "egyptian_first": "egyptian",
+        "egyptian_mode": "egyptian",
+        "egyptianprofile": "egyptian",
+        "egyptian_profile": "egyptian",
+        "مصري": "egyptian",
+        "مصرى": "egyptian",
         "en": "english",
         "english_first": "english",
         "english_mode": "english",
@@ -180,6 +201,20 @@ def _normalize_hf_profile_name(value):
         "الإنجليزية": "english",
     }
     return aliases.get(profile, profile)
+
+
+def _normalize_stt_backend_name(value):
+    raw = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "fw": "faster_whisper",
+        "faster": "faster_whisper",
+        "whisper": "faster_whisper",
+        "hf": "huggingface",
+    }
+    normalized = aliases.get(raw, raw)
+    if normalized not in {"faster_whisper", "huggingface"}:
+        return ""
+    return normalized
 
 
 def _normalize_voice_quality(value):
@@ -205,6 +240,7 @@ def _normalize_audio_ux_profile(value):
     aliases = {
         "default": "balanced",
         "standard": "balanced",
+        "normal": "balanced",
         "متوازن": "balanced",
         "fast": "responsive",
         "low_latency": "responsive",
@@ -219,6 +255,17 @@ def _normalize_audio_ux_profile(value):
         "موثوق": "robust",
     }
     return aliases.get(profile, profile)
+
+
+def _normalize_wake_mode(value):
+    mode = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "en": "english",
+        "ar": "arabic",
+        "dual": "both",
+        "bilingual": "both",
+    }
+    return aliases.get(mode, mode)
 
 
 def _stt_runtime_snapshot():
@@ -263,6 +310,7 @@ def _apply_stt_profile(profile_name, *, persist=True):
 
 def _hf_speech_runtime_snapshot():
     stt_hf = stt_runtime.get_runtime_hf_settings()
+    mic_settings = mic_capture.get_runtime_vad_settings()
     tts_hf = speech_engine.get_hf_runtime_settings()
     persisted_profile = session_memory.get_hf_profile() or "custom"
     return {
@@ -271,25 +319,45 @@ def _hf_speech_runtime_snapshot():
         "stt_backend": stt_runtime.get_runtime_stt_backend(),
         "tts_backend": speech_engine.get_backend(),
         "voice_quality_mode": speech_engine.get_quality_mode(),
+        "mic": mic_settings,
+        "speech_guard_threshold": vad_runtime.get_energy_fallback_threshold(),
         "stt": stt_hf,
         "tts": tts_hf,
     }
 
 
-def _apply_hf_speech_profile(profile_name, *, persist=True):
+def _apply_hf_speech_profile(profile_name, *, persist=True, update_preferred_language=True):
     global _ACTIVE_HF_SPEECH_PROFILE
     profile = _normalize_hf_profile_name(profile_name)
     preset = _HF_SPEECH_PROFILE_PRESETS.get(profile)
     if not preset:
-        return False, "Unsupported HF speech profile. Use: arabic or english.", {}
+        return False, "Unsupported HF speech profile. Use: egyptian or english.", {}
+
+    mic_overrides = dict(preset.get("mic") or {})
+    if mic_overrides:
+        mic_capture.set_runtime_vad_settings(**mic_overrides)
+    if "speech_guard_threshold" in preset:
+        vad_runtime.set_energy_fallback_threshold(float(preset["speech_guard_threshold"]))
 
     # Keep runtime behavior independent from .env backend defaults.
     stt_runtime.set_runtime_stt_backend("huggingface")
-    stt_runtime.set_runtime_hf_settings(**dict(preset["stt"]))
-    speech_engine.set_backend("huggingface")
+    stt_overrides = dict(preset["stt"])
+    language_hint = stt_overrides.pop("language_hint", None)
+    stt_runtime.set_runtime_hf_settings(**stt_overrides)
+    if language_hint is not None:
+        stt_runtime.set_runtime_stt_settings(language_hint=language_hint)
+    preferred_tts_backend = str(TTS_DEFAULT_BACKEND or "auto").strip().lower() or "auto"
+    speech_engine.set_backend(preferred_tts_backend)
     speech_engine.set_hf_runtime_settings(**dict(preset["tts"]))
     if profile == "english":
         speech_engine.set_quality_mode("natural")
+
+    if update_preferred_language:
+        if profile == "egyptian":
+            session_memory.set_preferred_language("ar")
+        elif profile == "english":
+            session_memory.set_preferred_language("en")
+
     _ACTIVE_HF_SPEECH_PROFILE = profile
     if persist:
         session_memory.set_hf_profile(profile)
@@ -314,6 +382,7 @@ def _apply_hf_speech_profile(profile_name, *, persist=True):
 def _audio_ux_runtime_snapshot():
     mic_settings = mic_capture.get_runtime_vad_settings()
     wake_settings = wake_word_runtime.get_runtime_wake_word_settings()
+    wake_phrase_settings = wake_word_runtime.get_runtime_wake_word_phrase_settings()
     wake_behavior = wake_word_runtime.get_runtime_wake_word_behavior()
     tts_tuning = speech_engine.get_tuning_settings()
     persisted_profile = session_memory.get_audio_ux_profile() or "custom"
@@ -323,6 +392,7 @@ def _audio_ux_runtime_snapshot():
         "mic": mic_settings,
         "speech_guard_threshold": vad_runtime.get_energy_fallback_threshold(),
         "wake_word": wake_settings,
+        "wake_phrase": wake_phrase_settings,
         "wake_behavior": wake_behavior,
         "voice_quality_mode": speech_engine.get_quality_mode(),
         "tts_tuning": tts_tuning,
@@ -398,15 +468,11 @@ def initialize_runtime_profiles(force=False):
 
     persisted_hf = _normalize_hf_profile_name(session_memory.get_hf_profile())
     if persisted_hf:
-        ok, message, _snapshot = _apply_hf_speech_profile(persisted_hf, persist=False)
-        if ok:
-            logger.info("Restored persisted HF speech profile: %s", persisted_hf)
-            summary.append(f"restored_hf:{persisted_hf}")
-        else:
-            logger.warning("Failed to restore persisted HF speech profile '%s': %s", persisted_hf, message)
-            session_memory.set_hf_profile("")
-            summary.append("failed_hf_restore")
-            restored_ok = False
+        # Keep startup language-neutral across runs; do not auto-restore the
+        # last HF language profile from disk.
+        logger.info("Ignoring persisted HF speech profile on startup: %s", persisted_hf)
+        session_memory.set_hf_profile("")
+        summary.append(f"ignored_hf_restore:{persisted_hf}")
     else:
         summary.append("no_persisted_hf_profile")
 
@@ -448,6 +514,27 @@ def _format_stt_profile_status():
         f"speech_guard_threshold: {snapshot['speech_guard_threshold']:.4f}",
     ]
     return "\n".join(lines), snapshot
+
+
+def _format_stt_backend_status():
+    backend = stt_runtime.get_runtime_stt_backend()
+    stt_settings = stt_runtime.get_runtime_stt_settings()
+    hf_settings = stt_runtime.get_runtime_hf_settings()
+
+    lines = [
+        "STT Backend Status",
+        f"stt_backend: {backend}",
+        f"stt_language_hint: {stt_settings.get('language_hint')}",
+        f"hf_stt_model: {hf_settings.get('model')}",
+        f"hf_stt_mode: {hf_settings.get('mode')}",
+    ]
+
+    return "\n".join(lines), {
+        "stt_backend": backend,
+        "stt_language_hint": stt_settings.get("language_hint"),
+        "hf_stt_model": hf_settings.get("model"),
+        "hf_stt_mode": hf_settings.get("mode"),
+    }
 
 
 def _format_hf_profile_status():
@@ -492,12 +579,81 @@ def _format_audio_ux_status():
         f"wake_word_threshold: {float(snapshot['wake_word']['threshold']):.2f}",
         f"wake_word_gain: {float(snapshot['wake_word']['audio_gain']):.2f}",
         f"wake_word_cooldown_s: {float(snapshot['wake_word']['detection_cooldown_seconds']):.2f}",
+        f"wake_mode: {snapshot['wake_phrase']['mode']}",
+        f"wake_arabic_enabled: {snapshot['wake_phrase']['arabic_enabled']}",
+        f"wake_arabic_trigger_count: {len(snapshot['wake_phrase']['arabic_triggers'])}",
         f"wake_ignore_while_speaking: {snapshot['wake_behavior']['ignore_while_speaking']}",
         f"wake_barge_in_on_wake: {snapshot['wake_behavior']['barge_in_interrupt_on_wake']}",
         f"voice_quality_mode: {snapshot['voice_quality_mode']}",
         f"tts_rate_offset: {int(snapshot['tts_tuning']['rate_offset'])}",
         f"tts_pause_scale: {float(snapshot['tts_tuning']['pause_scale']):.2f}",
     ]
+    return "\n".join(lines), snapshot
+
+
+def _format_latency_status():
+    snapshot = metrics.snapshot()
+    stages = dict(snapshot.get("stages") or {})
+    stage_order = [
+        "wake_word",
+        "record_audio",
+        "speech_guard",
+        "stt",
+        "router",
+        "pipeline",
+        "backpressure_wait",
+        "backpressure_drop",
+    ]
+
+    lines = [
+        "Runtime Latency Status",
+        f"audio_ux_profile: {_ACTIVE_AUDIO_UX_PROFILE}",
+    ]
+
+    if not stages:
+        lines.append("pipeline_stage_metrics: no data yet")
+    else:
+        lines.append("pipeline_stage_metrics:")
+        for stage_name in stage_order:
+            stat = stages.get(stage_name)
+            if not stat:
+                continue
+            lines.append(
+                (
+                    f"- {stage_name}: count={int(stat.get('count') or 0)}, "
+                    f"success={float(stat.get('success_rate') or 0.0):.2%}, "
+                    f"p50={float(stat.get('p50_ms') or 0.0):.1f}ms, "
+                    f"p95={float(stat.get('p95_ms') or 0.0):.1f}ms"
+                )
+            )
+
+    lines.append("Hint: use 'latency mode fast' for lower endpoint and phase transition delay.")
+    return "\n".join(lines), {"audio_ux_profile": _ACTIVE_AUDIO_UX_PROFILE, "stages": stages}
+
+
+def _format_wake_status():
+    snapshot = wake_word_runtime.get_runtime_wake_word_phrase_settings()
+    triggers = list(snapshot.get("arabic_triggers") or [])
+    lines = [
+        "Wake Word Status",
+        f"wake_mode: {snapshot.get('mode')}",
+        f"wake_phrase_enabled: {snapshot.get('arabic_enabled')}",
+        f"wake_phrase_trigger_count: {len(triggers)}",
+        f"wake_phrase_stt_model: {snapshot.get('ar_stt_model')}",
+        f"wake_phrase_window_s: {float(snapshot.get('ar_chunk_seconds') or 0.0):.2f}",
+        f"wake_phrase_interval_s: {float(snapshot.get('ar_check_interval_seconds') or 0.0):.2f}",
+        f"wake_phrase_confirm_hits: {int(snapshot.get('ar_consecutive_hits_required') or 1)}",
+        f"wake_phrase_confirm_window_s: {float(snapshot.get('ar_confirm_window_seconds') or 0.0):.2f}",
+    ]
+    if triggers:
+        lines.append("wake_phrase_triggers:")
+        for item in triggers[:12]:
+            lines.append(f"- {item}")
+        if len(triggers) > 12:
+            lines.append(f"- ... (+{len(triggers) - 12} more)")
+    else:
+        lines.append("wake_phrase_triggers: none")
+    snapshot["arabic_triggers"] = triggers
     return "\n".join(lines), snapshot
 
 
@@ -562,6 +718,8 @@ def handle(parsed):
             f"mic_energy_threshold: {stt_profile['mic']['energy_threshold']:.4f}",
             f"wake_word_threshold: {float(audio_ux['wake_word']['threshold']):.2f}",
             f"wake_word_gain: {float(audio_ux['wake_word']['audio_gain']):.2f}",
+            f"wake_mode: {audio_ux['wake_phrase']['mode']}",
+            f"wake_phrase_trigger_count: {len(audio_ux['wake_phrase']['arabic_triggers'])}",
             f"wake_barge_in_on_wake: {audio_ux['wake_behavior']['barge_in_interrupt_on_wake']}",
             f"tts_rate_offset: {int(audio_ux['tts_tuning']['rate_offset'])}",
             f"hf_profile: {hf_profile['profile']}",
@@ -582,6 +740,10 @@ def handle(parsed):
 
     if action == "audio_ux_status":
         message, snapshot = _format_audio_ux_status()
+        return True, message, snapshot
+
+    if action == "latency_status":
+        message, snapshot = _format_latency_status()
         return True, message, snapshot
 
     if action == "audio_ux_profiles":
@@ -641,6 +803,59 @@ def handle(parsed):
             details={"requested": value, "active": snapshot["wake_word"].get("audio_gain")},
         )
         return True, message, snapshot
+
+    if action == "wake_status":
+        message, snapshot = _format_wake_status()
+        return True, message, snapshot
+
+    if action == "wake_mode_set":
+        requested_mode = args.get("mode", "")
+        normalized_mode = _normalize_wake_mode(requested_mode)
+        if normalized_mode not in {"english", "arabic", "both"}:
+            return False, "Unsupported wake mode. Use: english, arabic, or both.", {}
+        active_mode = wake_word_runtime.set_runtime_wake_mode(normalized_mode)
+        _mark_audio_ux_custom_profile()
+        message, snapshot = _format_wake_status()
+        log_action(
+            "wake_mode_set",
+            "success",
+            details={"requested": requested_mode, "active": active_mode},
+        )
+        return True, message, snapshot
+
+    if action == "wake_triggers_add":
+        trigger = str(args.get("trigger") or "").strip()
+        if not trigger:
+            return False, "Missing wake trigger text. Example: wake triggers add ya jarvis", {}
+        added, triggers = wake_word_runtime.add_runtime_wake_trigger(trigger)
+        _mark_audio_ux_custom_profile()
+        message, snapshot = _format_wake_status()
+        log_action(
+            "wake_triggers_add",
+            "success" if added else "failed",
+            details={"trigger": trigger, "count": len(triggers)},
+            error=None if added else "duplicate_or_invalid_trigger",
+        )
+        if added:
+            return True, message, snapshot
+        return False, "Wake trigger already exists or is invalid.\n" + message, snapshot
+
+    if action == "wake_triggers_remove":
+        trigger = str(args.get("trigger") or "").strip()
+        if not trigger:
+            return False, "Missing wake trigger text. Example: wake triggers remove ya jarvis", {}
+        removed, triggers = wake_word_runtime.remove_runtime_wake_trigger(trigger)
+        _mark_audio_ux_custom_profile()
+        message, snapshot = _format_wake_status()
+        log_action(
+            "wake_triggers_remove",
+            "success" if removed else "failed",
+            details={"trigger": trigger, "count": len(triggers)},
+            error=None if removed else "trigger_not_found",
+        )
+        if removed:
+            return True, message, snapshot
+        return False, "Wake trigger was not found.\n" + message, snapshot
 
     if action == "audio_ux_pause_scale_set":
         value = _parse_float_value(args)
@@ -702,6 +917,26 @@ def handle(parsed):
         )
         return ok, message, snapshot
 
+    if action == "stt_backend_status":
+        message, snapshot = _format_stt_backend_status()
+        return True, message, snapshot
+
+    if action == "stt_backend_set":
+        requested_backend = args.get("backend", "")
+        backend = _normalize_stt_backend_name(requested_backend)
+        if not backend:
+            return False, "Unsupported STT backend. Use: faster_whisper or huggingface.", {}
+
+        active_backend = stt_runtime.set_runtime_stt_backend(backend)
+        message, snapshot = _format_stt_backend_status()
+        log_action(
+            "stt_backend_set",
+            "success",
+            details={"requested": requested_backend, "active": active_backend},
+        )
+
+        return True, f"Requested STT backend: {active_backend}\n{message}", snapshot
+
     if action == "hf_profile_status":
         message, snapshot = _format_hf_profile_status()
         return True, message, snapshot
@@ -715,7 +950,13 @@ def handle(parsed):
             details={"requested": profile_name, "active": snapshot.get("profile") if snapshot else None},
             error=None if ok else message,
         )
-        return ok, message, snapshot
+        if not ok:
+            return ok, message, snapshot
+
+        active_profile = str((snapshot or {}).get("profile") or profile_name or "custom").strip().lower()
+        preferred_language = str(session_memory.get_preferred_language() or "en").strip().lower()
+        concise = f"HF speech profile set to {active_profile}. Preferred language: {preferred_language}."
+        return True, concise, snapshot
 
     if action == "clone_on":
         ok, message = persona_manager.set_clone_enabled(True)

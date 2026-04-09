@@ -35,6 +35,7 @@ _runtime_vad_settings = {
     "min_speech_seconds": float(VAD_MIN_SPEECH_SECONDS),
     "pre_roll_seconds": float(VAD_PREROLL_SECONDS),
     "start_timeout_seconds": float(VAD_START_TIMEOUT_SECONDS),
+    "max_speech_seconds": max(1.5, float(MAX_RECORD_DURATION) * 0.65),
 }
 
 
@@ -49,6 +50,7 @@ def set_runtime_vad_settings(
     min_speech_seconds=None,
     pre_roll_seconds=None,
     start_timeout_seconds=None,
+    max_speech_seconds=None,
 ):
     if energy_threshold is not None:
         _runtime_vad_settings["energy_threshold"] = max(0.001, float(energy_threshold))
@@ -60,6 +62,8 @@ def set_runtime_vad_settings(
         _runtime_vad_settings["pre_roll_seconds"] = max(0.0, float(pre_roll_seconds))
     if start_timeout_seconds is not None:
         _runtime_vad_settings["start_timeout_seconds"] = max(0.2, float(start_timeout_seconds))
+    if max_speech_seconds is not None:
+        _runtime_vad_settings["max_speech_seconds"] = max(0.5, float(max_speech_seconds))
     return get_runtime_vad_settings()
 
 
@@ -96,6 +100,7 @@ def record_utterance(
     min_speech_seconds=None,
     pre_roll_seconds=None,
     start_timeout_seconds=None,
+    max_speech_seconds=None,
 ):
     if sd is None:
         raise RuntimeError(
@@ -116,6 +121,8 @@ def record_utterance(
         pre_roll_seconds = runtime["pre_roll_seconds"]
     if start_timeout_seconds is None:
         start_timeout_seconds = runtime["start_timeout_seconds"]
+    if max_speech_seconds is None:
+        max_speech_seconds = runtime.get("max_speech_seconds", max_duration)
 
     pre_roll = deque(maxlen=_seconds_to_chunks(pre_roll_seconds))
     captured_chunks = []
@@ -124,9 +131,11 @@ def record_utterance(
     silence_chunks = 0
     speech_samples = 0
     max_chunks = _seconds_to_chunks(max_duration)
+    max_speech_chunks = _seconds_to_chunks(min(max_duration, max(0.5, float(max_speech_seconds))))
     silence_chunks_target = _seconds_to_chunks(silence_seconds)
     min_speech_samples = int(max(1, min_speech_seconds * SAMPLE_RATE))
     start_timeout_chunks = _seconds_to_chunks(min(start_timeout_seconds, max_duration))
+    speech_started_index = -1
 
     try:
         with sd.InputStream(
@@ -148,6 +157,7 @@ def record_utterance(
                     pre_roll.append(chunk.copy())
                     if is_voice:
                         speech_detected = True
+                        speech_started_index = index
                         captured_chunks.extend(pre_roll)
                         pre_roll.clear()
                         silence_chunks = 0
@@ -163,6 +173,8 @@ def record_utterance(
                         silence_chunks += 1
 
                     if speech_samples >= min_speech_samples and silence_chunks >= silence_chunks_target:
+                        break
+                    if speech_started_index >= 0 and (index - speech_started_index + 1) >= max_speech_chunks:
                         break
     except Exception as exc:
         raise RuntimeError(f"Microphone recording failed: {exc}") from exc
