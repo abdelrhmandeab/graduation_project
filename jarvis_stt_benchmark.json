@@ -1,5 +1,5 @@
 {
-  "timestamp": 1775697508.2438233,
+  "timestamp": 1775698384.4528215,
   "scenario_count": 12,
   "evaluated_count": 12,
   "success_count": 12,
@@ -342,30 +342,30 @@
     "history_file": "jarvis_stt_benchmark_history.json",
     "history_series": "stt:v1:stt_reliability_pack_v1:2026-04-05:mock:sc=12:p95<=3000.0:wer<=0.20:cer<=0.30:sr>=0.90",
     "dropped_incompatible_runs": 0,
-    "run_count": 23,
+    "run_count": 24,
     "daily_points": 3,
     "weekly_points": 2,
     "latest_daily": {
       "date_utc": "2026-04-09",
-      "count": 1,
-      "scenario_count_total": 12,
+      "count": 2,
+      "scenario_count_total": 24,
       "avg_success_rate": 1.0,
       "min_success_rate": 1.0,
       "avg_p95_latency_ms": 740.0,
       "max_p95_latency_ms": 740.0,
       "sla_pass_rate": 1.0,
-      "last_timestamp": 1775697508.2438233
+      "last_timestamp": 1775698384.4528215
     },
     "latest_weekly": {
       "week_utc": "2026-W15",
-      "count": 19,
-      "scenario_count_total": 228,
+      "count": 20,
+      "scenario_count_total": 240,
       "avg_success_rate": 1.0,
       "min_success_rate": 1.0,
       "avg_p95_latency_ms": 740.0,
       "max_p95_latency_ms": 740.0,
       "sla_pass_rate": 1.0,
-      "last_timestamp": 1775697508.2438233
+      "last_timestamp": 1775698384.4528215
     }
   }
 }

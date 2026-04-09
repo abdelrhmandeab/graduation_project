@@ -37,8 +37,8 @@ JARVIS_TTS_HF_MODEL=facebook/mms-tts-eng
 JARVIS_TTS_QUALITY_MODE=natural
 JARVIS_TTS_EDGE_VOICE=en-US-AriaNeural
 JARVIS_TTS_EDGE_RATE=+0%
-JARVIS_TTS_EDGE_ARABIC_VOICE=ar-EG-ShakirNeural
-JARVIS_TTS_EDGE_ARABIC_VOICE_FALLBACKS=ar-EG-SalmaNeural,ar-SA-HamedNeural
+JARVIS_TTS_EDGE_ARABIC_VOICE=ar-EG-SalmaNeural
+JARVIS_TTS_EDGE_ARABIC_VOICE_FALLBACKS=ar-EG-ShakirNeural,ar-SA-HamedNeural
 JARVIS_TTS_EDGE_ARABIC_RATE=-4%
 JARVIS_TTS_EDGE_ARABIC_PITCH=-8Hz
 JARVIS_TTS_EDGE_ARABIC_VOLUME=+4%
@@ -55,7 +55,7 @@ Notes:
 - You can switch to `JARVIS_TTS_BACKEND=edge_tts` or `JARVIS_TTS_BACKEND=kokoro` when those dependencies are installed.
 - `JARVIS_TTS_QUALITY_MODE=natural` makes Jarvis prefer tuned system voices before HF-TTS when possible.
 - English Edge-TTS remains on `JARVIS_TTS_EDGE_VOICE` (default `en-US-AriaNeural`) with `JARVIS_TTS_EDGE_RATE`.
-- Arabic Edge-TTS uses conversational Egyptian profile by default (`ar-EG-ShakirNeural`) and falls back through `JARVIS_TTS_EDGE_ARABIC_VOICE_FALLBACKS`.
+- Arabic Edge-TTS uses conversational Egyptian profile by default (`ar-EG-SalmaNeural`) and falls back through `JARVIS_TTS_EDGE_ARABIC_VOICE_FALLBACKS`.
 - Use `JARVIS_TTS_ARABIC_SPOKEN_DIALECT=egyptian` and `JARVIS_TTS_EGYPTIAN_COLLOQUIAL_REWRITE=true` to make spoken Arabic less formal.
 - Fine tune character with `JARVIS_TTS_EDGE_ARABIC_PITCH` and `JARVIS_TTS_EDGE_ARABIC_VOLUME`.
 - For low/mid CPU devices, `JARVIS_WHISPER_MODEL=base` is the recommended realtime default for Egyptian Arabic + English balance.
@@ -135,6 +135,12 @@ Phase 0 progress board:
 - Daily and weekly benchmark/resilience rollups in history artifacts.
 - Startup + scheduled doctor diagnostics integrated in realtime orchestrator.
 - Structured JSON route events in logs for incident analysis.
+
+## Release Hardening Snapshot (2026-04-09)
+
+- Runtime validation refreshed (compileall, full unittest suite, startup doctor checks).
+- Benchmark freshness policy validated for wake, STT, TTS, Phase 5 short-horizon, and Phase 5 long-horizon artifacts.
+- Mixed-script TTS reliability hardened with chunk limits and Arabic-preferred voice routing.
 
 ## Core Commands
 

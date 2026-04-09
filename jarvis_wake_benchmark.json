@@ -1,5 +1,5 @@
 {
-  "timestamp": 1775697509.1681929,
+  "timestamp": 1775698385.0317132,
   "scenario_pack": {
     "name": "wake_reliability_pack_v2",
     "version": "2026-04-05-r2",
@@ -296,30 +296,30 @@
     "history_file": "jarvis_wake_benchmark_history.json",
     "history_series": "wake:v2:wake_reliability_pack_v2:2026-04-05-r2:tpl=12:p95<=2000.0:dr>=0.95:fp<=0.05",
     "dropped_incompatible_runs": 0,
-    "run_count": 29,
+    "run_count": 30,
     "daily_points": 3,
     "weekly_points": 2,
     "latest_daily": {
       "date_utc": "2026-04-09",
-      "count": 1,
-      "scenario_count_total": 24,
+      "count": 2,
+      "scenario_count_total": 48,
       "avg_success_rate": 1.0,
       "min_success_rate": 1.0,
       "avg_p95_latency_ms": 1680.0000000000005,
       "max_p95_latency_ms": 1680.0000000000005,
       "sla_pass_rate": 1.0,
-      "last_timestamp": 1775697509.1681929
+      "last_timestamp": 1775698385.0317132
     },
     "latest_weekly": {
       "week_utc": "2026-W15",
-      "count": 20,
-      "scenario_count_total": 480,
-      "avg_success_rate": 0.9875,
+      "count": 21,
+      "scenario_count_total": 504,
+      "avg_success_rate": 0.9880952380952381,
       "min_success_rate": 0.75,
-      "avg_p95_latency_ms": 1632.0000000000002,
+      "avg_p95_latency_ms": 1634.2857142857147,
       "max_p95_latency_ms": 1680.0000000000005,
-      "sla_pass_rate": 0.95,
-      "last_timestamp": 1775697509.1681929
+      "sla_pass_rate": 0.9523809523809523,
+      "last_timestamp": 1775698385.0317132
     }
   }
 }

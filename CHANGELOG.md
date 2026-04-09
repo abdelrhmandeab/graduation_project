@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
+## 2026-04-09 - Release Hardening and Speech Quality Update
+
+### Added
+- Benchmark freshness policy gate and benchmark pack validation coverage.
+- TTS MOS workflow artifacts and supporting benchmark scripts.
+
+### Changed
+- Mixed-script Arabic/English TTS routing now prefers Arabic voice when Arabic content is dominant.
+- Arabic Edge-TTS default voice updated to female Egyptian profile (`ar-EG-SalmaNeural`) with deterministic fallbacks.
+- Realtime startup diagnostics and benchmark artifacts refreshed for release readiness.
+
+### Fixed
+- Removed high-confidence unused code findings from static dead-code scan (`audio/stt.py`, `core/wake_benchmark.py`).
+
 ## 2026-04-04 - Phase 9 Demo Readiness
 
 ### Added

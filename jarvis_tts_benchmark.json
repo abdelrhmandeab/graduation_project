@@ -1,5 +1,5 @@
 {
-  "timestamp": 1775697509.0561595,
+  "timestamp": 1775698384.9641826,
   "scenario_count": 12,
   "evaluated_count": 12,
   "success_count": 12,
@@ -457,30 +457,30 @@
     "history_file": "jarvis_tts_benchmark_history.json",
     "history_series": "tts:v1:tts_quality_pack_v1:2026-04-06:mock:auto:sc=12:p95<=2500.0:rtf<=1.20:qs>=0.70:fr>=0.95:sr>=0.90",
     "dropped_incompatible_runs": 0,
-    "run_count": 32,
+    "run_count": 33,
     "daily_points": 3,
     "weekly_points": 2,
     "latest_daily": {
       "date_utc": "2026-04-09",
-      "count": 8,
-      "scenario_count_total": 96,
+      "count": 9,
+      "scenario_count_total": 108,
       "avg_success_rate": 1.0,
       "min_success_rate": 1.0,
       "avg_p95_latency_ms": 820.0,
       "max_p95_latency_ms": 820.0,
       "sla_pass_rate": 1.0,
-      "last_timestamp": 1775697509.0561595
+      "last_timestamp": 1775698384.9641826
     },
     "latest_weekly": {
       "week_utc": "2026-W15",
-      "count": 28,
-      "scenario_count_total": 336,
+      "count": 29,
+      "scenario_count_total": 348,
       "avg_success_rate": 1.0,
       "min_success_rate": 1.0,
       "avg_p95_latency_ms": 820.0,
       "max_p95_latency_ms": 820.0,
       "sla_pass_rate": 1.0,
-      "last_timestamp": 1775697509.0561595
+      "last_timestamp": 1775698384.9641826
     }
   }
 }

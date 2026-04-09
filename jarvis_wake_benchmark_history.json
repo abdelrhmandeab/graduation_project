@@ -1,10 +1,10 @@
 {
   "schema": "phase7_history_v2",
   "kind": "wake",
-  "updated_at": 1775697509.1694922,
+  "updated_at": 1775698385.0481756,
   "history_series": "wake:v2:wake_reliability_pack_v2:2026-04-05-r2:tpl=12:p95<=2000.0:dr>=0.95:fp<=0.05",
   "latest": {
-    "timestamp": 1775697509.1681929,
+    "timestamp": 1775698385.0317132,
     "kind": "wake",
     "date_utc": "2026-04-09",
     "week_utc": "2026-W15",
@@ -393,19 +393,32 @@
       "p95_latency_ms": 1680.0000000000005,
       "sla_passed": true,
       "history_series": "wake:v2:wake_reliability_pack_v2:2026-04-05-r2:tpl=12:p95<=2000.0:dr>=0.95:fp<=0.05"
+    },
+    {
+      "timestamp": 1775698385.0317132,
+      "kind": "wake",
+      "date_utc": "2026-04-09",
+      "week_utc": "2026-W15",
+      "scenario_count": 24,
+      "success_count": 24,
+      "success_rate": 1.0,
+      "p50_latency_ms": 1119.9999999999998,
+      "p95_latency_ms": 1680.0000000000005,
+      "sla_passed": true,
+      "history_series": "wake:v2:wake_reliability_pack_v2:2026-04-05-r2:tpl=12:p95<=2000.0:dr>=0.95:fp<=0.05"
     }
   ],
   "daily": [
     {
       "date_utc": "2026-04-09",
-      "count": 1,
-      "scenario_count_total": 24,
+      "count": 2,
+      "scenario_count_total": 48,
       "avg_success_rate": 1.0,
       "min_success_rate": 1.0,
       "avg_p95_latency_ms": 1680.0000000000005,
       "max_p95_latency_ms": 1680.0000000000005,
       "sla_pass_rate": 1.0,
-      "last_timestamp": 1775697509.1681929
+      "last_timestamp": 1775698385.0317132
     },
     {
       "date_utc": "2026-04-08",
@@ -433,14 +446,14 @@
   "weekly": [
     {
       "week_utc": "2026-W15",
-      "count": 20,
-      "scenario_count_total": 480,
-      "avg_success_rate": 0.9875,
+      "count": 21,
+      "scenario_count_total": 504,
+      "avg_success_rate": 0.9880952380952381,
       "min_success_rate": 0.75,
-      "avg_p95_latency_ms": 1632.0000000000002,
+      "avg_p95_latency_ms": 1634.2857142857147,
       "max_p95_latency_ms": 1680.0000000000005,
-      "sla_pass_rate": 0.95,
-      "last_timestamp": 1775697509.1681929
+      "sla_pass_rate": 0.9523809523809523,
+      "last_timestamp": 1775698385.0317132
     },
     {
       "week_utc": "2026-W14",
