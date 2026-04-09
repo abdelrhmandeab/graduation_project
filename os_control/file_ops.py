@@ -29,15 +29,10 @@ from os_control.persistence import (
     restore_rollback_action,
 )
 from os_control.policy import policy_engine
+from os_control.risk_policy import risk_tier_for_file_operation
 
 _current_directory = os.path.abspath(DEFAULT_WORKING_DIRECTORY)
 
-_FILE_OPERATION_RISK = {
-    "move_item": "medium",
-    "rename_item": "medium",
-    "delete_item": "high",
-    "delete_item_permanent": "high",
-}
 _INVALID_PATH_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1F]")
 _INVALID_NAME_CHAR_RE = re.compile(r'[<>:"/\\|?*\x00-\x1F]')
 _RESERVED_WINDOWS_NAMES = {
@@ -144,7 +139,7 @@ def _validate_file_write_enabled():
 
 
 def _risk_tier_for_operation(operation):
-    return _FILE_OPERATION_RISK.get(operation, "low")
+    return risk_tier_for_file_operation(operation)
 
 
 def _prepare_move_paths(source, destination):
@@ -358,31 +353,82 @@ def _execute_delete_item(target, permanent=False):
         )
 
 
+def _validation_error_result(message, debug_info=None):
+    return failure_result(
+        message,
+        error_code="validation_error",
+        debug_info=dict(debug_info or {}),
+    )
+
+
+def _resolve_validated_path(path_value, label, allow_empty=False):
+    if allow_empty and (path_value is None or not str(path_value).strip()):
+        return True, "", _current_directory
+
+    raw_ok, raw_reason, raw_path = _validate_raw_path_input(path_value, label)
+    if not raw_ok:
+        return False, raw_reason, None
+    segments_ok, segments_reason = _validate_path_segments(raw_path, label)
+    if not segments_ok:
+        return False, segments_reason, None
+    return True, "", _resolve_path(raw_path)
+
+
 def get_current_directory():
     return _current_directory
 
 
-def change_directory(path):
+def change_directory_result(path):
     global _current_directory
-    target = _resolve_path(path)
+
+    path_ok, path_reason, target = _resolve_validated_path(path, "Path", allow_empty=True)
+    if not path_ok:
+        return _validation_error_result(path_reason, debug_info={"path": path})
+
     ok, reason = _check_path_policy(target, write=False)
     if not ok:
-        return False, reason
+        return failure_result(
+            reason,
+            error_code="policy_blocked",
+            debug_info={"path": target},
+        )
     if not os.path.isdir(target):
-        return False, f"Directory does not exist: {target}"
+        return failure_result(
+            f"Directory does not exist: {target}",
+            error_code="not_found",
+            debug_info={"path": target},
+        )
 
     _current_directory = target
     log_action("change_directory", "success", details={"new_directory": target})
-    return True, f"Current directory set to: {target}"
+    return success_result(
+        f"Current directory set to: {target}",
+        debug_info={"path": target},
+    )
 
 
-def list_directory(path=None, limit=50):
-    target = _resolve_path(path)
+def list_directory_result(path=None, limit=50):
+    path_ok, path_reason, target = _resolve_validated_path(path, "Path", allow_empty=True)
+    if not path_ok:
+        return _validation_error_result(path_reason, debug_info={"path": path})
+
+    try:
+        safe_limit = max(1, min(500, int(limit or 50)))
+    except (TypeError, ValueError):
+        safe_limit = 50
     ok, reason = _check_path_policy(target, write=False)
     if not ok:
-        return False, reason
+        return failure_result(
+            reason,
+            error_code="policy_blocked",
+            debug_info={"path": target},
+        )
     if not os.path.isdir(target):
-        return False, f"Directory does not exist: {target}"
+        return failure_result(
+            f"Directory does not exist: {target}",
+            error_code="not_found",
+            debug_info={"path": target},
+        )
 
     try:
         entries = []
@@ -390,38 +436,68 @@ def list_directory(path=None, limit=50):
             for entry in it:
                 prefix = "[D]" if entry.is_dir() else "[F]"
                 entries.append(f"{prefix} {entry.name}")
-                if len(entries) >= limit:
+                if len(entries) >= safe_limit:
                     break
         log_action("list_directory", "success", details={"path": target, "count": len(entries)})
-        return (True, "\n".join(entries)) if entries else (True, "Directory is empty.")
+        return success_result(
+            "\n".join(entries) if entries else "Directory is empty.",
+            debug_info={"path": target, "count": len(entries), "limit": safe_limit},
+        )
     except Exception as exc:
         log_action("list_directory", "failed", details={"path": target}, error=exc)
-        return False, f"Failed to list directory: {exc}"
+        return failure_result(
+            f"Failed to list directory: {exc}",
+            error_code="execution_failed",
+            debug_info={"path": target},
+        )
 
 
-def list_drives_win32():
+def list_drives_win32_result():
     if os.name != "nt":
-        return False, "Drive listing via Win32 is only available on Windows."
+        return failure_result(
+            "Drive listing via Win32 is only available on Windows.",
+            error_code="unsupported_platform",
+        )
     if not policy_engine.is_command_allowed("file_navigation"):
-        return False, "File navigation is disabled by policy."
+        return failure_result(
+            "File navigation is disabled by policy.",
+            error_code="policy_blocked",
+        )
 
     try:
         bitmask = ctypes.windll.kernel32.GetLogicalDrives()
         drives = [f"{chr(65 + index)}:\\" for index in range(26) if bitmask & (1 << index)]
         log_action("list_drives", "success", details={"count": len(drives)})
-        return True, "\n".join(drives) if drives else "No drives found."
+        return success_result(
+            "\n".join(drives) if drives else "No drives found.",
+            debug_info={"count": len(drives)},
+        )
     except Exception as exc:
         log_action("list_drives", "failed", error=exc)
-        return False, f"Failed to list drives: {exc}"
+        return failure_result(
+            f"Failed to list drives: {exc}",
+            error_code="execution_failed",
+        )
 
 
-def get_file_metadata(path):
-    target = _resolve_path(path)
+def get_file_metadata_result(path):
+    path_ok, path_reason, target = _resolve_validated_path(path, "Path", allow_empty=False)
+    if not path_ok:
+        return _validation_error_result(path_reason, debug_info={"path": path})
+
     ok, reason = _check_path_policy(target, write=False)
     if not ok:
-        return False, reason
+        return failure_result(
+            reason,
+            error_code="policy_blocked",
+            debug_info={"path": target},
+        )
     if not os.path.exists(target):
-        return False, f"Path does not exist: {target}"
+        return failure_result(
+            f"Path does not exist: {target}",
+            error_code="not_found",
+            debug_info={"path": target},
+        )
 
     try:
         st = os.stat(target)
@@ -433,10 +509,14 @@ def get_file_metadata(path):
             f"Modified: {st.st_mtime}",
         ]
         log_action("file_metadata", "success", details={"path": target})
-        return True, "\n".join(metadata)
+        return success_result("\n".join(metadata), debug_info={"path": target})
     except Exception as exc:
         log_action("file_metadata", "failed", details={"path": target}, error=exc)
-        return False, f"Failed to read metadata: {exc}"
+        return failure_result(
+            f"Failed to read metadata: {exc}",
+            error_code="execution_failed",
+            debug_info={"path": target},
+        )
 
 
 def find_files(filename, search_path=None):
@@ -477,22 +557,26 @@ def find_files(filename, search_path=None):
         return []
 
 
-def create_directory(path):
+def create_directory_result(path):
     write_ok, write_reason = _validate_file_write_enabled()
     if not write_ok:
-        return False, write_reason
+        return failure_result(write_reason, error_code="policy_blocked")
 
     raw_ok, raw_reason, raw_path = _validate_raw_path_input(path, "Path")
     if not raw_ok:
-        return False, raw_reason
+        return _validation_error_result(raw_reason, debug_info={"path": path})
     segments_ok, segments_reason = _validate_path_segments(raw_path, "Path")
     if not segments_ok:
-        return False, segments_reason
+        return _validation_error_result(segments_reason, debug_info={"path": path})
 
     target = _resolve_path(raw_path)
     ok, reason = _check_path_policy(target, write=True)
     if not ok:
-        return False, reason
+        return failure_result(
+            reason,
+            error_code="policy_blocked",
+            debug_info={"path": target},
+        )
 
     try:
         os.makedirs(target, exist_ok=False)
@@ -503,12 +587,43 @@ def create_directory(path):
             details={"path": target, "rollback_action_id": action_id},
             rollback_data={"rollback_action_id": action_id},
         )
-        return True, f"Created directory: {target}"
+        return success_result(
+            f"Created directory: {target}",
+            debug_info={"path": target, "rollback_action_id": action_id},
+        )
     except FileExistsError:
-        return False, f"Directory already exists: {target}"
+        return failure_result(
+            f"Directory already exists: {target}",
+            error_code="already_exists",
+            debug_info={"path": target},
+        )
     except Exception as exc:
         log_action("create_directory", "failed", details={"path": target}, error=exc)
-        return False, f"Failed to create directory: {exc}"
+        return failure_result(
+            f"Failed to create directory: {exc}",
+            error_code="execution_failed",
+            debug_info={"path": target},
+        )
+
+
+def change_directory(path):
+    return to_legacy_pair(change_directory_result(path))
+
+
+def list_directory(path=None, limit=50):
+    return to_legacy_pair(list_directory_result(path=path, limit=limit))
+
+
+def list_drives_win32():
+    return to_legacy_pair(list_drives_win32_result())
+
+
+def get_file_metadata(path):
+    return to_legacy_pair(get_file_metadata_result(path))
+
+
+def create_directory(path):
+    return to_legacy_pair(create_directory_result(path))
 
 
 def request_move_item(source, destination):

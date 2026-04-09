@@ -17,6 +17,8 @@ This document defines the command safety framework for Jarvis on Windows.
 3. Soft delete is the default delete behavior.
 4. Permanent delete requires explicit phrasing (for example: `delete permanently <path>`) and is blocked unless `ALLOW_PERMANENT_DELETE=True`.
 5. Destructive system commands are blocked unless `ALLOW_DESTRUCTIVE_SYSTEM_COMMANDS=True`.
+6. Confirmation tokens use configurable entropy (`CONFIRMATION_TOKEN_BYTES`) and parser acceptance supports backward-compatible minimum length.
+7. Confirmation attempts are rate-limited per token; repeated failures trigger lockout (`CONFIRMATION_MAX_ATTEMPTS_PER_TOKEN` / `CONFIRMATION_LOCKOUT_SECONDS`).
 
 ## Confirmation State Handling
 
@@ -42,6 +44,10 @@ The audit log uses a hash chain (`prev_hash` + canonical payload -> `hash`) to s
 - `ALLOW_PERMANENT_DELETE`
 - `SECOND_FACTOR_REQUIRED_FOR_DESTRUCTIVE`
 - `CONFIRMATION_TIMEOUT_SECONDS`
+- `CONFIRMATION_TOKEN_BYTES`
+- `CONFIRMATION_TOKEN_MIN_HEX_LEN`
+- `CONFIRMATION_MAX_ATTEMPTS_PER_TOKEN`
+- `CONFIRMATION_LOCKOUT_SECONDS`
 - `SECOND_FACTOR_MAX_ATTEMPTS_PER_TOKEN`
 - `SECOND_FACTOR_LOCKOUT_SECONDS`
 - policy profile permissions (`POLICY_PROFILES` / `POLICY_COMMAND_PERMISSIONS`)

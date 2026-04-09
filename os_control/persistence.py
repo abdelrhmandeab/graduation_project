@@ -3,6 +3,7 @@ import json
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 
 from core.config import STATE_DB_FILE
 
@@ -10,10 +11,15 @@ _db_lock = threading.Lock()
 _initialized = False
 
 
+@contextmanager
 def _connect():
     conn = sqlite3.connect(STATE_DB_FILE, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def _canonical_action_payload(timestamp, action_type, status, details, rollback_data, error):
@@ -344,10 +350,39 @@ def delete_confirmation(token):
 
 
 def pop_confirmation(token):
-    pending = get_confirmation(token)
-    if pending:
-        delete_confirmation(token)
-    return pending
+    return consume_confirmation(token)
+
+
+def consume_confirmation(token):
+    _ensure_db()
+    with _db_lock, _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT token, action_name, description, payload_json, created_at, expires_at
+            FROM confirmations
+            WHERE token = ?
+            """,
+            (token,),
+        ).fetchone()
+        if not row:
+            return None
+
+        deleted = conn.execute(
+            "DELETE FROM confirmations WHERE token = ?",
+            (token,),
+        ).rowcount
+        conn.commit()
+        if not deleted:
+            return None
+
+    return {
+        "token": row["token"],
+        "action_name": row["action_name"],
+        "description": row["description"],
+        "payload": json.loads(row["payload_json"] or "{}"),
+        "created_at": row["created_at"],
+        "expires_at": row["expires_at"],
+    }
 
 
 def cleanup_expired_confirmations(now_ts=None):

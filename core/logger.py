@@ -29,7 +29,7 @@ def log_structured(event, level="info", **fields):
     for key, value in fields.items():
         payload[str(key)] = value
 
-    message = json.dumps(payload, ensure_ascii=True, sort_keys=True)
+    message = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     log_func = getattr(logger, str(level or "info").lower(), logger.info)
     log_func(message)
     return payload

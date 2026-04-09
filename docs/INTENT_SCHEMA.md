@@ -7,9 +7,9 @@ This document defines the canonical intent and entity contract used by parser, c
 | Intent | Action (if any) | Description | Example |
 |---|---|---|---|
 | `OBSERVABILITY_REPORT` | `""` | Show observability dashboard | `observability` |
-| `BENCHMARK_COMMAND` | `run`, `resilience_demo` | Run benchmark/resilience suites | `benchmark run` |
+| `BENCHMARK_COMMAND` | `run`, `resilience_demo`, `wake_reliability`, `stt_reliability`, `tts_quality` | Run benchmark/resilience/STT/TTS suites | `benchmark run` |
 | `PERSONA_COMMAND` | `status`, `list`, `set`, `voice_status`, `set_profile_clone_enabled`, `set_profile_clone_provider`, `set_profile_clone_reference` | Persona and persona-voice mapping controls | `persona set formal` |
-| `VOICE_COMMAND` | `status`, `diagnostic`, `clone_on`, `clone_off`, `set_provider`, `set_reference`, `speech_on`, `speech_off`, `interrupt`, `stt_profile_set`, `stt_profile_status`, `hf_profile_set`, `hf_profile_status`, `voice_quality_set`, `voice_quality_status`, `audio_ux_profile_set`, `audio_ux_profiles`, `audio_ux_status`, `audio_ux_mic_threshold_set`, `audio_ux_wake_threshold_set`, `audio_ux_wake_gain_set`, `audio_ux_pause_scale_set`, `audio_ux_rate_offset_set` | Runtime voice/STT/TTS/audio UX controls | `voice diagnostic` |
+| `VOICE_COMMAND` | `status`, `diagnostic`, `clone_on`, `clone_off`, `set_provider`, `set_reference`, `speech_on`, `speech_off`, `interrupt`, `stt_profile_set`, `stt_profile_status`, `hf_profile_set`, `hf_profile_status`, `voice_quality_set`, `voice_quality_status`, `audio_ux_profile_set`, `audio_ux_profiles`, `audio_ux_status`, `audio_ux_mic_threshold_set`, `audio_ux_wake_threshold_set`, `audio_ux_wake_gain_set`, `audio_ux_pause_scale_set`, `audio_ux_rate_offset_set`, `wake_status`, `wake_mode_set`, `wake_triggers_add`, `wake_triggers_remove` | Runtime voice/STT/TTS/audio UX controls | `voice diagnostic` |
 | `KNOWLEDGE_BASE_COMMAND` | `status`, `quality`, `clear`, `retrieval_on`, `retrieval_off`, `sync_dir`, `add_file`, `index_dir`, `search` | Local knowledge base operations | `kb search policy` |
 | `MEMORY_COMMAND` | `status`, `show`, `clear`, `on`, `off` | Session memory controls | `memory status` |
 | `DEMO_MODE` | `on`, `off`, `status` | Demo-mode output wrapper | `demo mode on` |
@@ -45,8 +45,9 @@ This document defines the canonical intent and entity contract used by parser, c
 | `token` | hex(6) | `OS_CONFIRMATION` | Confirmation token |
 | `second_factor` | string\|null | `OS_CONFIRMATION` | PIN/passphrase for high-risk actions |
 | `profile` | string | persona/voice profile actions | persona name, `quiet/noisy`, `arabic/english`, or audio UX profile |
-| `provider` | string | clone provider actions | `xtts` or `voicecraft` |
+| `provider` | string | clone provider actions | `voicecraft` |
 | `mode` | string | quality/profile actions | e.g. `natural`, `standard` |
+| `trigger` | string | `wake_triggers_add`, `wake_triggers_remove` | Arabic/English wake phrase text |
 | `value` | float\|int\|string | tuning actions | threshold, gain, pause scale, rate offset |
 | `query` | string | KB/index search | search query |
 | `root` | string\|null | index refresh/search | optional index root |
@@ -70,6 +71,41 @@ Rules:
 - If entities are weak or ambiguous, lower effective intent confidence.
 - If ambiguous app/file matches are detected, require clarification before execution.
 - Clarification state is persisted in session memory until resolved/cancelled/expired.
+
+## Entity Confidence Heuristics (Phase 2)
+
+- `OS_APP_OPEN` and `OS_APP_CLOSE` entity confidence uses app-resolution status:
+	- exact alias match: `0.98`
+	- high-confidence fuzzy match: `0.92`
+	- likely fuzzy match: `0.80`
+	- ambiguous multi-match: `0.45` (clarify)
+	- unresolved target: falls back to conservative low score
+- Low-entity-confidence clarification thresholds:
+	- app open/close: `0.58`
+	- file search: `0.56`
+	- file navigation (path/source/destination/new name): `0.56`
+	- system command entities: `0.55`
+	- queued command payload entities: `0.52`
+- Adaptive thresholding (Phase 2.1):
+	- thresholds are configurable per intent via environment (`JARVIS_ENTITY_THRESHOLD_*`)
+	- language adjustments apply on top of intent thresholds (`EN` baseline, `AR` adjustment)
+	- mixed-script inputs add a conservative clarification bonus threshold
+- Clarification memory reuse (Phase 2.1):
+	- resolved clarification choices are cached in session memory
+	- repeated ambiguous app/file prompts can auto-resolve from recent user preference when still valid
+- App ranking improvements (Phase 2.1):
+	- candidate score now includes alias similarity + exact/prefix boosts
+	- runtime signals contribute: app usage frequency, recency, executable availability, running-process state
+- Clarification reply parsing improvements (Phase 2.1):
+	- accepts natural phrases like `the chrome one`, `the first app`, and Arabic equivalents
+	- supports negative correction patterns (for example `not chrome`)
+	- after repeated unrelated replies, router emits one-shot guided examples before re-prompt
+- Observability additions (Phase 2.1):
+	- clarification rate per intent/language
+	- clarification success on first retry
+	- wrong-action-prevented counter
+	- top ambiguous app/file tokens
+- Clarification replies accept numeric replies plus ordinal words (for example `first`, `second`, and Arabic equivalents).
 
 ## Safety Expectations
 

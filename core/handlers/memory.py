@@ -2,6 +2,22 @@ from core.session_memory import session_memory
 from os_control.action_log import log_action
 
 
+def _normalize_language(value):
+    normalized = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "ar": "ar",
+        "arabic": "ar",
+        "عربي": "ar",
+        "العربية": "ar",
+        "en": "en",
+        "english": "en",
+        "انجليزي": "en",
+        "الانجليزية": "en",
+        "الإنجليزية": "en",
+    }
+    return aliases.get(normalized, "")
+
+
 def handle(parsed):
     action = parsed.action
 
@@ -50,5 +66,22 @@ def handle(parsed):
         if not context:
             return True, "Memory is empty.", {}
         return True, "Recent Memory\n" + context, {}
+
+    if action == "set_language":
+        requested_language = parsed.args.get("language")
+        language = _normalize_language(requested_language)
+        if language not in {"ar", "en"}:
+            return False, "Unsupported language. Use: arabic or english.", {}
+
+        ok, _message = session_memory.set_preferred_language(language)
+        log_action(
+            "memory_language_set",
+            "success" if ok else "failed",
+            details={"requested": requested_language, "language": language},
+            error=None if ok else "set_preferred_language_failed",
+        )
+        if not ok:
+            return False, "Failed to update preferred language.", {}
+        return True, f"Preferred language: {language}", {"preferred_language": language}
 
     return False, "Unsupported memory command.", {}

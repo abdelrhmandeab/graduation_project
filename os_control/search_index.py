@@ -2,6 +2,7 @@ import os
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from core.config import (
@@ -29,10 +30,15 @@ class SearchIndexService:
         self._indexed_roots = {}
         self._refresh_seconds = max(5, int(SEARCH_INDEX_REFRESH_SECONDS))
 
+    @contextmanager
     def _connect(self):
         conn = sqlite3.connect(SEARCH_INDEX_DB_FILE, check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def _ensure_db(self):
         if self._db_initialized:
