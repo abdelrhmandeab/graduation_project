@@ -354,6 +354,8 @@ class SpeechEngine:
                 for item in (TTS_EDGE_ARABIC_VOICE_FALLBACKS or ())
                 if str(item).strip()
             ],
+            "supports_output_format": False,
+            "compressed_decode_available": False,
             "error": "",
         }
         try:
@@ -362,7 +364,17 @@ class SpeechEngine:
             import sounddevice  # type: ignore
 
             _ = edge_tts, numpy, sounddevice
-            info["available"] = True
+
+            supports_output_format = bool(self._edge_tts_supports_output_format(edge_tts))
+            compressed_decode_available = bool(self._can_decode_edge_compressed_stream())
+            info["supports_output_format"] = supports_output_format
+            info["compressed_decode_available"] = compressed_decode_available
+            info["available"] = bool(supports_output_format or compressed_decode_available)
+            if not info["available"]:
+                info["error"] = (
+                    "edge_tts stream decode unavailable: install soundfile or upgrade edge_tts "
+                    "to a version that supports output_format."
+                )
         except Exception as exc:
             info["error"] = str(exc)
         return info
@@ -409,6 +421,8 @@ class SpeechEngine:
             f"edge_tts_arabic_pitch: {edge_info.get('arabic_pitch')}",
             f"edge_tts_arabic_volume: {edge_info.get('arabic_volume')}",
             f"edge_tts_arabic_fallbacks: {', '.join(edge_info.get('arabic_fallbacks') or [])}",
+            f"edge_tts_supports_output_format: {edge_info.get('supports_output_format')}",
+            f"edge_tts_compressed_decode_available: {edge_info.get('compressed_decode_available')}",
             f"speech_attempt: {spoke_message}",
         ]
         if pyttsx3_info.get("error"):
@@ -430,6 +444,8 @@ class SpeechEngine:
             "edge_tts_arabic_pitch": edge_info.get("arabic_pitch"),
             "edge_tts_arabic_volume": edge_info.get("arabic_volume"),
             "edge_tts_arabic_fallbacks": list(edge_info.get("arabic_fallbacks") or []),
+            "edge_tts_supports_output_format": bool(edge_info.get("supports_output_format")),
+            "edge_tts_compressed_decode_available": bool(edge_info.get("compressed_decode_available")),
         }
         return True, "\n".join(lines), meta
 
@@ -650,47 +666,74 @@ class SpeechEngine:
             for parameter in signature.parameters.values()
         )
 
+    def _can_decode_edge_compressed_stream(self):
+        try:
+            import soundfile as _sf  # type: ignore
+
+            _ = _sf
+            return True
+        except Exception:
+            return False
+
     def _decode_edge_audio_bytes(self, audio_bytes):
         payload = bytes(audio_bytes or b"")
         if len(payload) < 8:
             return None
 
         header = payload[:4]
-        if header not in {b"RIFF", b"RIFX", b"RF64"}:
-            return None
+        if header in {b"RIFF", b"RIFX", b"RF64"}:
+            try:
+                with wave.open(io.BytesIO(payload), "rb") as handle:
+                    sample_rate = int(handle.getframerate() or 0)
+                    sample_width = int(handle.getsampwidth() or 0)
+                    channels = int(handle.getnchannels() or 1)
+                    frame_count = int(handle.getnframes() or 0)
+                    frames = handle.readframes(frame_count)
+            except Exception:
+                return None
 
+            if sample_rate <= 0 or not frames:
+                return None
+
+            import numpy as np  # type: ignore
+
+            if sample_width == 1:
+                waveform = np.frombuffer(frames, dtype=np.uint8).astype(np.float32)
+                waveform = (waveform - 128.0) / 128.0
+            elif sample_width == 2:
+                waveform = np.frombuffer(frames, dtype=np.int16)
+            elif sample_width == 4:
+                waveform = np.frombuffer(frames, dtype=np.int32)
+            else:
+                return None
+
+            if channels > 1:
+                expected = int(waveform.size // channels) * channels
+                if expected <= 0:
+                    return None
+                waveform = waveform[:expected].reshape(-1, channels)
+
+            return sample_rate, waveform
+
+        # Older edge-tts versions stream compressed audio (for example MP3).
+        # Decode through soundfile when available.
         try:
-            with wave.open(io.BytesIO(payload), "rb") as handle:
-                sample_rate = int(handle.getframerate() or 0)
-                sample_width = int(handle.getsampwidth() or 0)
-                channels = int(handle.getnchannels() or 1)
-                frame_count = int(handle.getnframes() or 0)
-                frames = handle.readframes(frame_count)
+            import numpy as np  # type: ignore
+            import soundfile as sf  # type: ignore
         except Exception:
             return None
 
-        if sample_rate <= 0 or not frames:
+        try:
+            waveform, sample_rate = sf.read(io.BytesIO(payload), dtype="float32")
+        except Exception:
             return None
 
-        import numpy as np  # type: ignore
-
-        if sample_width == 1:
-            waveform = np.frombuffer(frames, dtype=np.uint8).astype(np.float32)
-            waveform = (waveform - 128.0) / 128.0
-        elif sample_width == 2:
-            waveform = np.frombuffer(frames, dtype=np.int16)
-        elif sample_width == 4:
-            waveform = np.frombuffer(frames, dtype=np.int32)
-        else:
+        if int(sample_rate or 0) <= 0:
             return None
-
-        if channels > 1:
-            expected = int(waveform.size // channels) * channels
-            if expected <= 0:
-                return None
-            waveform = waveform[:expected].reshape(-1, channels)
-
-        return sample_rate, waveform
+        samples = np.asarray(waveform)
+        if samples.size <= 0:
+            return None
+        return int(sample_rate), samples
 
     def _log_edge_tts_decode_warning_once(self, message):
         should_log = False
@@ -872,7 +915,18 @@ class SpeechEngine:
             volume = str(TTS_EDGE_ARABIC_VOLUME or "").strip()
         return rate, pitch, volume
 
-    def _speak_edge_tts_mixed_chunks(self, normalized_text, edge_tts_module, supports_output_format, supports_pitch, supports_volume):
+    def _speak_edge_tts_mixed_chunks(
+        self,
+        normalized_text,
+        edge_tts_module,
+        supports_output_format,
+        supports_pitch,
+        supports_volume,
+        can_decode_compressed,
+    ):
+        if not supports_output_format and not can_decode_compressed:
+            return False
+
         chunks = self._edge_tts_text_chunks(normalized_text)
         if len(chunks) <= 1:
             return False
@@ -953,7 +1007,7 @@ class SpeechEngine:
                     decoded = self._decode_edge_audio_bytes(audio_bytes)
                     if decoded is None:
                         self._log_edge_tts_decode_warning_once(
-                            "Edge-TTS stream was not WAV/PCM; using pyttsx3 fallback."
+                            "Edge-TTS stream decode failed. Install soundfile or upgrade edge_tts for output_format support; using pyttsx3 fallback."
                         )
                         chunk_last_error = f"decode_unavailable:{voice_name}"
                         continue
@@ -1105,6 +1159,13 @@ class SpeechEngine:
         supports_output_format = self._edge_tts_supports_output_format(edge_tts)
         supports_pitch = self._edge_tts_supports_parameter(edge_tts, "pitch")
         supports_volume = self._edge_tts_supports_parameter(edge_tts, "volume")
+        can_decode_compressed = self._can_decode_edge_compressed_stream()
+
+        if not supports_output_format and not can_decode_compressed:
+            self._log_edge_tts_decode_warning_once(
+                "Edge-TTS stream decode unavailable in this environment. Install soundfile or upgrade edge_tts; using pyttsx3 fallback."
+            )
+            return False
 
         if bool(TTS_EDGE_MIXED_SCRIPT_CHUNKING):
             mixed_chunk_ok = self._speak_edge_tts_mixed_chunks(
@@ -1113,6 +1174,7 @@ class SpeechEngine:
                 supports_output_format,
                 supports_pitch,
                 supports_volume,
+                can_decode_compressed,
             )
             if mixed_chunk_ok:
                 return True
@@ -1161,7 +1223,7 @@ class SpeechEngine:
                 decoded = self._decode_edge_audio_bytes(audio_bytes)
                 if decoded is None:
                     self._log_edge_tts_decode_warning_once(
-                        "Edge-TTS stream was not WAV/PCM; using pyttsx3 fallback."
+                        "Edge-TTS stream decode failed. Install soundfile or upgrade edge_tts for output_format support; using pyttsx3 fallback."
                     )
                     last_error = f"decode_unavailable:{voice_name}"
                     continue

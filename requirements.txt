@@ -18,6 +18,8 @@ openwakeword==0.6.0
 pyttsx3==2.99
 # Optional neural TTS (edge); runtime falls back to pyttsx3 when missing
 # edge-tts>=6.1.12
+# Optional edge stream decoder for older edge-tts versions that emit MP3 chunks
+# soundfile>=0.12.1
 
 # System monitoring
 psutil==7.2.2
