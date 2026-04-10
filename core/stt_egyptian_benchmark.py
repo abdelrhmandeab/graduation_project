@@ -302,7 +302,7 @@ def _normalize_runtime_backends(value):
     if isinstance(value, str):
         parts = [item.strip() for item in value.split(",") if str(item or "").strip()]
     elif value is None:
-        parts = ["faster_whisper", "huggingface"]
+        parts = ["faster_whisper"]
     else:
         parts = [str(item or "").strip() for item in list(value) if str(item or "").strip()]
 
@@ -322,17 +322,6 @@ def _normalize_runtime_backends(value):
 
 def _runtime_setup_descriptor(backend):
     backend = stt_runtime._normalize_stt_backend(backend)
-    if backend == "huggingface":
-        hf_settings = stt_runtime.get_runtime_hf_settings()
-        model = str(hf_settings.get("model") or "")
-        mode = str(hf_settings.get("mode") or "")
-        return {
-            "id": "runtime_huggingface",
-            "label": f"runtime huggingface ({mode or 'auto'})",
-            "backend": "huggingface",
-            "model": model,
-            "mode": mode,
-        }
     return {
         "id": "runtime_faster_whisper",
         "label": "runtime faster-whisper",

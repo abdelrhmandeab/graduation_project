@@ -14,21 +14,6 @@ def _project_path(*parts):
 load_dotenv(PROJECT_ROOT / ".env")
 
 
-def _resolve_hf_token_from_env():
-    for key in ("HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "HFTOKEN", "JARVIS_HF_TOKEN"):
-        value = str(os.environ.get(key, "") or "").strip()
-        if value:
-            return value
-    return ""
-
-
-_HF_TOKEN = _resolve_hf_token_from_env()
-if _HF_TOKEN:
-    # Normalize to the names used by huggingface_hub/transformers.
-    os.environ["HF_TOKEN"] = _HF_TOKEN
-    os.environ["HUGGINGFACE_HUB_TOKEN"] = _HF_TOKEN
-
-
 def _env(key, default=""):
     """Read an environment variable with a fallback default."""
     return os.environ.get(key, default)
@@ -120,12 +105,7 @@ WAKE_WORD_AR_CONSECUTIVE_HITS_REQUIRED = max(1, _env_int("JARVIS_WAKE_WORD_AR_CO
 WAKE_WORD_AR_CONFIRM_WINDOW_SECONDS = max(1.0, _env_float("JARVIS_WAKE_WORD_AR_CONFIRM_WINDOW_SECONDS", 3.0))
 
 # STT
-STT_BACKEND = _env("JARVIS_STT_BACKEND", "faster_whisper")  # faster_whisper | huggingface
-STT_HF_MODEL = _env("JARVIS_STT_HF_MODEL", "openai/whisper-small")
-STT_HF_MODE = _env("JARVIS_STT_HF_MODE", "manual")  # auto | manual | pipeline
-STT_HF_CHUNK_LENGTH_S = _env_float("JARVIS_STT_HF_CHUNK_LENGTH_S", 12.0)
-STT_HF_BATCH_SIZE = _env_int("JARVIS_STT_HF_BATCH_SIZE", 4)
-STT_ALLOW_CPU_HEAVY_REALTIME = _env_bool("JARVIS_STT_ALLOW_CPU_HEAVY_REALTIME", False)
+STT_BACKEND = _env("JARVIS_STT_BACKEND", "faster_whisper")  # faster_whisper
 # Egyptian dialect normalization is always enabled for Arabic transcripts.
 STT_ARABIC_POST_NORMALIZATION = True
 # Standard Arabic mode is disabled; Arabic STT is handled as Egyptian dialect.
@@ -211,21 +191,18 @@ APP_RESOLUTION_AVAILABLE_BONUS = _env_float("JARVIS_APP_AVAILABLE_BONUS", 0.03)
 
 # Speech / TTS
 TTS_ENABLED = True
-TTS_DEFAULT_BACKEND = _env("JARVIS_TTS_BACKEND", "edge_tts")  # auto | console | pyttsx3 | huggingface | edge_tts | kokoro | voicecraft
+TTS_DEFAULT_BACKEND = _env("JARVIS_TTS_BACKEND", "edge_tts")  # auto | console | pyttsx3 | edge_tts | kokoro
 TTS_QUALITY_MODE = _env("JARVIS_TTS_QUALITY_MODE", "natural")  # natural | standard
-TTS_HF_MODEL = _env("JARVIS_TTS_HF_MODEL", "facebook/mms-tts-eng")
-TTS_HF_SAMPLE_RATE = _env_int("JARVIS_TTS_HF_SAMPLE_RATE", 0)  # 0 => use model sampling rate
-TTS_HF_VOICE_PRESET = _env("JARVIS_TTS_HF_VOICE_PRESET", "v2/en_speaker_6")
 TTS_EDGE_VOICE = _env("JARVIS_TTS_EDGE_VOICE", "en-US-AriaNeural")
 TTS_EDGE_RATE = _env("JARVIS_TTS_EDGE_RATE", "+0%")
-TTS_EDGE_ARABIC_VOICE = _env("JARVIS_TTS_EDGE_ARABIC_VOICE", "ar-EG-ShakirNeural")
+TTS_EDGE_ARABIC_VOICE = _env("JARVIS_TTS_EDGE_ARABIC_VOICE", "ar-EG-SalmaNeural")
 TTS_EDGE_ARABIC_VOICE_FALLBACKS = _env_list(
     "JARVIS_TTS_EDGE_ARABIC_VOICE_FALLBACKS",
-    ("ar-EG-SalmaNeural", "ar-SA-HamedNeural"),
+    ("ar-EG-ShakirNeural", "ar-SA-HamedNeural"),
 )
 TTS_EDGE_ARABIC_RATE = _env("JARVIS_TTS_EDGE_ARABIC_RATE", "-4%")
 TTS_EDGE_ARABIC_PITCH = _env("JARVIS_TTS_EDGE_ARABIC_PITCH", "-8Hz")
-TTS_EDGE_ARABIC_VOLUME = _env("JARVIS_TTS_EDGE_ARABIC_VOLUME", "+0%")
+TTS_EDGE_ARABIC_VOLUME = _env("JARVIS_TTS_EDGE_ARABIC_VOLUME", "+4%")
 TTS_EDGE_MIXED_SCRIPT_CHUNKING = _env_bool("JARVIS_TTS_EDGE_MIXED_SCRIPT_CHUNKING", True)
 TTS_EDGE_MIXED_SCRIPT_MAX_CHUNKS = max(2, _env_int("JARVIS_TTS_EDGE_MIXED_SCRIPT_MAX_CHUNKS", 6))
 TTS_EDGE_MIXED_SCRIPT_MAX_TEXT_LENGTH = max(80, _env_int("JARVIS_TTS_EDGE_MIXED_SCRIPT_MAX_TEXT_LENGTH", 220))
@@ -239,17 +216,8 @@ TTS_KOKORO_SAMPLE_RATE = _env_int("JARVIS_TTS_KOKORO_SAMPLE_RATE", 24000)
 TTS_DEFAULT_RATE = 175
 TTS_SIMULATED_CHAR_DELAY = 0.02
 TTS_EXTERNAL_TIMEOUT_SECONDS = 45
-TTS_FORCE_ENGLISH_VOICE_FOR_ARABIC = _env_bool("JARVIS_TTS_FORCE_ENGLISH_VOICE_FOR_ARABIC", False)
 BARGE_IN_INTERRUPT_ON_WAKE = True
 WAKE_WORD_IGNORE_WHILE_SPEAKING = True
-
-# Voice cloning
-VOICE_CLONE_ENABLED = _env_bool("JARVIS_VOICE_CLONE_ENABLED", False)
-VOICE_CLONE_PROVIDER = str(_env("JARVIS_VOICE_CLONE_PROVIDER", "voicecraft") or "voicecraft").strip().lower() or "voicecraft"
-if VOICE_CLONE_PROVIDER not in {"voicecraft"}:
-    VOICE_CLONE_PROVIDER = "voicecraft"
-VOICE_CLONE_REFERENCE_AUDIO = str(_env("JARVIS_VOICE_CLONE_REFERENCE_AUDIO", "") or "").strip()
-VOICECRAFT_CLI_PATH = str(_env("JARVIS_VOICECRAFT_CLI_PATH", "") or "").strip()
 
 # Persona
 PERSONA_DEFAULT = "assistant"

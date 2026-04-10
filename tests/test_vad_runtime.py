@@ -1,60 +1,58 @@
-import copy
+import tempfile
 import unittest
-from unittest.mock import patch
+import wave
+import os
+
+import numpy as np
 
 from audio import vad
 
 
 class VadRuntimeTests(unittest.TestCase):
-    def setUp(self):
-        self._saved = {
-            "_SILERO_READY": vad._SILERO_READY,
-            "_silero_model": vad._silero_model,
-            "_silero_get_speech_timestamps": vad._silero_get_speech_timestamps,
-            "_silero_torch": vad._silero_torch,
-            "_SILERO_ERROR": vad._SILERO_ERROR,
-            "_SILERO_RUNTIME_BROKEN": vad._SILERO_RUNTIME_BROKEN,
-            "_SILERO_FALLBACK_NOTICE_EMITTED": vad._SILERO_FALLBACK_NOTICE_EMITTED,
-        }
+    def _write_wave(self, samples):
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
+            path = handle.name
+        int16_samples = np.asarray(samples, dtype=np.int16)
+        with wave.open(path, "wb") as wav_handle:
+            wav_handle.setnchannels(1)
+            wav_handle.setsampwidth(2)
+            wav_handle.setframerate(16000)
+            wav_handle.writeframes(int16_samples.tobytes())
+        return path
 
-    def tearDown(self):
-        vad._SILERO_READY = self._saved["_SILERO_READY"]
-        vad._silero_model = self._saved["_silero_model"]
-        vad._silero_get_speech_timestamps = self._saved["_silero_get_speech_timestamps"]
-        vad._silero_torch = self._saved["_silero_torch"]
-        vad._SILERO_ERROR = self._saved["_SILERO_ERROR"]
-        vad._SILERO_RUNTIME_BROKEN = self._saved["_SILERO_RUNTIME_BROKEN"]
-        vad._SILERO_FALLBACK_NOTICE_EMITTED = self._saved["_SILERO_FALLBACK_NOTICE_EMITTED"]
+    def test_threshold_setter_and_getter(self):
+        original = vad.get_energy_fallback_threshold()
+        try:
+            updated = vad.set_energy_fallback_threshold(0.02)
+            self.assertAlmostEqual(updated, 0.02, places=6)
+            self.assertAlmostEqual(vad.get_energy_fallback_threshold(), 0.02, places=6)
+        finally:
+            vad.set_energy_fallback_threshold(original)
 
-    def test_is_speech_uses_custom_audio_reader_for_silero(self):
-        vad._SILERO_RUNTIME_BROKEN = False
-        vad._SILERO_FALLBACK_NOTICE_EMITTED = False
-        vad._silero_model = object()
+    def test_is_speech_detects_non_silent_audio(self):
+        original = vad.get_energy_fallback_threshold()
+        path = ""
+        try:
+            vad.set_energy_fallback_threshold(0.05)
+            # Constant medium amplitude should cross the threshold.
+            path = self._write_wave(np.full(16000, 12000, dtype=np.int16))
+            self.assertTrue(vad.is_speech(path))
+        finally:
+            vad.set_energy_fallback_threshold(original)
+            if path and os.path.exists(path):
+                os.remove(path)
 
-        with patch("audio.vad._ensure_silero", return_value=True), patch(
-            "audio.vad._read_audio_for_silero", return_value="wav_tensor"
-        ) as read_audio_mock, patch(
-            "audio.vad._silero_get_speech_timestamps", return_value=[{"start": 0, "end": 1}]
-        ) as speech_timestamps_mock:
-            is_speech = vad.is_speech("dummy.wav")
-
-        self.assertTrue(is_speech)
-        read_audio_mock.assert_called_once_with("dummy.wav", target_rate=16000)
-        speech_timestamps_mock.assert_called_once_with("wav_tensor", vad._silero_model, sampling_rate=16000)
-
-    def test_runtime_failure_switches_to_energy_fallback(self):
-        vad._SILERO_RUNTIME_BROKEN = False
-        vad._SILERO_FALLBACK_NOTICE_EMITTED = False
-
-        with patch("audio.vad._ensure_silero", return_value=True), patch(
-            "audio.vad._read_audio_for_silero", side_effect=RuntimeError("torchcodec mismatch")
-        ), patch("audio.vad._energy_fallback_is_speech", return_value=False), patch("audio.vad.logger.info") as info_mock:
-            is_speech = vad.is_speech("dummy.wav")
-
-        self.assertFalse(is_speech)
-        self.assertTrue(vad._SILERO_RUNTIME_BROKEN)
-        self.assertTrue(vad._SILERO_FALLBACK_NOTICE_EMITTED)
-        self.assertEqual(info_mock.call_count, 1)
+    def test_is_speech_rejects_silence(self):
+        original = vad.get_energy_fallback_threshold()
+        path = ""
+        try:
+            vad.set_energy_fallback_threshold(0.01)
+            path = self._write_wave(np.zeros(16000, dtype=np.int16))
+            self.assertFalse(vad.is_speech(path))
+        finally:
+            vad.set_energy_fallback_threshold(original)
+            if path and os.path.exists(path):
+                os.remove(path)
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ class SttEgyptianBenchmarkTests(unittest.TestCase):
         done_gate = dict(payload.get("done_gate") or {})
 
         self.assertGreaterEqual(int(corpus.get("scenario_count") or 0), 12)
-        self.assertGreaterEqual(len(setups), 3)
+        self.assertGreaterEqual(len(setups), 2)
 
         self.assertTrue(str(recommendation.get("setup_id") or ""))
         self.assertNotEqual(

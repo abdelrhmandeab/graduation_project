@@ -33,8 +33,8 @@ def main():
     )
     parser.add_argument(
         "--runtime-backends",
-        default="faster_whisper,huggingface",
-        help="Comma-separated backends for runtime A/B (faster_whisper,huggingface).",
+        default="faster_whisper",
+        help="Comma-separated backends for runtime A/B (faster_whisper).",
     )
     parser.add_argument(
         "--runtime-max-cases",

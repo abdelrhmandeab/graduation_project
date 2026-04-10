@@ -13,8 +13,9 @@ class SttEgyptianDialectModeTests(unittest.TestCase):
         self.assertEqual(stt_runtime._resolve_whisper_language("ar"), "ar")
 
     def test_runtime_coerces_arabic_language_when_text_is_arabic(self):
-        with patch("audio.stt._resolve_stt_backend", return_value="faster_whisper"), patch(
-            "audio.stt._transcribe_faster_whisper_with_meta", return_value=("أريد أخبار البورسة اليوم", "en")
+        with patch(
+            "audio.stt.transcribe_backend_direct_with_meta",
+            return_value={"text": "أريد أخبار البورسة اليوم", "language": "en", "language_confidence": 0.55, "backend": "faster_whisper"},
         ):
             payload = stt_runtime.transcribe_streaming_with_meta("dummy.wav")
 

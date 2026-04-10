@@ -32,7 +32,7 @@ def main():
     )
     parser.add_argument(
         "--backend",
-        choices=("auto", "huggingface", "edge_tts", "kokoro"),
+        choices=("auto", "edge_tts", "kokoro"),
         default="auto",
         help="Preferred backend for objective synthesis in real/auto modes.",
     )

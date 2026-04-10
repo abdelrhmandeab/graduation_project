@@ -5,19 +5,7 @@
 Install core runtime dependencies:
 
 ```powershell
-python -m pip install numpy scipy sounddevice faster-whisper openwakeword pyttsx3 psutil
-```
-
-Optional (only if you want Silero VAD backend instead of fallback):
-
-```powershell
-python -m pip install torch silero-vad
-```
-
-Optional (if you want Hugging Face speech models for both STT and TTS):
-
-```powershell
-python -m pip install transformers huggingface-hub sentencepiece
+python -m pip install -r requirements.txt
 ```
 
 Optional (if you want cloud/local neural TTS backends beyond system voices):
@@ -29,11 +17,9 @@ python -m pip install edge-tts kokoro
 Set backends in `.env`:
 
 ```env
-JARVIS_STT_BACKEND=huggingface
-JARVIS_STT_HF_MODEL=openai/whisper-small
-JARVIS_STT_HF_MODE=manual
-JARVIS_TTS_BACKEND=huggingface
-JARVIS_TTS_HF_MODEL=facebook/mms-tts-eng
+JARVIS_STT_BACKEND=faster_whisper
+JARVIS_WHISPER_MODEL=base
+JARVIS_TTS_BACKEND=edge_tts
 JARVIS_TTS_QUALITY_MODE=natural
 JARVIS_TTS_EDGE_VOICE=en-US-AriaNeural
 JARVIS_TTS_EDGE_RATE=+0%
@@ -47,13 +33,9 @@ JARVIS_TTS_EGYPTIAN_COLLOQUIAL_REWRITE=true
 JARVIS_TTS_KOKORO_VOICE=af_heart
 ```
 
-This is optional after first setup: you can switch and persist HF speech profiles at runtime with voice commands (no `.env` edit required each time).
-
 Notes:
-- First run downloads model files from Hugging Face and may take time.
-- For Arabic TTS, try `facebook/mms-tts-ara` for `JARVIS_TTS_HF_MODEL`.
-- You can switch to `JARVIS_TTS_BACKEND=edge_tts` or `JARVIS_TTS_BACKEND=kokoro` when those dependencies are installed.
-- `JARVIS_TTS_QUALITY_MODE=natural` makes Jarvis prefer tuned system voices before HF-TTS when possible.
+- You can switch to `JARVIS_TTS_BACKEND=edge_tts`, `JARVIS_TTS_BACKEND=kokoro`, or `JARVIS_TTS_BACKEND=pyttsx3`.
+- `JARVIS_TTS_QUALITY_MODE=natural` keeps tuned conversational TTS settings for live use.
 - English Edge-TTS remains on `JARVIS_TTS_EDGE_VOICE` (default `en-US-AriaNeural`) with `JARVIS_TTS_EDGE_RATE`.
 - Arabic Edge-TTS uses conversational Egyptian profile by default (`ar-EG-SalmaNeural`) and falls back through `JARVIS_TTS_EDGE_ARABIC_VOICE_FALLBACKS`.
 - Use `JARVIS_TTS_ARABIC_SPOKEN_DIALECT=egyptian` and `JARVIS_TTS_EGYPTIAN_COLLOQUIAL_REWRITE=true` to make spoken Arabic less formal.
@@ -114,7 +96,7 @@ Phase 0 progress board:
 
 ## Current Features
 
-- Voice synthesis abstraction with runtime backends (`pyttsx3`, `huggingface`, `edge_tts`, `kokoro`) plus clone provider (`voicecraft`) and safe fallback.
+- Voice synthesis abstraction with runtime backends (`pyttsx3`, `edge_tts`, `kokoro`) and safe fallback.
 - Interruptible speech output (`stop speaking`).
 - Multi-persona profiles (`assistant`, `formal`, `casual`, `professional`, `friendly`, `brief`).
 - Offline knowledge base with vector retrieval (FAISS when available, local fallback otherwise).
@@ -149,17 +131,9 @@ Phase 0 progress board:
   - `persona status`
   - `persona set <assistant|formal|casual|professional|friendly|brief>`
   - `assistant mode`
-  - `persona voice status`
-  - `persona voice clone <profile> on|off`
-  - `persona voice provider <profile> voicecraft`
-  - `persona voice reference <profile> <path_to_wav>`
 - Voice / Speech:
   - `voice status`
   - `voice diagnostic`
-  - `voice clone on`
-  - `voice clone off`
-  - `voice clone provider voicecraft`
-  - `voice clone reference <path_to_wav>`
   - `voice quality natural`
   - `voice quality standard`
   - `voice quality status`
@@ -184,15 +158,9 @@ Phase 0 progress board:
   - `stt profile noisy`
   - `stt profile status`
   - selected STT profile is persisted and restored on next startup
-  - `hf profile egyptian`
-  - `hf profile english`
-  - `hf profile status`
-  - `set hf profile to egyptian|english`
-  - selected HF profile is persisted, restored on next startup, and forces runtime STT/TTS backends to `huggingface`
   - `stt backend status`
   - `stt backend faster whisper`
-  - `stt backend huggingface`
-  - `set speech backend to faster_whisper|huggingface`
+  - `set speech backend to faster_whisper`
   - `speech on`
   - `speech off`
   - `stop speaking`
@@ -255,13 +223,13 @@ python scripts\benchmark_stt_egyptian.py
 Run direct runtime A/B for Egyptian STT backends on corpus scenarios that include `audio_file` paths:
 
 ```powershell
-python scripts\benchmark_stt_egyptian.py --runtime-ab --runtime-backends faster_whisper,huggingface
+python scripts\benchmark_stt_egyptian.py --runtime-ab --runtime-backends faster_whisper
 ```
 
 Run the small audio-backed Egyptian corpus pack (ready-to-run sample audio included):
 
 ```powershell
-python scripts\benchmark_stt_egyptian.py --corpus benchmarks\stt_egyptian_corpus_audio_small.json --runtime-ab --runtime-backends faster_whisper,huggingface --runtime-max-cases 3
+python scripts\benchmark_stt_egyptian.py --corpus benchmarks\stt_egyptian_corpus_audio_small.json --runtime-ab --runtime-backends faster_whisper --runtime-max-cases 3
 ```
 
 Run Phase 5 dialogue benchmark packs through safe-runtime routing:

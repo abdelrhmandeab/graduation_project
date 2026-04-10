@@ -179,8 +179,6 @@ class SessionMemory:
             "app_usage_updated_at": 0.0,
             "stt_profile": "",
             "stt_profile_updated_at": 0.0,
-            "hf_profile": "",
-            "hf_profile_updated_at": 0.0,
             "audio_ux_profile": "",
             "audio_ux_profile_updated_at": 0.0,
             "response_mode": "default",
@@ -222,8 +220,6 @@ class SessionMemory:
         payload["app_usage_updated_at"] = self._as_timestamp(slots.get("app_usage_updated_at"))
         payload["stt_profile"] = str(slots.get("stt_profile") or "").strip().lower()
         payload["stt_profile_updated_at"] = self._as_timestamp(slots.get("stt_profile_updated_at"))
-        payload["hf_profile"] = str(slots.get("hf_profile") or "").strip().lower()
-        payload["hf_profile_updated_at"] = self._as_timestamp(slots.get("hf_profile_updated_at"))
         payload["audio_ux_profile"] = str(slots.get("audio_ux_profile") or "").strip().lower()
         payload["audio_ux_profile_updated_at"] = self._as_timestamp(slots.get("audio_ux_profile_updated_at"))
         response_mode = str(slots.get("response_mode") or "default").strip().lower()
@@ -692,22 +688,6 @@ class SessionMemory:
         with self._lock:
             return self._as_timestamp(self._context_slots.get("stt_profile_updated_at"))
 
-    def set_hf_profile(self, profile_name):
-        value = (profile_name or "").strip().lower()
-        with self._lock:
-            self._context_slots["hf_profile"] = value
-            self._context_slots["hf_profile_updated_at"] = time.time() if value else 0.0
-            self._save()
-        return True, f"hf_profile set to: {value or 'custom'}"
-
-    def get_hf_profile(self):
-        with self._lock:
-            return str(self._context_slots.get("hf_profile") or "").strip().lower()
-
-    def get_hf_profile_timestamp(self):
-        with self._lock:
-            return self._as_timestamp(self._context_slots.get("hf_profile_updated_at"))
-
     def set_audio_ux_profile(self, profile_name):
         value = (profile_name or "").strip().lower()
         with self._lock:
@@ -848,8 +828,6 @@ class SessionMemory:
                 "app_usage_updated_at": self._as_timestamp(self._context_slots.get("app_usage_updated_at")),
                 "stt_profile": str(self._context_slots.get("stt_profile") or "").strip().lower(),
                 "stt_profile_updated_at": self._as_timestamp(self._context_slots.get("stt_profile_updated_at")),
-                "hf_profile": str(self._context_slots.get("hf_profile") or "").strip().lower(),
-                "hf_profile_updated_at": self._as_timestamp(self._context_slots.get("hf_profile_updated_at")),
                 "audio_ux_profile": str(self._context_slots.get("audio_ux_profile") or "").strip().lower(),
                 "audio_ux_profile_updated_at": self._as_timestamp(self._context_slots.get("audio_ux_profile_updated_at")),
                 "response_mode": str(self._context_slots.get("response_mode") or "default").strip().lower(),
@@ -982,8 +960,6 @@ class SessionMemory:
             app_usage_updated_at = self._as_timestamp(self._context_slots.get("app_usage_updated_at"))
             stt_profile = str(self._context_slots.get("stt_profile") or "").strip().lower()
             stt_profile_updated_at = self._as_timestamp(self._context_slots.get("stt_profile_updated_at"))
-            hf_profile = str(self._context_slots.get("hf_profile") or "").strip().lower()
-            hf_profile_updated_at = self._as_timestamp(self._context_slots.get("hf_profile_updated_at"))
             audio_ux_profile = str(self._context_slots.get("audio_ux_profile") or "").strip().lower()
             audio_ux_profile_updated_at = self._as_timestamp(self._context_slots.get("audio_ux_profile_updated_at"))
             response_mode = str(self._context_slots.get("response_mode") or "default").strip().lower()
@@ -1021,8 +997,6 @@ class SessionMemory:
             "app_usage_updated_at": app_usage_updated_at,
             "stt_profile": stt_profile,
             "stt_profile_updated_at": stt_profile_updated_at,
-            "hf_profile": hf_profile,
-            "hf_profile_updated_at": hf_profile_updated_at,
             "audio_ux_profile": audio_ux_profile,
             "audio_ux_profile_updated_at": audio_ux_profile_updated_at,
             "response_mode": response_mode,

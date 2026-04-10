@@ -1,7 +1,3 @@
-param(
-    [switch]$InstallSpeechExtras
-)
-
 $ErrorActionPreference = "Stop"
 
 Write-Host "[Jarvis Setup] Starting Windows setup..." -ForegroundColor Cyan
@@ -17,11 +13,6 @@ python -m pip install --upgrade pip
 
 Write-Host "[Jarvis Setup] Installing requirements..." -ForegroundColor Yellow
 python -m pip install -r requirements.txt
-
-if ($InstallSpeechExtras) {
-    Write-Host "[Jarvis Setup] Installing optional speech extras..." -ForegroundColor Yellow
-    python -m pip install transformers huggingface-hub sentencepiece
-}
 
 if (-not (Test-Path ".env") -and (Test-Path ".env.example")) {
     Write-Host "[Jarvis Setup] Creating .env from .env.example..." -ForegroundColor Yellow

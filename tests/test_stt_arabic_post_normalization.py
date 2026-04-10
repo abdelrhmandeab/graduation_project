@@ -33,9 +33,8 @@ class SttArabicPostNormalizationTests(unittest.TestCase):
 
     def test_runtime_applies_arabic_post_normalization(self):
         with patch("audio.stt.STT_ARABIC_POST_NORMALIZATION", True), patch(
-            "audio.stt._resolve_stt_backend", return_value="faster_whisper"
-        ), patch(
-            "audio.stt._transcribe_faster_whisper_with_meta", return_value=("عاوز افتحلي نوتباد دلوقتى", "ar")
+            "audio.stt.transcribe_backend_direct_with_meta",
+            return_value={"text": "عاوز افتحلي نوتباد دلوقتى", "language": "ar", "language_confidence": 0.9, "backend": "faster_whisper"},
         ):
             payload = stt_runtime.transcribe_streaming_with_meta("dummy.wav")
 

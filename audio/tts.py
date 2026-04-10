@@ -1,14 +1,10 @@
 import asyncio
-import contextlib
 import io
 import inspect
 import logging
-import os
 import re
-import subprocess
 import threading
 import time
-import warnings
 
 from core.config import (
     TTS_ARABIC_SPOKEN_DIALECT,
@@ -27,75 +23,15 @@ from core.config import (
     TTS_EGYPTIAN_COLLOQUIAL_REWRITE,
     TTS_ENABLED,
     TTS_EXTERNAL_TIMEOUT_SECONDS,
-    TTS_FORCE_ENGLISH_VOICE_FOR_ARABIC,
-    TTS_HF_MODEL,
-    TTS_HF_SAMPLE_RATE,
-    TTS_HF_VOICE_PRESET,
     TTS_KOKORO_LANG_CODE,
     TTS_KOKORO_SAMPLE_RATE,
     TTS_KOKORO_VOICE,
     TTS_QUALITY_MODE,
     TTS_SIMULATED_CHAR_DELAY,
-    VOICECRAFT_CLI_PATH,
 )
 from core.logger import logger
 from core.metrics import metrics
 from core.persona import persona_manager
-
-
-class _SuppressTransformersGenerationWarnings(logging.Filter):
-    _NOISE_SNIPPETS = (
-        "Passing `generation_config` together with generation-related arguments",
-        "Both `max_new_tokens` (",
-        "The attention mask and the pad token id were not set.",
-        "The attention mask is not set and cannot be inferred",
-        "Setting `pad_token_id` to `eos_token_id`",
-    )
-
-    def filter(self, record):
-        try:
-            message = str(record.getMessage() or "")
-        except Exception:
-            return True
-        return not any(snippet in message for snippet in self._NOISE_SNIPPETS)
-
-
-_TRANSFORMERS_WARNING_PATTERNS = (
-    r".*Passing `generation_config` together with generation-related arguments.*",
-    r".*Both `max_new_tokens`.*`max_length`.*",
-    r".*The attention mask and the pad token id were not set.*",
-    r".*The attention mask is not set and cannot be inferred.*",
-)
-
-
-def _run_hf_quietly(operation):
-    with warnings.catch_warnings():
-        for pattern in _TRANSFORMERS_WARNING_PATTERNS:
-            try:
-                warnings.filterwarnings("ignore", message=pattern)
-            except Exception:
-                pass
-        with contextlib.redirect_stderr(io.StringIO()):
-            return operation()
-
-
-def _load_hf_component_with_local_cache(loader, model_id, component_name):
-    try:
-        return _run_hf_quietly(lambda: loader(local_files_only=True))
-    except Exception as local_exc:
-        local_text = str(local_exc or "").lower()
-        if (
-            "local_files_only" in local_text
-            or "local cache" in local_text
-            or "offline mode" in local_text
-            or "couldn't connect" in local_text
-        ):
-            logger.info(
-                "HF %s cache miss for %s; attempting online fetch.",
-                str(component_name or "component"),
-                str(model_id or "unknown"),
-            )
-        return _run_hf_quietly(lambda: loader(local_files_only=False))
 
 
 def _contains_arabic(text):
@@ -204,12 +140,6 @@ class SpeechEngine:
         self._thread = None
         self._process = None
         self._pyttsx3_engine = None
-        self._hf_tts_tokenizer = None
-        self._hf_tts_model = None
-        self._hf_tts_model_id = ""
-        self._hf_tts_device = "cpu"
-        self._hf_tts_runtime_model = str(TTS_HF_MODEL or "").strip()
-        self._hf_tts_runtime_sample_rate = max(0, int(TTS_HF_SAMPLE_RATE))
         self._kokoro_pipeline = None
         self._kokoro_pipeline_lang = ""
         self._runtime_backend = str(TTS_DEFAULT_BACKEND or "auto").strip().lower()
@@ -222,21 +152,17 @@ class SpeechEngine:
         self._edge_tts_decode_warning_logged = False
         self._edge_tts_unsupported_voices = set()
         self._last_edge_arabic_voice = ""
-        self._transformers_warning_filter_installed = False
-        self._hf_runtime_noise_configured = False
         self._enabled = bool(TTS_ENABLED)
 
     def _normalize_backend(self, backend):
         raw = str(backend or "auto").strip().lower()
         aliases = {
-            "hf": "huggingface",
-            "transformers": "huggingface",
             "edge": "edge_tts",
             "edgetts": "edge_tts",
             "kokoro_tts": "kokoro",
         }
         resolved = aliases.get(raw, raw)
-        allowed = {"auto", "console", "pyttsx3", "huggingface", "edge_tts", "kokoro", "voicecraft"}
+        allowed = {"auto", "console", "pyttsx3", "edge_tts", "kokoro"}
         if resolved not in allowed:
             return "auto"
         return resolved
@@ -297,36 +223,6 @@ class SpeechEngine:
             return {
                 "rate_offset": int(self._runtime_rate_offset),
                 "pause_scale": float(self._runtime_pause_scale),
-            }
-
-    def get_hf_runtime_settings(self):
-        with self._lock:
-            return {
-                "model": str(self._hf_tts_runtime_model or "").strip(),
-                "sample_rate": int(self._hf_tts_runtime_sample_rate),
-            }
-
-    def set_hf_runtime_settings(self, *, model=None, sample_rate=None):
-        with self._lock:
-            model_changed = False
-            if model is not None:
-                candidate = str(model or "").strip()
-                if candidate and candidate != self._hf_tts_runtime_model:
-                    self._hf_tts_runtime_model = candidate
-                    model_changed = True
-
-            if sample_rate is not None:
-                self._hf_tts_runtime_sample_rate = max(0, int(sample_rate))
-
-            if model_changed:
-                self._hf_tts_tokenizer = None
-                self._hf_tts_model = None
-                self._hf_tts_model_id = ""
-                self._hf_tts_device = "cpu"
-
-            return {
-                "model": str(self._hf_tts_runtime_model or "").strip(),
-                "sample_rate": int(self._hf_tts_runtime_sample_rate),
             }
 
     def set_enabled(self, enabled):
@@ -394,9 +290,6 @@ class SpeechEngine:
         return True, "Speech started."
 
     def _resolve_backend(self):
-        clone = persona_manager.get_clone_settings()
-        if clone["enabled"]:
-            return clone["provider"]
         return self.get_backend()
 
     def _prepare_text_for_speech(self, text):
@@ -455,25 +348,6 @@ class SpeechEngine:
                     pass
         return info
 
-    def _probe_hf_tts_environment(self):
-        runtime = self.get_hf_runtime_settings()
-        info = {
-            "available": False,
-            "model": str(runtime.get("model") or "").strip(),
-            "voice_preset": str(TTS_HF_VOICE_PRESET or "").strip(),
-            "error": "",
-        }
-        try:
-            import sounddevice  # type: ignore
-            import torch  # type: ignore
-            import transformers  # type: ignore
-
-            _ = sounddevice, torch, transformers
-            info["available"] = True
-        except Exception as exc:
-            info["error"] = str(exc)
-        return info
-
     def _probe_edge_tts_environment(self):
         info = {
             "available": False,
@@ -519,11 +393,9 @@ class SpeechEngine:
 
     def run_voice_diagnostic(self):
         phrase = "Jarvis voice diagnostic. If you can hear this, text to speech output is working."
-        clone = persona_manager.get_clone_settings()
         requested_backend = str(self._resolve_backend() or "auto").strip().lower()
         quality_mode = self.get_quality_mode()
         pyttsx3_info = self._probe_pyttsx3_environment()
-        hf_info = self._probe_hf_tts_environment()
         edge_info = self._probe_edge_tts_environment()
         kokoro_info = self._probe_kokoro_environment()
 
@@ -535,21 +407,15 @@ class SpeechEngine:
                 active_backend = "edge_tts"
             elif kokoro_info.get("available"):
                 active_backend = "kokoro"
-            elif hf_info.get("available"):
-                active_backend = "huggingface"
             else:
                 active_backend = "console"
 
         if active_backend == "pyttsx3":
             device_label = pyttsx3_info.get("voice_name") or pyttsx3_info.get("voice_id") or "default_system_voice"
-        elif active_backend in {"hf", "huggingface"}:
-            device_label = hf_info.get("model") or "huggingface_tts_model"
         elif active_backend == "edge_tts":
             device_label = edge_info.get("voice") or "edge_tts_voice"
         elif active_backend == "kokoro":
             device_label = kokoro_info.get("voice") or "kokoro_voice"
-        elif active_backend == "voicecraft":
-            device_label = clone.get("reference_audio") or "reference_audio_not_set"
         else:
             device_label = "console_output"
 
@@ -565,8 +431,6 @@ class SpeechEngine:
             f"output_device: {device_label}",
             f"pyttsx3_available: {pyttsx3_info.get('available')}",
             f"pyttsx3_voice_count: {pyttsx3_info.get('voice_count')}",
-            f"hf_tts_available: {hf_info.get('available')}",
-            f"hf_tts_model: {hf_info.get('model')}",
             f"edge_tts_available: {edge_info.get('available')}",
             f"edge_tts_voice: {edge_info.get('voice')}",
             f"edge_tts_arabic_voice: {edge_info.get('arabic_voice')}",
@@ -580,8 +444,6 @@ class SpeechEngine:
         ]
         if pyttsx3_info.get("error"):
             lines.append(f"pyttsx3_error: {pyttsx3_info.get('error')}")
-        if hf_info.get("error"):
-            lines.append(f"hf_tts_error: {hf_info.get('error')}")
         if edge_info.get("error"):
             lines.append(f"edge_tts_error: {edge_info.get('error')}")
         if kokoro_info.get("error"):
@@ -594,8 +456,6 @@ class SpeechEngine:
             "output_device": device_label,
             "speech_attempt_ok": bool(spoke_ok),
             "pyttsx3_available": bool(pyttsx3_info.get("available")),
-            "hf_tts_available": bool(hf_info.get("available")),
-            "hf_tts_model": hf_info.get("model"),
             "edge_tts_available": bool(edge_info.get("available")),
             "edge_tts_voice": edge_info.get("voice"),
             "edge_tts_arabic_voice": edge_info.get("arabic_voice"),
@@ -613,7 +473,6 @@ class SpeechEngine:
         success = True
         backend = str(self._resolve_backend() or "auto").strip().lower()
         quality_mode = self.get_quality_mode()
-        clone = persona_manager.get_clone_settings()
         style = persona_manager.get_speech_style()
         logger.info("Speech backend=%s quality=%s style=%s", backend, quality_mode, style)
         spoken_text = self._prepare_text_for_speech(text)
@@ -626,8 +485,6 @@ class SpeechEngine:
                     return
                 if self._speak_kokoro(spoken_text):
                     return
-                if self._speak_huggingface(spoken_text):
-                    return
                 self._speak_console(spoken_text, prefix="TTS fallback")
                 return
 
@@ -635,61 +492,6 @@ class SpeechEngine:
                 if self._speak_pyttsx3(spoken_text):
                     return
                 self._speak_console(spoken_text, prefix="TTS fallback")
-                return
-
-            if backend in {"hf", "huggingface"}:
-                arabic_preferred = self._is_arabic_preferred_text(spoken_text)
-                hf_runtime_model = str((self.get_hf_runtime_settings() or {}).get("model") or "").strip().lower()
-                prefer_hf_multilingual_voice = "bark" in hf_runtime_model
-                force_english_voice = bool(TTS_FORCE_ENGLISH_VOICE_FOR_ARABIC and arabic_preferred)
-                require_language_match = bool(arabic_preferred and not force_english_voice)
-                edge_tried_for_arabic = False
-                allow_system_tts_before_hf = not (arabic_preferred and not force_english_voice)
-
-                # Arabic clarity is typically better on neural Arabic voices than fallback system voices.
-                if arabic_preferred and not prefer_hf_multilingual_voice and not force_english_voice:
-                    edge_tried_for_arabic = True
-                    if self._speak_edge_tts(spoken_text):
-                        logger.info("Arabic speech used Edge-TTS before system/HF-TTS")
-                        return
-
-                if (
-                    quality_mode == "natural"
-                    and allow_system_tts_before_hf
-                    and not prefer_hf_multilingual_voice
-                    and self._speak_pyttsx3(
-                    spoken_text,
-                    require_language_match=require_language_match,
-                    prefer_last_voice=True,
-                    force_english_voice=force_english_voice,
-                    )
-                ):
-                    logger.info("Natural quality mode used system TTS before HF-TTS")
-                    return
-
-                if (
-                    arabic_preferred
-                    and not prefer_hf_multilingual_voice
-                    and not edge_tried_for_arabic
-                    and self._speak_edge_tts(spoken_text)
-                ):
-                    logger.info("Arabic speech used Edge-TTS before HF-TTS")
-                    return
-
-                if self._speak_huggingface(spoken_text):
-                    return
-                if not edge_tried_for_arabic and self._speak_edge_tts(spoken_text):
-                    logger.warning("HF-TTS failed; Edge-TTS fallback succeeded")
-                    return
-                if not arabic_preferred and self._speak_pyttsx3(
-                    spoken_text,
-                    require_language_match=require_language_match,
-                    prefer_last_voice=True,
-                    force_english_voice=force_english_voice,
-                ):
-                    logger.warning("HF-TTS failed; pyttsx3 fallback succeeded")
-                    return
-                self._speak_console(spoken_text, prefix="HF-TTS fallback")
                 return
 
             if backend == "edge_tts":
@@ -708,21 +510,6 @@ class SpeechEngine:
                     logger.warning("Kokoro TTS failed; pyttsx3 fallback succeeded")
                     return
                 self._speak_console(spoken_text, prefix="Kokoro fallback")
-                return
-
-            if backend == "voicecraft":
-                if self._speak_clone_backend(spoken_text, provider=backend, reference_audio=clone["reference_audio"]):
-                    return
-                if self._speak_edge_tts(spoken_text):
-                    logger.warning("%s failed; Edge-TTS fallback succeeded", backend)
-                    return
-                if self._speak_huggingface(spoken_text):
-                    logger.warning("%s failed; HF-TTS fallback succeeded", backend)
-                    return
-                if self._speak_pyttsx3(spoken_text):
-                    logger.warning("%s failed; pyttsx3 fallback succeeded", backend)
-                    return
-                self._speak_console(spoken_text, prefix=f"{backend} fallback")
                 return
 
             self._speak_console(spoken_text, prefix="TTS")
@@ -1186,7 +973,7 @@ class SpeechEngine:
                     decoded = self._decode_edge_audio_bytes(audio_bytes)
                     if decoded is None:
                         self._log_edge_tts_decode_warning_once(
-                            "Edge-TTS audio decode unavailable for compressed stream; install soundfile or use pyttsx3/HF fallback."
+                            "Edge-TTS audio decode unavailable for compressed stream; install soundfile or use pyttsx3 fallback."
                         )
                         chunk_last_error = f"decode_unavailable:{voice_name}"
                         continue
@@ -1221,49 +1008,6 @@ class SpeechEngine:
                 return False
 
         return True
-
-    def _install_transformers_generation_warning_filter(self):
-        with self._lock:
-            if self._transformers_warning_filter_installed:
-                return
-            self._transformers_warning_filter_installed = True
-
-        for pattern in _TRANSFORMERS_WARNING_PATTERNS:
-            try:
-                warnings.filterwarnings("ignore", message=pattern)
-            except Exception:
-                pass
-
-        warning_filter = _SuppressTransformersGenerationWarnings()
-        for logger_name in (
-            "transformers.generation.utils",
-            "transformers.generation.configuration_utils",
-        ):
-            try:
-                generation_logger = logging.getLogger(logger_name)
-                generation_logger.addFilter(warning_filter)
-                generation_logger.setLevel(logging.ERROR)
-            except Exception:
-                pass
-
-    def _configure_hf_runtime_noise(self):
-        with self._lock:
-            if self._hf_runtime_noise_configured:
-                return
-            self._hf_runtime_noise_configured = True
-
-        try:
-            os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
-            os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
-        except Exception:
-            pass
-
-        try:
-            from huggingface_hub.utils import disable_progress_bars  # type: ignore
-
-            disable_progress_bars()
-        except Exception:
-            pass
 
     def _normalize_audio_samples(self, waveform):
         import numpy as np  # type: ignore
@@ -1437,7 +1181,7 @@ class SpeechEngine:
                 decoded = self._decode_edge_audio_bytes(audio_bytes)
                 if decoded is None:
                     self._log_edge_tts_decode_warning_once(
-                        "Edge-TTS audio decode unavailable for compressed stream; install soundfile or use pyttsx3/HF fallback."
+                        "Edge-TTS audio decode unavailable for compressed stream; install soundfile or use pyttsx3 fallback."
                     )
                     last_error = f"decode_unavailable:{voice_name}"
                     continue
@@ -1532,256 +1276,5 @@ class SpeechEngine:
         except Exception as exc:
             logger.warning("Kokoro TTS failed: %s", exc)
             return False
-
-    def _speak_huggingface(self, text):
-        runtime = self.get_hf_runtime_settings()
-        runtime_model_id = str(runtime.get("model") or TTS_HF_MODEL).strip()
-        runtime_sample_rate = max(0, int(runtime.get("sample_rate") or 0))
-        normalized_text = " ".join(str(text or "").split()).strip()
-        if not normalized_text:
-            return False
-
-        selected_model_id = runtime_model_id
-        model_lower = runtime_model_id.lower()
-
-        if "bark" in model_lower:
-            return self._speak_huggingface_bark(normalized_text, selected_model_id, runtime_sample_rate)
-
-        has_arabic = _contains_arabic(normalized_text)
-        has_latin = _contains_latin(normalized_text)
-
-        # Avoid HF VITS runtime errors from strong model/text language mismatches.
-        if "mms-tts-ara" in model_lower and has_latin and not has_arabic:
-            selected_model_id = "facebook/mms-tts-eng"
-            logger.warning(
-                "HF-TTS auto-selected fallback model '%s' for non-Arabic text",
-                selected_model_id,
-            )
-        elif "mms-tts-eng" in model_lower and has_arabic and not has_latin:
-            selected_model_id = "facebook/mms-tts-ara"
-            logger.warning(
-                "HF-TTS auto-selected fallback model '%s' for Arabic text",
-                selected_model_id,
-            )
-
-        return self._speak_huggingface_vits(normalized_text, selected_model_id, runtime_sample_rate)
-
-    def _speak_huggingface_vits(self, normalized_text, model_id, runtime_sample_rate):
-        try:
-            import numpy as np  # type: ignore
-            import torch  # type: ignore
-            from transformers import AutoTokenizer, VitsModel  # type: ignore
-        except Exception as exc:
-            logger.warning("HuggingFace VITS dependencies unavailable: %s", exc)
-            return False
-
-        self._configure_hf_runtime_noise()
-
-        def _get_hf_components():
-            if not model_id:
-                raise RuntimeError("HuggingFace TTS model id is empty.")
-
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            with self._lock:
-                if (
-                    self._hf_tts_model is not None
-                    and self._hf_tts_tokenizer is not None
-                    and self._hf_tts_model_id == model_id
-                    and self._hf_tts_device == device
-                ):
-                    return self._hf_tts_tokenizer, self._hf_tts_model, self._hf_tts_device
-
-            tokenizer = _load_hf_component_with_local_cache(
-                lambda local_files_only=False: AutoTokenizer.from_pretrained(
-                    model_id,
-                    local_files_only=bool(local_files_only),
-                ),
-                model_id,
-                "TTS tokenizer",
-            )
-            model = _load_hf_component_with_local_cache(
-                lambda local_files_only=False: VitsModel.from_pretrained(
-                    model_id,
-                    local_files_only=bool(local_files_only),
-                ),
-                model_id,
-                "TTS model",
-            ).to(device)
-            model.eval()
-
-            with self._lock:
-                self._hf_tts_tokenizer = tokenizer
-                self._hf_tts_model = model
-                self._hf_tts_model_id = model_id
-                self._hf_tts_device = device
-            return tokenizer, model, device
-
-        try:
-            tokenizer, model, device = _get_hf_components()
-
-            inputs = tokenizer(normalized_text, return_tensors="pt")
-            if hasattr(inputs, "to"):
-                inputs = inputs.to(device)
-
-            with torch.no_grad():
-                output = model(**inputs)
-            waveform = output.waveform.squeeze().detach().cpu().numpy().astype(np.float32, copy=False)
-            if waveform.size == 0:
-                logger.warning("HuggingFace TTS produced empty waveform")
-                return False
-
-            sample_rate = int(getattr(model.config, "sampling_rate", 16000) or 16000)
-            if runtime_sample_rate > 0:
-                sample_rate = runtime_sample_rate
-
-            return self._play_waveform(waveform, sample_rate)
-        except Exception as exc:
-            logger.error("HuggingFace TTS failed: %s", exc)
-            return False
-
-    def _speak_huggingface_bark(self, normalized_text, model_id, runtime_sample_rate):
-        try:
-            import numpy as np  # type: ignore
-            import torch  # type: ignore
-            from transformers import AutoProcessor, BarkModel  # type: ignore
-        except Exception as exc:
-            logger.warning("HuggingFace Bark dependencies unavailable: %s", exc)
-            return False
-
-        voice_preset = str(TTS_HF_VOICE_PRESET or "").strip() or "v2/en_speaker_6"
-        self._configure_hf_runtime_noise()
-        self._install_transformers_generation_warning_filter()
-
-        def _get_hf_components():
-            if not model_id:
-                raise RuntimeError("HuggingFace Bark model id is empty.")
-
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            with self._lock:
-                if (
-                    self._hf_tts_model is not None
-                    and self._hf_tts_tokenizer is not None
-                    and self._hf_tts_model_id == model_id
-                    and self._hf_tts_device == device
-                ):
-                    return self._hf_tts_tokenizer, self._hf_tts_model, self._hf_tts_device
-
-            processor = _load_hf_component_with_local_cache(
-                lambda local_files_only=False: AutoProcessor.from_pretrained(
-                    model_id,
-                    local_files_only=bool(local_files_only),
-                ),
-                model_id,
-                "Bark processor",
-            )
-
-            def _load_bark_model(local_files_only=False):
-                try:
-                    return BarkModel.from_pretrained(
-                        model_id,
-                        use_safetensors=False,
-                        local_files_only=bool(local_files_only),
-                    )
-                except TypeError:
-                    return BarkModel.from_pretrained(
-                        model_id,
-                        local_files_only=bool(local_files_only),
-                    )
-
-            model = _load_hf_component_with_local_cache(
-                _load_bark_model,
-                model_id,
-                "Bark model",
-            ).to(device)
-            model.eval()
-
-            with self._lock:
-                self._hf_tts_tokenizer = processor
-                self._hf_tts_model = model
-                self._hf_tts_model_id = model_id
-                self._hf_tts_device = device
-            return processor, model, device
-
-        try:
-            processor, model, device = _get_hf_components()
-
-            try:
-                inputs = processor(normalized_text, voice_preset=voice_preset, return_tensors="pt")
-            except TypeError:
-                # Keep compatibility with older processor signatures.
-                inputs = processor(normalized_text, return_tensors="pt")
-            if hasattr(inputs, "to"):
-                inputs = inputs.to(device)
-
-            if isinstance(inputs, dict) and "input_ids" in inputs and "attention_mask" not in inputs:
-                input_ids = inputs.get("input_ids")
-                if input_ids is not None:
-                    inputs["attention_mask"] = torch.ones_like(input_ids)
-
-            with torch.no_grad():
-                generated = _run_hf_quietly(lambda: model.generate(**inputs))
-
-            waveform = generated.squeeze().detach().cpu().numpy().astype(np.float32, copy=False)
-            if waveform.size == 0:
-                logger.warning("HuggingFace Bark produced empty waveform")
-                return False
-
-            sample_rate = int(
-                getattr(getattr(model, "generation_config", object()), "sample_rate", 0)
-                or getattr(model.config, "sample_rate", 0)
-                or 24000
-            )
-            if runtime_sample_rate > 0:
-                sample_rate = runtime_sample_rate
-
-            return self._play_waveform(waveform, sample_rate)
-        except Exception as exc:
-            logger.error("HuggingFace Bark TTS failed: %s", exc)
-            return False
-
-    def _speak_clone_backend(self, text, provider, reference_audio):
-        cli_path = VOICECRAFT_CLI_PATH
-        if not cli_path:
-            logger.warning("%s CLI path is not configured.", provider)
-            return False
-        if provider == "voicecraft" and not reference_audio:
-            logger.warning("Voice clone reference audio is not configured.")
-            return False
-
-        base_command = [cli_path, "--text", text]
-        if reference_audio:
-            base_command.extend(["--speaker_wav", reference_audio])
-
-        command_candidates = [base_command]
-
-        last_error = ""
-        for command in command_candidates:
-            try:
-                process = subprocess.Popen(
-                    command,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                )
-                with self._lock:
-                    self._process = process
-
-                try:
-                    _stdout, stderr = process.communicate(timeout=TTS_EXTERNAL_TIMEOUT_SECONDS)
-                except subprocess.TimeoutExpired:
-                    process.terminate()
-                    last_error = "process timed out"
-                    continue
-
-                if process.returncode == 0:
-                    return True
-
-                last_error = (stderr or "").strip() or f"exit_code={process.returncode}"
-            except Exception as exc:
-                last_error = str(exc)
-
-        logger.error("%s process failed: %s", provider, last_error)
-        return False
-
 
 speech_engine = SpeechEngine()

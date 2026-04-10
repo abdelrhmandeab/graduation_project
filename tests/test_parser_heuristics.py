@@ -92,22 +92,16 @@ class ParserHeuristicsTests(unittest.TestCase):
         self.assertEqual(parsed.intent, "VOICE_COMMAND")
         self.assertEqual(parsed.action, "wake_status")
 
-    def test_stt_backend_regex_huggingface(self):
-        parsed = parse_command("set speech backend to huggingface")
+    def test_stt_backend_keyword_faster_whisper(self):
+        parsed = parse_command("stt backend faster whisper")
         self.assertEqual(parsed.intent, "VOICE_COMMAND")
         self.assertEqual(parsed.action, "stt_backend_set")
-        self.assertEqual(parsed.args.get("backend"), "huggingface")
+        self.assertEqual(parsed.args.get("backend"), "faster_whisper")
 
     def test_stt_backend_status_keyword(self):
         parsed = parse_command("stt backend status")
         self.assertEqual(parsed.intent, "VOICE_COMMAND")
         self.assertEqual(parsed.action, "stt_backend_status")
-
-    def test_hf_profile_egyptian_keyword(self):
-        parsed = parse_command("hf profile egyptian")
-        self.assertEqual(parsed.intent, "VOICE_COMMAND")
-        self.assertEqual(parsed.action, "hf_profile_set")
-        self.assertEqual(parsed.args.get("profile"), "egyptian")
 
     def test_latency_mode_fast_keyword(self):
         parsed = parse_command("latency mode fast")

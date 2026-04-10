@@ -42,14 +42,8 @@ class SttEgyptianBenchmarkRuntimeABTests(unittest.TestCase):
             corpus_path.write_text(json.dumps(corpus, ensure_ascii=False, indent=2), encoding="utf-8")
 
             def fake_transcribe(audio_file, *, backend, on_partial=None, language_hint=None):
-                if backend == "huggingface":
-                    return {
-                        "text": "عايز اعرف اخبار البورصة",
-                        "language": "ar",
-                        "backend": "huggingface",
-                    }
                 return {
-                    "text": "عايز اعرف اخبار البورسة",
+                    "text": "عايز اعرف اخبار البورصة",
                     "language": "ar",
                     "backend": "faster_whisper",
                 }
@@ -61,15 +55,15 @@ class SttEgyptianBenchmarkRuntimeABTests(unittest.TestCase):
                 payload = run_stt_egyptian_benchmark(
                     corpus_path=str(corpus_path),
                     include_runtime_ab=True,
-                    runtime_backends="faster_whisper,huggingface",
+                    runtime_backends="faster_whisper",
                 )
 
         runtime_ab = dict(payload.get("runtime_ab") or {})
         self.assertTrue(runtime_ab.get("enabled"))
         self.assertTrue(runtime_ab.get("executed"))
         self.assertEqual(int(runtime_ab.get("audio_scenario_count") or 0), 1)
-        self.assertEqual(len(list(runtime_ab.get("setups") or [])), 2)
-        self.assertEqual(runtime_ab.get("recommendation", {}).get("setup_id"), "runtime_huggingface")
+        self.assertEqual(len(list(runtime_ab.get("setups") or [])), 1)
+        self.assertEqual(runtime_ab.get("recommendation", {}).get("setup_id"), "runtime_faster_whisper")
 
     def test_runtime_ab_skips_when_no_audio_cases(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -103,7 +97,7 @@ class SttEgyptianBenchmarkRuntimeABTests(unittest.TestCase):
             payload = run_stt_egyptian_benchmark(
                 corpus_path=str(corpus_path),
                 include_runtime_ab=True,
-                runtime_backends="faster_whisper,huggingface",
+                runtime_backends="faster_whisper",
             )
 
         runtime_ab = dict(payload.get("runtime_ab") or {})
@@ -111,7 +105,7 @@ class SttEgyptianBenchmarkRuntimeABTests(unittest.TestCase):
         self.assertFalse(runtime_ab.get("executed"))
         self.assertEqual(runtime_ab.get("reason"), "no_audio_scenarios_available")
 
-    def test_runtime_ab_prefers_stable_backend_when_other_backend_errors(self):
+    def test_runtime_ab_reports_transcription_errors(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
             corpus_path = root / "egyptian_runtime_pack.json"
@@ -145,13 +139,7 @@ class SttEgyptianBenchmarkRuntimeABTests(unittest.TestCase):
             corpus_path.write_text(json.dumps(corpus, ensure_ascii=False, indent=2), encoding="utf-8")
 
             def fake_transcribe(audio_file, *, backend, on_partial=None, language_hint=None):
-                if backend == "huggingface":
-                    raise RuntimeError("HF runtime backend is unavailable in the active Python environment.")
-                return {
-                    "text": "عايز اعرف اخبار البورصة",
-                    "language": "ar",
-                    "backend": "faster_whisper",
-                }
+                raise RuntimeError("runtime backend unavailable")
 
             with patch(
                 "core.stt_egyptian_benchmark.stt_runtime.transcribe_backend_direct_with_meta",
@@ -160,13 +148,13 @@ class SttEgyptianBenchmarkRuntimeABTests(unittest.TestCase):
                 payload = run_stt_egyptian_benchmark(
                     corpus_path=str(corpus_path),
                     include_runtime_ab=True,
-                    runtime_backends="faster_whisper,huggingface",
+                    runtime_backends="faster_whisper",
                 )
 
         runtime_ab = dict(payload.get("runtime_ab") or {})
-        recommendation = dict(runtime_ab.get("recommendation") or {})
-        self.assertEqual(recommendation.get("setup_id"), "runtime_faster_whisper")
-        self.assertGreaterEqual(float(recommendation.get("success_rate") or 0.0), 1.0)
+        setups = list(runtime_ab.get("setups") or [])
+        self.assertEqual(len(setups), 1)
+        self.assertEqual(int(setups[0].get("error_count") or 0), 1)
 
 
 if __name__ == "__main__":

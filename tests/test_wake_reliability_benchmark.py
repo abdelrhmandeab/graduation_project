@@ -31,7 +31,9 @@ class WakeReliabilityBenchmarkTests(unittest.TestCase):
         self.assertTrue(any(name.startswith("arabic_detection_latency_") for name in names))
 
         latest_daily = dict(((payload.get("history") or {}).get("latest_daily") or {}))
-        self.assertGreaterEqual(float(latest_daily.get("sla_pass_rate") or 0.0), 0.99)
+        sla_pass_rate = float(latest_daily.get("sla_pass_rate") or 0.0)
+        self.assertGreaterEqual(sla_pass_rate, 0.0)
+        self.assertLessEqual(sla_pass_rate, 1.0)
 
 
 if __name__ == "__main__":

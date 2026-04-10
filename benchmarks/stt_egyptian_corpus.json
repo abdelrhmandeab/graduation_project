@@ -16,13 +16,6 @@
       "label": "faster-whisper base (beam=2, cpu)",
       "backend": "faster_whisper",
       "model": "base"
-    },
-    {
-      "id": "hf_small_manual_cpu",
-      "label": "huggingface whisper-small manual (cpu)",
-      "backend": "huggingface",
-      "model": "openai/whisper-small",
-      "mode": "manual"
     }
   ],
   "scenarios": [
@@ -33,8 +26,7 @@
       "expected_text": "عايز افتح الكالكوليتر دلوقتي",
       "setup_predictions": {
         "fw_tiny_cpu": {"transcript": "عاوز افتح الكالكليتر دلوقتى", "latency_ms": 350},
-        "fw_base_cpu": {"transcript": "عايز افتح الكالكوليتر دلوقتي", "latency_ms": 500},
-        "hf_small_manual_cpu": {"transcript": "عايز افتح الكالكوليتر دلوقتي", "latency_ms": 810}
+        "fw_base_cpu": {"transcript": "عايز افتح الكالكوليتر دلوقتي", "latency_ms": 500}
       }
     },
     {
@@ -45,8 +37,7 @@
       "audio_file": "audio/egy_small/egy_open_notepad.mp3",
       "setup_predictions": {
         "fw_tiny_cpu": {"transcript": "افتحلي نوتباد بسرعه", "latency_ms": 360},
-        "fw_base_cpu": {"transcript": "افتح لي نوتباد بسرعة", "latency_ms": 520},
-        "hf_small_manual_cpu": {"transcript": "افتح لي نوت باد بسرعة", "latency_ms": 840}
+        "fw_base_cpu": {"transcript": "افتح لي نوتباد بسرعة", "latency_ms": 520}
       }
     },
     {
@@ -56,8 +47,7 @@
       "expected_text": "شغل لي سبوتيفاي",
       "setup_predictions": {
         "fw_tiny_cpu": {"transcript": "شغللي سبوتفي", "latency_ms": 370},
-        "fw_base_cpu": {"transcript": "شغل لي سبوتيفاي", "latency_ms": 510},
-        "hf_small_manual_cpu": {"transcript": "شغل لي سبوتيفاي", "latency_ms": 790}
+        "fw_base_cpu": {"transcript": "شغل لي سبوتيفاي", "latency_ms": 510}
       }
     },
     {
@@ -67,8 +57,7 @@
       "expected_text": "اطفئ الواي فاي حالا",
       "setup_predictions": {
         "fw_tiny_cpu": {"transcript": "اطفي الواى فاى حالا", "latency_ms": 390},
-        "fw_base_cpu": {"transcript": "اطفي الواي فاي حالا", "latency_ms": 560},
-        "hf_small_manual_cpu": {"transcript": "اطفئ الواي فاي حالا", "latency_ms": 880}
+        "fw_base_cpu": {"transcript": "اطفي الواي فاي حالا", "latency_ms": 560}
       }
     },
     {
@@ -78,8 +67,7 @@
       "expected_text": "شغل البلوتوث",
       "setup_predictions": {
         "fw_tiny_cpu": {"transcript": "شغل البلوتس", "latency_ms": 330},
-        "fw_base_cpu": {"transcript": "شغل البلوتوث", "latency_ms": 480},
-        "hf_small_manual_cpu": {"transcript": "شغل البلوتوث", "latency_ms": 760}
+        "fw_base_cpu": {"transcript": "شغل البلوتوث", "latency_ms": 480}
       }
     },
     {
@@ -89,8 +77,7 @@
       "expected_text": "اقفل الاشعارات",
       "setup_predictions": {
         "fw_tiny_cpu": {"transcript": "اقفل الاشعرات", "latency_ms": 340},
-        "fw_base_cpu": {"transcript": "اقفل الاشعارات", "latency_ms": 500},
-        "hf_small_manual_cpu": {"transcript": "اقفل الاشعارات", "latency_ms": 800}
+        "fw_base_cpu": {"transcript": "اقفل الاشعارات", "latency_ms": 500}
       }
     },
     {
@@ -100,8 +87,7 @@
       "expected_text": "خد سكرين شوت",
       "setup_predictions": {
         "fw_tiny_cpu": {"transcript": "خد سكرينشوت", "latency_ms": 320},
-        "fw_base_cpu": {"transcript": "خد سكرين شوت", "latency_ms": 470},
-        "hf_small_manual_cpu": {"transcript": "خد سكرين شوت", "latency_ms": 770}
+        "fw_base_cpu": {"transcript": "خد سكرين شوت", "latency_ms": 470}
       }
     },
     {
@@ -111,8 +97,7 @@
       "expected_text": "دور لي على ملف التقرير في الداونلودز",
       "setup_predictions": {
         "fw_tiny_cpu": {"transcript": "دورلي على ملف التقرير فى الدونلودز", "latency_ms": 430},
-        "fw_base_cpu": {"transcript": "دور لي على ملف التقرير في الداونلودز", "latency_ms": 610},
-        "hf_small_manual_cpu": {"transcript": "دور لي على ملف التقرير في الداونلودز", "latency_ms": 980}
+        "fw_base_cpu": {"transcript": "دور لي على ملف التقرير في الداونلودز", "latency_ms": 610}
       }
     },
     {
@@ -122,8 +107,7 @@
       "expected_text": "افتح جوجل كروم",
       "setup_predictions": {
         "fw_tiny_cpu": {"transcript": "افتح جوجلكروم", "latency_ms": 350},
-        "fw_base_cpu": {"transcript": "افتح جوجل كروم", "latency_ms": 500},
-        "hf_small_manual_cpu": {"transcript": "افتح جوجل كروم", "latency_ms": 820}
+        "fw_base_cpu": {"transcript": "افتح جوجل كروم", "latency_ms": 500}
       }
     },
     {
@@ -133,8 +117,7 @@
       "expected_text": "روح على الاعدادات",
       "setup_predictions": {
         "fw_tiny_cpu": {"transcript": "روح على الاعدادت", "latency_ms": 350},
-        "fw_base_cpu": {"transcript": "روح على الاعدادات", "latency_ms": 510},
-        "hf_small_manual_cpu": {"transcript": "روح على الاعدادات", "latency_ms": 840}
+        "fw_base_cpu": {"transcript": "روح على الاعدادات", "latency_ms": 510}
       }
     },
     {
@@ -144,8 +127,7 @@
       "expected_text": "وطي السطوع شوية",
       "setup_predictions": {
         "fw_tiny_cpu": {"transcript": "وطي السطوع شويه", "latency_ms": 340},
-        "fw_base_cpu": {"transcript": "وطي السطوع شوية", "latency_ms": 490},
-        "hf_small_manual_cpu": {"transcript": "وطي السطوع شوية", "latency_ms": 780}
+        "fw_base_cpu": {"transcript": "وطي السطوع شوية", "latency_ms": 490}
       }
     },
     {
@@ -155,8 +137,7 @@
       "expected_text": "زود الصوت شوية",
       "setup_predictions": {
         "fw_tiny_cpu": {"transcript": "زود الصوت شويه", "latency_ms": 340},
-        "fw_base_cpu": {"transcript": "زود الصوت شوية", "latency_ms": 480},
-        "hf_small_manual_cpu": {"transcript": "زود الصوت شوية", "latency_ms": 760}
+        "fw_base_cpu": {"transcript": "زود الصوت شوية", "latency_ms": 480}
       }
     },
     {
@@ -167,8 +148,7 @@
       "audio_file": "audio/egy_small/egy_weather_today.mp3",
       "setup_predictions": {
         "fw_tiny_cpu": {"transcript": "عاوز اعرف الجو عامل ايه النهارده", "latency_ms": 410},
-        "fw_base_cpu": {"transcript": "عاوز اعرف الجو عامل ايه النهاردة", "latency_ms": 600},
-        "hf_small_manual_cpu": {"transcript": "عايز اعرف الجو عامل ايه النهاردة", "latency_ms": 1020}
+        "fw_base_cpu": {"transcript": "عاوز اعرف الجو عامل ايه النهاردة", "latency_ms": 600}
       }
     },
     {
@@ -179,8 +159,7 @@
       "audio_file": "audio/egy_small/egy_news_today.mp3",
       "setup_predictions": {
         "fw_tiny_cpu": {"transcript": "هاتلي اخبار النهارده", "latency_ms": 380},
-        "fw_base_cpu": {"transcript": "هات لي اخبار النهارده", "latency_ms": 540},
-        "hf_small_manual_cpu": {"transcript": "هات لي اخبار النهاردة", "latency_ms": 910}
+        "fw_base_cpu": {"transcript": "هات لي اخبار النهارده", "latency_ms": 540}
       }
     },
     {
@@ -190,8 +169,7 @@
       "expected_text": "مش لاقي الملف اللي في الديسكتوب",
       "setup_predictions": {
         "fw_tiny_cpu": {"transcript": "مش لاقى الملف اللى فى الديسكتوب", "latency_ms": 420},
-        "fw_base_cpu": {"transcript": "مش لاقي الملف اللي في الديسكتوب", "latency_ms": 610},
-        "hf_small_manual_cpu": {"transcript": "مش لاقي الملف اللي في الديسكتوب", "latency_ms": 1010}
+        "fw_base_cpu": {"transcript": "مش لاقي الملف اللي في الديسكتوب", "latency_ms": 610}
       }
     },
     {
@@ -201,8 +179,7 @@
       "expected_text": "اقفل التطبيق ده دلوقتي",
       "setup_predictions": {
         "fw_tiny_cpu": {"transcript": "اقفل التطبيق ده دلوقتى", "latency_ms": 370},
-        "fw_base_cpu": {"transcript": "اقفل التطبيق ده دلوقتي", "latency_ms": 540},
-        "hf_small_manual_cpu": {"transcript": "اقفل التطبيق ده دلوقتي", "latency_ms": 900}
+        "fw_base_cpu": {"transcript": "اقفل التطبيق ده دلوقتي", "latency_ms": 540}
       }
     },
     {
@@ -212,8 +189,7 @@
       "expected_text": "انا رايح الشغل متاخر النهاردة",
       "setup_predictions": {
         "fw_tiny_cpu": {"transcript": "انا رايح الشغل متاخر النهارده", "latency_ms": 390},
-        "fw_base_cpu": {"transcript": "انا رايح الشغل متاخر النهاردة", "latency_ms": 560},
-        "hf_small_manual_cpu": {"transcript": "انا رايح الشغل متاخر النهاردة", "latency_ms": 940}
+        "fw_base_cpu": {"transcript": "انا رايح الشغل متاخر النهاردة", "latency_ms": 560}
       }
     },
     {
@@ -223,9 +199,9 @@
       "expected_text": "عايز قهوة سادة من غير سكر",
       "setup_predictions": {
         "fw_tiny_cpu": {"transcript": "عاوز قهوه ساده من غير سكر", "latency_ms": 400},
-        "fw_base_cpu": {"transcript": "عاوز قهوة سادة من غير سكر", "latency_ms": 580},
-        "hf_small_manual_cpu": {"transcript": "عايز قهوة سادة من غير سكر", "latency_ms": 960}
+        "fw_base_cpu": {"transcript": "عاوز قهوة سادة من غير سكر", "latency_ms": 580}
       }
     }
   ]
 }
+

@@ -8,8 +8,8 @@ This document defines the canonical intent and entity contract used by parser, c
 |---|---|---|---|
 | `OBSERVABILITY_REPORT` | `""` | Show observability dashboard | `observability` |
 | `BENCHMARK_COMMAND` | `run`, `resilience_demo`, `wake_reliability`, `stt_reliability`, `tts_quality` | Run benchmark/resilience/STT/TTS suites | `benchmark run` |
-| `PERSONA_COMMAND` | `status`, `list`, `set`, `voice_status`, `set_profile_clone_enabled`, `set_profile_clone_provider`, `set_profile_clone_reference` | Persona and persona-voice mapping controls | `persona set formal` |
-| `VOICE_COMMAND` | `status`, `diagnostic`, `clone_on`, `clone_off`, `set_provider`, `set_reference`, `speech_on`, `speech_off`, `interrupt`, `stt_profile_set`, `stt_profile_status`, `hf_profile_set`, `hf_profile_status`, `voice_quality_set`, `voice_quality_status`, `audio_ux_profile_set`, `audio_ux_profiles`, `audio_ux_status`, `audio_ux_mic_threshold_set`, `audio_ux_wake_threshold_set`, `audio_ux_wake_gain_set`, `audio_ux_pause_scale_set`, `audio_ux_rate_offset_set`, `wake_status`, `wake_mode_set`, `wake_triggers_add`, `wake_triggers_remove` | Runtime voice/STT/TTS/audio UX controls | `voice diagnostic` |
+| `PERSONA_COMMAND` | `status`, `list`, `set` | Persona profile controls | `persona set formal` |
+| `VOICE_COMMAND` | `status`, `diagnostic`, `speech_on`, `speech_off`, `interrupt`, `stt_profile_set`, `stt_profile_status`, `stt_backend_set`, `stt_backend_status`, `voice_quality_set`, `voice_quality_status`, `audio_ux_profile_set`, `audio_ux_profiles`, `audio_ux_status`, `audio_ux_mic_threshold_set`, `audio_ux_wake_threshold_set`, `audio_ux_wake_gain_set`, `audio_ux_pause_scale_set`, `audio_ux_rate_offset_set`, `wake_status`, `wake_mode_set`, `wake_triggers_add`, `wake_triggers_remove` | Runtime voice/STT/TTS/audio UX controls | `voice diagnostic` |
 | `KNOWLEDGE_BASE_COMMAND` | `status`, `quality`, `clear`, `retrieval_on`, `retrieval_off`, `sync_dir`, `add_file`, `index_dir`, `search` | Local knowledge base operations | `kb search policy` |
 | `MEMORY_COMMAND` | `status`, `show`, `clear`, `on`, `off` | Session memory controls | `memory status` |
 | `DEMO_MODE` | `on`, `off`, `status` | Demo-mode output wrapper | `demo mode on` |
@@ -37,7 +37,7 @@ This document defines the canonical intent and entity contract used by parser, c
 | `app_name` | string | `OS_APP_OPEN`, `OS_APP_CLOSE` | Alias/canonical/executable candidate |
 | `filename` | string | `OS_FILE_SEARCH` | Partial or full filename |
 | `search_path` | string\|null | `OS_FILE_SEARCH` | Optional search root |
-| `path` | string | navigation/KB/voice-reference operations | File/folder path |
+| `path` | string | navigation/KB operations | File/folder path |
 | `source` | string | `move_item`, `rename_item` | Source path |
 | `destination` | string | `move_item` | Destination path |
 | `new_name` | string | `rename_item` | New filename |
@@ -45,7 +45,6 @@ This document defines the canonical intent and entity contract used by parser, c
 | `token` | hex(6) | `OS_CONFIRMATION` | Confirmation token |
 | `second_factor` | string\|null | `OS_CONFIRMATION` | PIN/passphrase for high-risk actions |
 | `profile` | string | persona/voice profile actions | persona name, `quiet/noisy`, `arabic/english`, or audio UX profile |
-| `provider` | string | clone provider actions | `voicecraft` |
 | `mode` | string | quality/profile actions | e.g. `natural`, `standard` |
 | `trigger` | string | `wake_triggers_add`, `wake_triggers_remove` | Arabic/English wake phrase text |
 | `value` | float\|int\|string | tuning actions | threshold, gain, pause scale, rate offset |

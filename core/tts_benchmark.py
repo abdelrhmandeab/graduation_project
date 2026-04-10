@@ -8,9 +8,6 @@ from pathlib import Path
 from core.config import TTS_BENCHMARK_CORPUS_FILE
 
 
-_HF_COMPONENTS = {}
-
-
 def _default_tts_corpus_pack():
     return {
         "name": "tts_quality_pack_v1",
@@ -154,14 +151,12 @@ def _normalize_language(value):
 def _normalize_backend(value):
     raw = str(value or "auto").strip().lower()
     aliases = {
-        "hf": "huggingface",
-        "transformers": "huggingface",
         "edge": "edge_tts",
         "edgetts": "edge_tts",
         "kokoro_tts": "kokoro",
     }
     normalized = aliases.get(raw, raw)
-    if normalized not in {"auto", "huggingface", "edge_tts", "kokoro"}:
+    if normalized not in {"auto", "edge_tts", "kokoro"}:
         return "auto"
     return normalized
 
@@ -280,12 +275,6 @@ def _run_async(coroutine):
 def _backend_available(backend):
     normalized = _normalize_backend(backend)
     try:
-        if normalized == "huggingface":
-            import torch  # type: ignore
-            from transformers import AutoTokenizer, VitsModel  # type: ignore
-
-            _ = torch, AutoTokenizer, VitsModel
-            return True
         if normalized == "edge_tts":
             import edge_tts  # type: ignore
             from scipy.io import wavfile  # type: ignore
@@ -307,7 +296,7 @@ def _choose_auto_backend(preferred=None):
     candidates = []
     if preferred_backend != "auto":
         candidates.append(preferred_backend)
-    candidates.extend(["edge_tts", "kokoro", "huggingface"])
+    candidates.extend(["edge_tts", "kokoro"])
 
     seen = set()
     for backend in candidates:
@@ -317,43 +306,6 @@ def _choose_auto_backend(preferred=None):
         if _backend_available(backend):
             return backend
     return None
-
-
-def _synthesize_huggingface(text, language):
-    import torch  # type: ignore
-    from transformers import AutoTokenizer, VitsModel  # type: ignore
-
-    model_id = "facebook/mms-tts-ara" if language == "ar" else "facebook/mms-tts-eng"
-    cache_key = model_id
-
-    component = _HF_COMPONENTS.get(cache_key)
-    if component is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        model = VitsModel.from_pretrained(model_id).to(device)
-        model.eval()
-        component = {
-            "tokenizer": tokenizer,
-            "model": model,
-            "device": device,
-        }
-        _HF_COMPONENTS[cache_key] = component
-
-    tokenizer = component["tokenizer"]
-    model = component["model"]
-    device = component["device"]
-
-    started = time.perf_counter()
-    inputs = tokenizer(text, return_tensors="pt")
-    if hasattr(inputs, "to"):
-        inputs = inputs.to(device)
-    with torch.no_grad():
-        output = model(**inputs)
-    latency_ms = (time.perf_counter() - started) * 1000.0
-
-    waveform = output.waveform.squeeze().detach().cpu().numpy().astype("float32", copy=False)
-    sample_rate = int(getattr(model.config, "sampling_rate", 16000) or 16000)
-    return waveform, sample_rate, latency_ms
 
 
 def _synthesize_edge_tts(text, language):
@@ -442,8 +394,6 @@ def _synthesize_kokoro(text, language):
 
 
 def _synthesize_case(text, language, backend):
-    if backend == "huggingface":
-        return _synthesize_huggingface(text, language)
     if backend == "edge_tts":
         return _synthesize_edge_tts(text, language)
     if backend == "kokoro":
@@ -472,12 +422,12 @@ def _run_case(case, *, mode, requested_backend):
     if backend_hint == "auto":
         backend_initial = _choose_auto_backend(preferred=backend_from_case)
         if backend_initial is None:
-            backend_initial = "huggingface"
+            backend_initial = "edge_tts"
     else:
         backend_initial = backend_hint
 
-    if backend_initial not in {"huggingface", "edge_tts", "kokoro"}:
-        backend_initial = "huggingface"
+    if backend_initial not in {"edge_tts", "kokoro"}:
+        backend_initial = "edge_tts"
 
     fallback_attempted = False
     fallback_used = False
@@ -487,7 +437,7 @@ def _run_case(case, *, mode, requested_backend):
     candidate_backends = [backend_initial]
     candidate_backends.extend(
         backend_name
-        for backend_name in ["edge_tts", "kokoro", "huggingface"]
+        for backend_name in ["edge_tts", "kokoro"]
         if backend_name != backend_initial
     )
 

@@ -7,7 +7,7 @@ Jarvis is designed for local-first Windows deployment.
 Components:
 - Python runtime
 - Local model runtime (Ollama)
-- Optional speech backends (faster-whisper, Hugging Face, pyttsx3)
+- Speech stack (faster-whisper, pyttsx3, edge-tts, kokoro)
 
 ## 2. Initial Provisioning
 
@@ -15,12 +15,6 @@ Run setup script:
 
 ```powershell
 ./scripts/setup_windows.ps1
-```
-
-Optional speech extras:
-
-```powershell
-./scripts/setup_windows.ps1 -InstallSpeechExtras
 ```
 
 ## 3. Environment Configuration
@@ -31,9 +25,8 @@ Important keys:
 - JARVIS_SECOND_FACTOR_PIN
 - JARVIS_SECOND_FACTOR_PASSPHRASE
 - JARVIS_STT_BACKEND
-- JARVIS_STT_HF_MODEL
 - JARVIS_TTS_BACKEND
-- JARVIS_TTS_HF_MODEL
+- JARVIS_TTS_QUALITY_MODE
 
 Safety keys:
 - JARVIS_SECOND_FACTOR_MAX_ATTEMPTS_PER_TOKEN

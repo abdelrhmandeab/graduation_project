@@ -525,7 +525,6 @@ _KEYWORD_TABLE = [
     # Persona
     ({"persona status", "persona show"}, "PERSONA_COMMAND", "status"),
     ({"persona list", "list personas"}, "PERSONA_COMMAND", "list"),
-    ({"persona voice status"}, "PERSONA_COMMAND", "voice_status"),
     ({"assistant mode", "assistant mode on"}, "PERSONA_COMMAND", "set", {"profile": "assistant"}),
     # Voice
     ({"voice status", "speech status", "حالة الصوت", "حالة النطق"}, "VOICE_COMMAND", "status"),
@@ -600,23 +599,8 @@ _KEYWORD_TABLE = [
     ({"stt profile status", "speech profile status", "voice stt profile status", "حالة ملف الاستماع"}, "VOICE_COMMAND", "stt_profile_status"),
     ({"stt profile quiet", "speech profile quiet", "ملف الاستماع هادئ", "وضع الاستماع هادئ"}, "VOICE_COMMAND", "stt_profile_set", {"profile": "quiet"}),
     ({"stt profile noisy", "speech profile noisy", "ملف الاستماع ضوضاء", "وضع الاستماع ضوضاء"}, "VOICE_COMMAND", "stt_profile_set", {"profile": "noisy"}),
-    ({"voice clone on", "enable voice clone"}, "VOICE_COMMAND", "clone_on"),
-    ({"voice clone off", "disable voice clone"}, "VOICE_COMMAND", "clone_off"),
-    ({"hf profile status", "huggingface profile status", "voice hf profile status"}, "VOICE_COMMAND", "hf_profile_status"),
-    (
-        {
-            "hf profile egyptian",
-            "huggingface profile egyptian",
-            "speech hf profile egyptian",
-        },
-        "VOICE_COMMAND",
-        "hf_profile_set",
-        {"profile": "egyptian"},
-    ),
-    ({"hf profile english", "huggingface profile english", "speech hf profile english"}, "VOICE_COMMAND", "hf_profile_set", {"profile": "english"}),
     ({"stt backend status", "speech backend status", "voice stt backend status", "حالة محرك الاستماع"}, "VOICE_COMMAND", "stt_backend_status"),
     ({"stt backend whisper", "stt backend faster whisper", "set stt backend faster whisper", "set stt backend faster_whisper"}, "VOICE_COMMAND", "stt_backend_set", {"backend": "faster_whisper"}),
-    ({"stt backend huggingface", "stt backend hf", "set stt backend huggingface", "set stt backend hf"}, "VOICE_COMMAND", "stt_backend_set", {"backend": "huggingface"}),
     ({"wake triggers", "wake triggers list", "list wake triggers", "wake status", "wake mode status"}, "VOICE_COMMAND", "wake_status"),
     ({"stop speaking", "interrupt speech", "be quiet", "stop talking"}, "VOICE_COMMAND", "interrupt"),
     ({"speech on", "enable speech"}, "VOICE_COMMAND", "speech_on"),
@@ -717,27 +701,6 @@ def _try_keyword_table(normalized, raw):
 _REGEX_TABLE = [
     # Persona
     (
-        re.compile(r"^persona voice clone\s+([a-z0-9_-]+)\s+(on|off)$"),
-        False,
-        "PERSONA_COMMAND",
-        "set_profile_clone_enabled",
-        lambda m: {"profile": m.group(1), "enabled": m.group(2) == "on"},
-    ),
-    (
-        re.compile(r"^persona voice provider\s+([a-z0-9_-]+)\s+(voicecraft)$"),
-        False,
-        "PERSONA_COMMAND",
-        "set_profile_clone_provider",
-        lambda m: {"profile": m.group(1), "provider": m.group(2)},
-    ),
-    (
-        re.compile(r"^persona voice reference\s+([a-z0-9_-]+)\s+(.+)$", re.IGNORECASE),
-        True,
-        "PERSONA_COMMAND",
-        "set_profile_clone_reference",
-        lambda m: {"profile": m.group(1).strip().lower(), "path": m.group(2).strip()},
-    ),
-    (
         re.compile(r"^persona set\s+([a-z0-9_-]+)$"),
         False,
         "PERSONA_COMMAND",
@@ -745,13 +708,6 @@ _REGEX_TABLE = [
         lambda m: {"profile": m.group(1)},
     ),
     # Voice
-    (
-        re.compile(r"^voice clone provider\s+(voicecraft)$"),
-        False,
-        "VOICE_COMMAND",
-        "set_provider",
-        lambda m: {"provider": m.group(1)},
-    ),
     (
         re.compile(r"^(?:set\s+)?(?:voice\s+)?(?:stt|speech)\s+profile(?:\s+to)?\s+(quiet|noisy)(?:\s+room)?$"),
         False,
@@ -761,7 +717,7 @@ _REGEX_TABLE = [
     ),
     (
         re.compile(
-            r"^(?:set\s+)?(?:(?:voice|speech|stt)\s+)?(?:stt|speech)\s+backend(?:\s+to)?\s+(faster(?:[_\s-]?whisper)?|whisper|huggingface|hf)$",
+            r"^(?:set\s+)?(?:(?:voice|speech|stt)\s+)?(?:stt|speech)\s+backend(?:\s+to)?\s+(faster(?:[_\s-]?whisper)?|whisper)$",
             re.IGNORECASE,
         ),
         True,
@@ -778,16 +734,6 @@ _REGEX_TABLE = [
         "VOICE_COMMAND",
         "stt_backend_status",
         lambda _m: {},
-    ),
-    (
-        re.compile(
-            r"^(?:set\s+)?(?:(?:voice|speech)\s+)?(?:hf|huggingface)\s+profile(?:\s+to)?\s+(egyptian|english|eg|en|مصري|مصرى|انجليزي|الانجليزية|الإنجليزية)(?:\s+mode)?$",
-            re.IGNORECASE,
-        ),
-        True,
-        "VOICE_COMMAND",
-        "hf_profile_set",
-        lambda m: {"profile": m.group(1)},
     ),
     (
         re.compile(
@@ -948,13 +894,6 @@ _REGEX_TABLE = [
         "VOICE_COMMAND",
         "audio_ux_rate_offset_set",
         lambda m: {"value": m.group(1)},
-    ),
-    (
-        re.compile(r"^voice clone reference\s+(.+)$", re.IGNORECASE),
-        True,
-        "VOICE_COMMAND",
-        "set_reference",
-        lambda m: {"path": m.group(1).strip()},
     ),
     # Memory
     (
