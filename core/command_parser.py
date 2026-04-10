@@ -484,44 +484,6 @@ def _normalize_language_value(value: str):
 _KEYWORD_TABLE = [
     # Observability
     ({"observability", "observability report", "show observability", "dashboard"}, "OBSERVABILITY_REPORT", ""),
-    # Benchmark
-    ({"benchmark run", "run benchmark", "benchmark quick"}, "BENCHMARK_COMMAND", "run"),
-    ({"resilience demo", "run resilience demo", "failure demo"}, "BENCHMARK_COMMAND", "resilience_demo"),
-    (
-        {
-            "benchmark wake",
-            "run wake benchmark",
-            "wake benchmark",
-            "benchmark wake reliability",
-            "wake reliability benchmark",
-        },
-        "BENCHMARK_COMMAND",
-        "wake_reliability",
-    ),
-    (
-        {
-            "benchmark stt",
-            "run stt benchmark",
-            "stt benchmark",
-            "benchmark speech to text",
-            "speech to text benchmark",
-            "benchmark wer",
-        },
-        "BENCHMARK_COMMAND",
-        "stt_reliability",
-    ),
-    (
-        {
-            "benchmark tts",
-            "run tts benchmark",
-            "tts benchmark",
-            "benchmark speech synthesis",
-            "speech synthesis benchmark",
-            "benchmark tts quality",
-        },
-        "BENCHMARK_COMMAND",
-        "tts_quality",
-    ),
     # Persona
     ({"persona status", "persona show"}, "PERSONA_COMMAND", "status"),
     ({"persona list", "list personas"}, "PERSONA_COMMAND", "list"),

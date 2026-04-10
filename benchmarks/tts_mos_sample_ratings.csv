@@ -1,7 +1,0 @@
-scenario_id,language,backend,text,audio_file,rater_id,naturalness,clarity,pronunciation,overall,notes
-en_status_overview,en,edge_tts,System status is healthy and all benchmark checks passed.,artifacts/en_status_overview_edge.wav,rater_a,4,5,4,,clear and natural
-en_status_overview,en,edge_tts,System status is healthy and all benchmark checks passed.,artifacts/en_status_overview_edge.wav,rater_b,5,4,5,,slightly fast pacing
-en_short_ack,en,kokoro,Done. Anything else?,artifacts/en_short_ack_kokoro.wav,rater_a,4,4,4,,short but clear
-en_short_ack,en,kokoro,Done. Anything else?,artifacts/en_short_ack_kokoro.wav,rater_b,4,5,4,,good clarity
-ar_status_overview,ar,edge_tts,حالة النظام ممتازة وجميع اختبارات الاعتمادية نجحت.,artifacts/ar_status_overview_edge.wav,rater_a,4,4,4,,واضح وطبيعي
-ar_status_overview,ar,edge_tts,حالة النظام ممتازة وجميع اختبارات الاعتمادية نجحت.,artifacts/ar_status_overview_edge.wav,rater_b,5,4,4,,تحسن بسيط مطلوب في السرعة

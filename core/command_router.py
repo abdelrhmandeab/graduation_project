@@ -36,7 +36,7 @@ from core.config import (
 )
 from core.demo_mode import is_enabled as is_demo_mode_enabled
 from core.demo_mode import set_enabled as set_demo_mode
-from core.handlers import audit, batch, benchmark, file_navigation
+from core.handlers import audit, batch, file_navigation
 from core.handlers import job_queue as job_queue_handler
 from core.handlers import knowledge_base, memory, persona, policy, search_index, voice
 from core.intent_confidence import (
@@ -91,7 +91,6 @@ _PARSER_FASTPATH_INTENTS = {
     "PERSONA_COMMAND",
     "POLICY_COMMAND",
     "SEARCH_INDEX_COMMAND",
-    "BENCHMARK_COMMAND",
     "AUDIT_VERIFY",
     "AUDIT_RESEAL",
     "AUDIT_LOG_REPORT",
@@ -676,7 +675,6 @@ _PERMISSION_MAP = {
     "KNOWLEDGE_BASE_COMMAND": "knowledge_base",
     "MEMORY_COMMAND": "memory",
     "OBSERVABILITY_REPORT": "observability",
-    "BENCHMARK_COMMAND": "benchmark",
 }
 
 
@@ -1324,7 +1322,6 @@ def _should_store_turn(parsed, response_text):
         "AUDIT_LOG_REPORT",
         "AUDIT_VERIFY",
         "AUDIT_RESEAL",
-        "BENCHMARK_COMMAND",
     }:
         return False
     return True
@@ -1870,7 +1867,6 @@ def _execute_job_command(command_text):
         "OS_CONFIRMATION",
         "OS_SYSTEM_COMMAND",
         "VOICE_COMMAND",
-        "BENCHMARK_COMMAND",
         "AUDIT_RESEAL",
         "OS_APP_CLOSE",
     }:
@@ -2007,9 +2003,6 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True)
 
     if parsed.intent == "OBSERVABILITY_REPORT":
         return True, metrics.format_observability_report(), {}
-
-    if parsed.intent == "BENCHMARK_COMMAND":
-        return benchmark.handle(parsed, route_command)
 
     if parsed.intent == "POLICY_COMMAND":
         return policy.handle(parsed)
