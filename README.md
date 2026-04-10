@@ -19,7 +19,7 @@ Recommended baseline keys:
 ```env
 JARVIS_STT_BACKEND=faster_whisper
 JARVIS_WHISPER_MODEL=base
-JARVIS_TTS_BACKEND=edge_tts
+JARVIS_TTS_BACKEND=auto
 JARVIS_TTS_QUALITY_MODE=natural
 JARVIS_TTS_EDGE_VOICE=en-US-AriaNeural
 JARVIS_TTS_EDGE_ARABIC_VOICE=ar-EG-SalmaNeural
@@ -29,6 +29,7 @@ JARVIS_LLM_MODEL=qwen2.5:1.5b
 
 Notes:
 - `JARVIS_TTS_BACKEND` supports `edge_tts`, `pyttsx3`, `auto`, and `console`.
+- `auto` is recommended for conservative setups: pyttsx3 works offline by default, while edge-tts is used when available.
 - Arabic wake triggers and Arabic TTS tuning are enabled by default.
 - If audio/wake dependencies are unavailable, orchestrator falls back to text mode.
 

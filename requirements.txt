@@ -16,15 +16,11 @@ openwakeword==0.6.0
 
 # Text-to-speech
 pyttsx3==2.99
-edge-tts>=6.1.12
+# Optional neural TTS (edge); runtime falls back to pyttsx3 when missing
+# edge-tts>=6.1.12
 
 # System monitoring
 psutil==7.2.2
 
 # HTTP (used by ollama client & general networking)
 httpx==0.28.1
-
-# Optional knowledge-base extras (only for semantic/PDF indexing enhancements)
-# faiss-cpu>=1.8.0
-# sentence-transformers>=3.0.0
-# pypdf>=5.0.0

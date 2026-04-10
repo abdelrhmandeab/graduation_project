@@ -191,7 +191,7 @@ APP_RESOLUTION_AVAILABLE_BONUS = _env_float("JARVIS_APP_AVAILABLE_BONUS", 0.03)
 
 # Speech / TTS
 TTS_ENABLED = True
-TTS_DEFAULT_BACKEND = _env("JARVIS_TTS_BACKEND", "edge_tts")  # auto | console | pyttsx3 | edge_tts
+TTS_DEFAULT_BACKEND = _env("JARVIS_TTS_BACKEND", "auto")  # auto | console | pyttsx3 | edge_tts
 TTS_QUALITY_MODE = _env("JARVIS_TTS_QUALITY_MODE", "natural")  # natural | standard
 TTS_EDGE_VOICE = _env("JARVIS_TTS_EDGE_VOICE", "en-US-AriaNeural")
 TTS_EDGE_RATE = _env("JARVIS_TTS_EDGE_RATE", "+0%")

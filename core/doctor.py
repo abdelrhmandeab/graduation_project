@@ -15,6 +15,9 @@ REQUIRED_MODULES = (
     "openwakeword",
     "faster_whisper",
     "pyttsx3",
+)
+
+OPTIONAL_MODULES = (
     "edge_tts",
 )
 
@@ -39,6 +42,18 @@ def collect_diagnostics(*, include_model_load_checks=False):
                 "name": f"python_module:{module_name}",
                 "ok": bool(ok),
                 "details": details,
+                "required": True,
+            }
+        )
+
+    for module_name in OPTIONAL_MODULES:
+        ok, details = _check_module(module_name)
+        checks.append(
+            {
+                "name": f"python_module_optional:{module_name}",
+                "ok": True,
+                "details": details if ok else "missing (optional)",
+                "required": False,
             }
         )
 
@@ -135,11 +150,15 @@ def collect_diagnostics(*, include_model_load_checks=False):
         )
 
     ok_count = sum(1 for row in checks if row.get("ok"))
+    required_checks = [row for row in checks if row.get("required", True)]
+    required_ok_count = sum(1 for row in required_checks if row.get("ok"))
     return {
         "timestamp": time.time(),
-        "ok": bool(ok_count == len(checks)),
+        "ok": bool(required_ok_count == len(required_checks)),
         "check_count": len(checks),
         "ok_count": ok_count,
+        "required_check_count": len(required_checks),
+        "required_ok_count": required_ok_count,
         "checks": checks,
     }
 
@@ -149,7 +168,11 @@ def format_diagnostics_report(payload):
         "Jarvis Realtime Doctor",
         "----------------------",
         f"overall_ok: {payload.get('ok')}",
-        f"checks: {payload.get('ok_count')}/{payload.get('check_count')}",
+        (
+            f"required_checks: {payload.get('required_ok_count')}/"
+            f"{payload.get('required_check_count')}"
+        ),
+        f"all_checks: {payload.get('ok_count')}/{payload.get('check_count')}",
         "",
     ]
     for row in payload.get("checks", []):
