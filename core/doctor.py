@@ -13,9 +13,9 @@ REQUIRED_MODULES = (
     "numpy",
     "sounddevice",
     "openwakeword",
-    "onnxruntime",
     "faster_whisper",
     "pyttsx3",
+    "edge_tts",
 )
 
 

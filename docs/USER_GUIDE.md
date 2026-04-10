@@ -48,7 +48,7 @@ If audio dependencies are missing, Jarvis falls back to text interaction.
 - go to downloads
 - list files
 - voice status
-- benchmark run
+- observability
 
 ### Arabic
 - افتح المفكرة

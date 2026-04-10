@@ -6,9 +6,7 @@ python-dotenv==1.2.2
 
 # Audio pipeline
 numpy==2.4.2
-scipy==1.17.1
 sounddevice==0.5.5
-soundfile>=0.12.1
 
 # Speech-to-text
 faster-whisper==1.2.1
@@ -19,10 +17,14 @@ openwakeword==0.6.0
 # Text-to-speech
 pyttsx3==2.99
 edge-tts>=6.1.12
-kokoro>=0.7.16
 
 # System monitoring
 psutil==7.2.2
 
 # HTTP (used by ollama client & general networking)
 httpx==0.28.1
+
+# Optional knowledge-base extras (only for semantic/PDF indexing enhancements)
+# faiss-cpu>=1.8.0
+# sentence-transformers>=3.0.0
+# pypdf>=5.0.0

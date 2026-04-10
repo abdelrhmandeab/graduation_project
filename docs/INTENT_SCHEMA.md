@@ -7,7 +7,6 @@ This document defines the canonical intent and entity contract used by parser, c
 | Intent | Action (if any) | Description | Example |
 |---|---|---|---|
 | `OBSERVABILITY_REPORT` | `""` | Show observability dashboard | `observability` |
-| `BENCHMARK_COMMAND` | `run`, `resilience_demo`, `wake_reliability`, `stt_reliability`, `tts_quality` | Run benchmark/resilience/STT/TTS suites | `benchmark run` |
 | `PERSONA_COMMAND` | `status`, `list`, `set` | Persona profile controls | `persona set formal` |
 | `VOICE_COMMAND` | `status`, `diagnostic`, `speech_on`, `speech_off`, `interrupt`, `stt_profile_set`, `stt_profile_status`, `stt_backend_set`, `stt_backend_status`, `voice_quality_set`, `voice_quality_status`, `audio_ux_profile_set`, `audio_ux_profiles`, `audio_ux_status`, `audio_ux_mic_threshold_set`, `audio_ux_wake_threshold_set`, `audio_ux_wake_gain_set`, `audio_ux_pause_scale_set`, `audio_ux_rate_offset_set`, `wake_status`, `wake_mode_set`, `wake_triggers_add`, `wake_triggers_remove` | Runtime voice/STT/TTS/audio UX controls | `voice diagnostic` |
 | `KNOWLEDGE_BASE_COMMAND` | `status`, `quality`, `clear`, `retrieval_on`, `retrieval_off`, `sync_dir`, `add_file`, `index_dir`, `search` | Local knowledge base operations | `kb search policy` |

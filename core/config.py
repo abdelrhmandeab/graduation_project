@@ -191,7 +191,7 @@ APP_RESOLUTION_AVAILABLE_BONUS = _env_float("JARVIS_APP_AVAILABLE_BONUS", 0.03)
 
 # Speech / TTS
 TTS_ENABLED = True
-TTS_DEFAULT_BACKEND = _env("JARVIS_TTS_BACKEND", "edge_tts")  # auto | console | pyttsx3 | edge_tts | kokoro
+TTS_DEFAULT_BACKEND = _env("JARVIS_TTS_BACKEND", "edge_tts")  # auto | console | pyttsx3 | edge_tts
 TTS_QUALITY_MODE = _env("JARVIS_TTS_QUALITY_MODE", "natural")  # natural | standard
 TTS_EDGE_VOICE = _env("JARVIS_TTS_EDGE_VOICE", "en-US-AriaNeural")
 TTS_EDGE_RATE = _env("JARVIS_TTS_EDGE_RATE", "+0%")
@@ -210,12 +210,8 @@ TTS_ARABIC_SPOKEN_DIALECT = str(_env("JARVIS_TTS_ARABIC_SPOKEN_DIALECT", "egypti
 if TTS_ARABIC_SPOKEN_DIALECT not in {"egyptian", "msa", "auto"}:
     TTS_ARABIC_SPOKEN_DIALECT = "egyptian"
 TTS_EGYPTIAN_COLLOQUIAL_REWRITE = _env_bool("JARVIS_TTS_EGYPTIAN_COLLOQUIAL_REWRITE", True)
-TTS_KOKORO_VOICE = _env("JARVIS_TTS_KOKORO_VOICE", "af_heart")
-TTS_KOKORO_LANG_CODE = _env("JARVIS_TTS_KOKORO_LANG_CODE", "a")
-TTS_KOKORO_SAMPLE_RATE = _env_int("JARVIS_TTS_KOKORO_SAMPLE_RATE", 24000)
 TTS_DEFAULT_RATE = 175
 TTS_SIMULATED_CHAR_DELAY = 0.02
-TTS_EXTERNAL_TIMEOUT_SECONDS = 45
 BARGE_IN_INTERRUPT_ON_WAKE = True
 WAKE_WORD_IGNORE_WHILE_SPEAKING = True
 
@@ -306,58 +302,7 @@ FOLLOWUP_DESTRUCTIVE_REQUIRE_EXPLICIT_REFERENCE = _env_bool(
     True,
 )
 
-# Observability / benchmarking
-OBSERVABILITY_RESOURCE_SAMPLING_SECONDS = 10
-BENCHMARK_OUTPUT_FILE = "jarvis_benchmark.json"
-RESILIENCE_OUTPUT_FILE = "jarvis_resilience.json"
-BENCHMARK_HISTORY_FILE = "jarvis_benchmark_history.json"
-RESILIENCE_HISTORY_FILE = "jarvis_resilience_history.json"
-WAKE_BENCHMARK_OUTPUT_FILE = "jarvis_wake_benchmark.json"
-WAKE_BENCHMARK_HISTORY_FILE = "jarvis_wake_benchmark_history.json"
-STT_BENCHMARK_OUTPUT_FILE = "jarvis_stt_benchmark.json"
-STT_BENCHMARK_HISTORY_FILE = "jarvis_stt_benchmark_history.json"
-STT_BENCHMARK_CORPUS_FILE = "benchmarks/stt_corpus.json"
-STT_EGYPTIAN_BENCHMARK_OUTPUT_FILE = "jarvis_stt_egyptian_benchmark.json"
-STT_EGYPTIAN_BENCHMARK_CORPUS_FILE = "benchmarks/stt_egyptian_corpus.json"
-TTS_BENCHMARK_OUTPUT_FILE = "jarvis_tts_benchmark.json"
-TTS_BENCHMARK_HISTORY_FILE = "jarvis_tts_benchmark_history.json"
-TTS_BENCHMARK_CORPUS_FILE = "benchmarks/tts_corpus.json"
-TTS_MOS_OUTPUT_FILE = "jarvis_tts_mos.json"
-TTS_MOS_TEMPLATE_FILE = "benchmarks/tts_mos_template.csv"
-WAKE_BENCHMARK_SCENARIOS_PER_LANGUAGE = max(
-    10,
-    min(40, _env_int("JARVIS_WAKE_BENCHMARK_SCENARIOS_PER_LANGUAGE", 12)),
-)
-WAKE_BENCHMARK_HISTORY_SERIES_VERSION = (
-    str(_env("JARVIS_WAKE_BENCHMARK_HISTORY_SERIES_VERSION", "v2")).strip() or "v2"
-)
-STT_BENCHMARK_HISTORY_SERIES_VERSION = (
-    str(_env("JARVIS_STT_BENCHMARK_HISTORY_SERIES_VERSION", "v1")).strip() or "v1"
-)
-TTS_BENCHMARK_HISTORY_SERIES_VERSION = (
-    str(_env("JARVIS_TTS_BENCHMARK_HISTORY_SERIES_VERSION", "v1")).strip() or "v1"
-)
-BENCHMARK_HISTORY_MAX_RUNS = 180
-BENCHMARK_HISTORY_MAX_DAILY_POINTS = 42
-BENCHMARK_HISTORY_MAX_WEEKLY_POINTS = 16
-BENCHMARK_SLA_P95_MS = 1500.0
-BENCHMARK_SLA_SUCCESS_RATE_MIN = 0.95
-RESILIENCE_SLA_P95_MS = 2000.0
-RESILIENCE_SLA_SUCCESS_RATE_MIN = 0.8
-WAKE_BENCHMARK_SLA_P95_MS = 2000.0
-WAKE_BENCHMARK_SLA_DETECTION_RATE_MIN = 0.95
-WAKE_BENCHMARK_SLA_FALSE_POSITIVE_RATE_MAX = 0.05
-STT_BENCHMARK_SLA_P95_MS = 3000.0
-STT_BENCHMARK_SLA_AVG_WER_MAX = 0.20
-STT_BENCHMARK_SLA_AVG_CER_MAX = 0.30
-STT_BENCHMARK_SLA_SUCCESS_RATE_MIN = 0.90
-TTS_BENCHMARK_SLA_P95_MS = 2500.0
-TTS_BENCHMARK_SLA_AVG_RTF_MAX = 1.20
-TTS_BENCHMARK_SLA_AVG_QUALITY_SCORE_MIN = 0.70
-TTS_BENCHMARK_SLA_FALLBACK_RELIABILITY_MIN = 0.95
-TTS_BENCHMARK_SLA_SUCCESS_RATE_MIN = 0.90
-TTS_MOS_CHECKLIST_MIN_RATINGS = max(1, _env_int("JARVIS_TTS_MOS_CHECKLIST_MIN_RATINGS", 3))
-TTS_MOS_CHECKLIST_MIN_RATERS = max(1, _env_int("JARVIS_TTS_MOS_CHECKLIST_MIN_RATERS", 2))
+# Observability / diagnostics
 DOCTOR_STARTUP_ENABLED = True
 DOCTOR_SCHEDULE_INTERVAL_SECONDS = 900
 DOCTOR_INCLUDE_MODEL_LOAD_CHECKS = False
@@ -423,7 +368,6 @@ POLICY_COMMAND_PERMISSIONS = {
     "knowledge_base": True,
     "memory": True,
     "observability": True,
-    "benchmark": True,
 }
 
 POLICY_PROFILES = {
@@ -449,7 +393,6 @@ POLICY_PROFILES = {
             "knowledge_base": True,
             "memory": True,
             "observability": True,
-            "benchmark": False,
         },
     },
     "normal": {
@@ -478,7 +421,6 @@ POLICY_PROFILES = {
             "knowledge_base": True,
             "memory": True,
             "observability": True,
-            "benchmark": True,
         },
     },
 }

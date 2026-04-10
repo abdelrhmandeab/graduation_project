@@ -1,7 +1,5 @@
 import re
 
-import numpy as np
-
 from core.config import (
     STT_ARABIC_POST_NORMALIZATION,
     STT_BACKEND,

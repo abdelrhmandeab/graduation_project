@@ -191,14 +191,7 @@ def _transcript_quality_score(text, detected_language, wake_source=None):
     return score
 
 
-def _should_retry_with_english_hint(text, detected_language, wake_source=None, language_confidence=0.0):
-    _ = text, detected_language, wake_source, language_confidence
-    # Orchestrator-level language retries are disabled intentionally.
-    # Language recovery stays inside STT internals only.
-    return False
-
-
-def _transcribe_with_auto_then_english_retry(audio_file, wake_source=None):
+def _transcribe_with_runtime_stt(audio_file, wake_source=None):
     global _LAST_STT_LANGUAGE_CONFIDENCE
     primary_hint = _resolve_stt_language_hint(wake_source=wake_source)
     text = transcribe_streaming(
@@ -267,7 +260,7 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None):
         _ = _resolve_stt_language_hint(
             wake_source=wake_source,
         )
-        text, detected_language = _transcribe_with_auto_then_english_retry(
+        text, detected_language = _transcribe_with_runtime_stt(
             audio_file,
             wake_source=wake_source,
         )

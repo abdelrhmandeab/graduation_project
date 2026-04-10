@@ -1,10 +1,10 @@
 import asyncio
 import io
 import inspect
-import logging
 import re
 import threading
 import time
+import wave
 
 from core.config import (
     TTS_ARABIC_SPOKEN_DIALECT,
@@ -22,10 +22,6 @@ from core.config import (
     TTS_EDGE_VOICE,
     TTS_EGYPTIAN_COLLOQUIAL_REWRITE,
     TTS_ENABLED,
-    TTS_EXTERNAL_TIMEOUT_SECONDS,
-    TTS_KOKORO_LANG_CODE,
-    TTS_KOKORO_SAMPLE_RATE,
-    TTS_KOKORO_VOICE,
     TTS_QUALITY_MODE,
     TTS_SIMULATED_CHAR_DELAY,
 )
@@ -140,8 +136,6 @@ class SpeechEngine:
         self._thread = None
         self._process = None
         self._pyttsx3_engine = None
-        self._kokoro_pipeline = None
-        self._kokoro_pipeline_lang = ""
         self._runtime_backend = str(TTS_DEFAULT_BACKEND or "auto").strip().lower()
         self._quality_mode = self._normalize_quality_mode(TTS_QUALITY_MODE)
         self._runtime_rate_offset = 0
@@ -159,10 +153,9 @@ class SpeechEngine:
         aliases = {
             "edge": "edge_tts",
             "edgetts": "edge_tts",
-            "kokoro_tts": "kokoro",
         }
         resolved = aliases.get(raw, raw)
-        allowed = {"auto", "console", "pyttsx3", "edge_tts", "kokoro"}
+        allowed = {"auto", "console", "pyttsx3", "edge_tts"}
         if resolved not in allowed:
             return "auto"
         return resolved
@@ -367,25 +360,8 @@ class SpeechEngine:
             import edge_tts  # type: ignore
             import numpy  # type: ignore
             import sounddevice  # type: ignore
-            from scipy.io import wavfile  # type: ignore
 
-            _ = edge_tts, numpy, sounddevice, wavfile
-            info["available"] = True
-        except Exception as exc:
-            info["error"] = str(exc)
-        return info
-
-    def _probe_kokoro_environment(self):
-        info = {
-            "available": False,
-            "voice": str(TTS_KOKORO_VOICE or "").strip(),
-            "lang_code": str(TTS_KOKORO_LANG_CODE or "a").strip() or "a",
-            "error": "",
-        }
-        try:
-            from kokoro import KPipeline  # type: ignore
-
-            _ = KPipeline
+            _ = edge_tts, numpy, sounddevice
             info["available"] = True
         except Exception as exc:
             info["error"] = str(exc)
@@ -397,7 +373,6 @@ class SpeechEngine:
         quality_mode = self.get_quality_mode()
         pyttsx3_info = self._probe_pyttsx3_environment()
         edge_info = self._probe_edge_tts_environment()
-        kokoro_info = self._probe_kokoro_environment()
 
         active_backend = requested_backend
         if requested_backend == "auto":
@@ -405,8 +380,6 @@ class SpeechEngine:
                 active_backend = "pyttsx3"
             elif edge_info.get("available"):
                 active_backend = "edge_tts"
-            elif kokoro_info.get("available"):
-                active_backend = "kokoro"
             else:
                 active_backend = "console"
 
@@ -414,8 +387,6 @@ class SpeechEngine:
             device_label = pyttsx3_info.get("voice_name") or pyttsx3_info.get("voice_id") or "default_system_voice"
         elif active_backend == "edge_tts":
             device_label = edge_info.get("voice") or "edge_tts_voice"
-        elif active_backend == "kokoro":
-            device_label = kokoro_info.get("voice") or "kokoro_voice"
         else:
             device_label = "console_output"
 
@@ -438,16 +409,12 @@ class SpeechEngine:
             f"edge_tts_arabic_pitch: {edge_info.get('arabic_pitch')}",
             f"edge_tts_arabic_volume: {edge_info.get('arabic_volume')}",
             f"edge_tts_arabic_fallbacks: {', '.join(edge_info.get('arabic_fallbacks') or [])}",
-            f"kokoro_available: {kokoro_info.get('available')}",
-            f"kokoro_voice: {kokoro_info.get('voice')}",
             f"speech_attempt: {spoke_message}",
         ]
         if pyttsx3_info.get("error"):
             lines.append(f"pyttsx3_error: {pyttsx3_info.get('error')}")
         if edge_info.get("error"):
             lines.append(f"edge_tts_error: {edge_info.get('error')}")
-        if kokoro_info.get("error"):
-            lines.append(f"kokoro_error: {kokoro_info.get('error')}")
 
         meta = {
             "requested_backend": requested_backend,
@@ -463,8 +430,6 @@ class SpeechEngine:
             "edge_tts_arabic_pitch": edge_info.get("arabic_pitch"),
             "edge_tts_arabic_volume": edge_info.get("arabic_volume"),
             "edge_tts_arabic_fallbacks": list(edge_info.get("arabic_fallbacks") or []),
-            "kokoro_available": bool(kokoro_info.get("available")),
-            "kokoro_voice": kokoro_info.get("voice"),
         }
         return True, "\n".join(lines), meta
 
@@ -483,8 +448,6 @@ class SpeechEngine:
                     return
                 if self._speak_edge_tts(spoken_text):
                     return
-                if self._speak_kokoro(spoken_text):
-                    return
                 self._speak_console(spoken_text, prefix="TTS fallback")
                 return
 
@@ -501,15 +464,6 @@ class SpeechEngine:
                     logger.warning("Edge-TTS failed; pyttsx3 fallback succeeded")
                     return
                 self._speak_console(spoken_text, prefix="Edge-TTS fallback")
-                return
-
-            if backend == "kokoro":
-                if self._speak_kokoro(spoken_text):
-                    return
-                if self._speak_pyttsx3(spoken_text):
-                    logger.warning("Kokoro TTS failed; pyttsx3 fallback succeeded")
-                    return
-                self._speak_console(spoken_text, prefix="Kokoro fallback")
                 return
 
             self._speak_console(spoken_text, prefix="TTS")
@@ -697,20 +651,46 @@ class SpeechEngine:
         )
 
     def _decode_edge_audio_bytes(self, audio_bytes):
-        header = bytes(audio_bytes[:4])
-        if header in {b"RIFF", b"RIFX", b"RF64"}:
-            from scipy.io import wavfile  # type: ignore
+        payload = bytes(audio_bytes or b"")
+        if len(payload) < 8:
+            return None
 
-            sample_rate, waveform = wavfile.read(io.BytesIO(audio_bytes))
-            return int(sample_rate), waveform
+        header = payload[:4]
+        if header not in {b"RIFF", b"RIFX", b"RF64"}:
+            return None
 
         try:
-            import soundfile as sf  # type: ignore
+            with wave.open(io.BytesIO(payload), "rb") as handle:
+                sample_rate = int(handle.getframerate() or 0)
+                sample_width = int(handle.getsampwidth() or 0)
+                channels = int(handle.getnchannels() or 1)
+                frame_count = int(handle.getnframes() or 0)
+                frames = handle.readframes(frame_count)
         except Exception:
             return None
 
-        waveform, sample_rate = sf.read(io.BytesIO(audio_bytes), dtype="float32")
-        return int(sample_rate), waveform
+        if sample_rate <= 0 or not frames:
+            return None
+
+        import numpy as np  # type: ignore
+
+        if sample_width == 1:
+            waveform = np.frombuffer(frames, dtype=np.uint8).astype(np.float32)
+            waveform = (waveform - 128.0) / 128.0
+        elif sample_width == 2:
+            waveform = np.frombuffer(frames, dtype=np.int16)
+        elif sample_width == 4:
+            waveform = np.frombuffer(frames, dtype=np.int32)
+        else:
+            return None
+
+        if channels > 1:
+            expected = int(waveform.size // channels) * channels
+            if expected <= 0:
+                return None
+            waveform = waveform[:expected].reshape(-1, channels)
+
+        return sample_rate, waveform
 
     def _log_edge_tts_decode_warning_once(self, message):
         should_log = False
@@ -973,7 +953,7 @@ class SpeechEngine:
                     decoded = self._decode_edge_audio_bytes(audio_bytes)
                     if decoded is None:
                         self._log_edge_tts_decode_warning_once(
-                            "Edge-TTS audio decode unavailable for compressed stream; install soundfile or use pyttsx3 fallback."
+                            "Edge-TTS stream was not WAV/PCM; using pyttsx3 fallback."
                         )
                         chunk_last_error = f"decode_unavailable:{voice_name}"
                         continue
@@ -1181,7 +1161,7 @@ class SpeechEngine:
                 decoded = self._decode_edge_audio_bytes(audio_bytes)
                 if decoded is None:
                     self._log_edge_tts_decode_warning_once(
-                        "Edge-TTS audio decode unavailable for compressed stream; install soundfile or use pyttsx3 fallback."
+                        "Edge-TTS stream was not WAV/PCM; using pyttsx3 fallback."
                     )
                     last_error = f"decode_unavailable:{voice_name}"
                     continue
@@ -1206,75 +1186,5 @@ class SpeechEngine:
         if last_error:
             logger.warning("Edge-TTS synthesis failed after %s voice attempt(s): %s", len(voice_candidates), last_error)
         return False
-
-    def _speak_kokoro(self, text):
-        try:
-            import numpy as np  # type: ignore
-            from kokoro import KPipeline  # type: ignore
-        except Exception as exc:
-            logger.warning("Kokoro dependencies unavailable: %s", exc)
-            return False
-
-        normalized_text = " ".join(str(text or "").split()).strip()
-        if not normalized_text:
-            return False
-
-        configured_voice = str(TTS_KOKORO_VOICE or "").strip() or "af_heart"
-        configured_lang = str(TTS_KOKORO_LANG_CODE or "a").strip() or "a"
-
-        lang_candidates = [configured_lang]
-        if self._is_arabic_preferred_text(normalized_text):
-            lang_candidates.insert(0, "z")
-        if "a" not in lang_candidates:
-            lang_candidates.append("a")
-
-        pipeline = None
-        selected_lang = ""
-        for lang_code in lang_candidates:
-            try:
-                with self._lock:
-                    if self._kokoro_pipeline is not None and self._kokoro_pipeline_lang == lang_code:
-                        pipeline = self._kokoro_pipeline
-                    else:
-                        pipeline = None
-
-                if pipeline is None:
-                    pipeline = KPipeline(lang_code=lang_code)
-                    with self._lock:
-                        self._kokoro_pipeline = pipeline
-                        self._kokoro_pipeline_lang = lang_code
-
-                selected_lang = lang_code
-                break
-            except Exception:
-                pipeline = None
-
-        if pipeline is None:
-            logger.warning("Kokoro pipeline failed for lang candidates: %s", ", ".join(lang_candidates))
-            return False
-
-        try:
-            chunks = []
-            generator = pipeline(normalized_text, voice=configured_voice, speed=1.0)
-            for row in generator:
-                if self._stop_event.is_set():
-                    return False
-                audio = row[2] if isinstance(row, tuple) and len(row) >= 3 else row
-                if audio is None:
-                    continue
-                chunk = np.asarray(audio, dtype=np.float32).reshape(-1)
-                if chunk.size:
-                    chunks.append(chunk)
-
-            if not chunks:
-                logger.warning("Kokoro TTS produced no waveform chunks (lang=%s)", selected_lang or configured_lang)
-                return False
-
-            waveform = np.concatenate(chunks)
-            sample_rate = max(8000, int(TTS_KOKORO_SAMPLE_RATE or 24000))
-            return self._play_waveform(waveform, sample_rate)
-        except Exception as exc:
-            logger.warning("Kokoro TTS failed: %s", exc)
-            return False
 
 speech_engine = SpeechEngine()

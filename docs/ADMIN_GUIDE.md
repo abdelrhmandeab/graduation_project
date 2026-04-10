@@ -7,7 +7,7 @@ Jarvis is designed for local-first Windows deployment.
 Components:
 - Python runtime
 - Local model runtime (Ollama)
-- Speech stack (faster-whisper, pyttsx3, edge-tts, kokoro)
+- Speech stack (faster-whisper, pyttsx3, edge-tts)
 
 ## 2. Initial Provisioning
 
@@ -62,17 +62,11 @@ Key behavior:
 - Manual trigger supported.
 - Dependency install and syntax validation run on every trigger.
 
-## 6. Logs and Artifacts
+## 6. Logs and Runtime State
 
 Runtime logs:
 - jarvis.log
 - jarvis_actions.log
-
-Benchmark and resilience artifacts:
-- jarvis_benchmark.json
-- jarvis_resilience.json
-- jarvis_benchmark_history.json
-- jarvis_resilience_history.json
 
 ## 7. Policy and Audit Governance
 

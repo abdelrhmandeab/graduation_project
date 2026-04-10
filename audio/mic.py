@@ -12,11 +12,6 @@ except Exception as exc:
 else:
     _SOUNDDEVICE_IMPORT_ERROR = None
 
-try:
-    import scipy.io.wavfile as scipy_wav
-except Exception:
-    scipy_wav = None
-
 from core.config import (
     AUDIO_CHUNK_SIZE,
     MAX_RECORD_DURATION,
@@ -80,11 +75,6 @@ def _chunk_rms(chunk):
 
 
 def _write_wav_file(filename, sample_rate, audio_int16):
-    if scipy_wav is not None:
-        scipy_wav.write(filename, sample_rate, audio_int16)
-        return
-
-    # Fallback for environments without SciPy.
     with wave.open(filename, "wb") as handle:
         handle.setnchannels(1)
         handle.setsampwidth(2)
