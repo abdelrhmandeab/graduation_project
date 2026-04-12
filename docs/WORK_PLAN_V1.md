@@ -221,7 +221,7 @@ Improve conversational quality and naturalness.
 - Add anti-repetition response templates.
 - Track short-term context:
   - last app, last file, pending confirmation
-- Improve follow-up understanding (“open it”, “احذفه”).
+- Improve follow-up understanding ("open it", "امسحه").
 
 ### Deliverables
 - bilingual response template library

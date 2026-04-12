@@ -24,87 +24,87 @@ def detect_language_hint(text, fallback="en"):
 _TEMPLATES = {
     "please_clarify_intent": {
         "en": "Please clarify your intent.",
-        "ar": "يرجى توضيح المطلوب.",
+        "ar": "وضحلي طلبك اكتر.",
     },
     "clarification_cancelled": {
         "en": "Clarification cancelled.",
-        "ar": "تم الغاء التوضيح.",
+        "ar": "تمام، لغيت التوضيح.",
     },
     "confirmation_failed": {
         "en": "Confirmation failed: {message}",
-        "ar": "فشل التاكيد: {message}",
+        "ar": "التأكيد فشل: {message}",
     },
     "confirmation_failed_with_usage": {
         "en": "Confirmation failed: {message} Use `confirm {token} <PIN_or_passphrase>`.",
-        "ar": "فشل التاكيد: {message} استخدم `confirm {token} <PIN_or_passphrase>`.",
+        "ar": "التأكيد فشل: {message} استخدم `confirm {token} <PIN_or_passphrase>`.",
     },
     "unsupported_confirmation_payload": {
         "en": "Unsupported confirmation payload.",
-        "ar": "محتوى التاكيد غير مدعوم.",
+        "ar": "محتوى التأكيد مش مدعوم.",
     },
     "confirmation_cancelled": {
         "en": "Pending confirmation cancelled.",
-        "ar": "تم الغاء التاكيد المعلق.",
+        "ar": "تمام، لغيت التأكيد المعلق.",
     },
     "missing_pending_confirmation": {
         "en": "There is no pending confirmation token right now.",
-        "ar": "لا يوجد رمز تاكيد معلق حاليا.",
+        "ar": "مفيش كود تأكيد معلق دلوقتي.",
     },
     "missing_last_file_delete": {
         "en": "I need a recent file reference first. Say `delete <path>` once, then you can say `delete it`.",
-        "ar": "احتاج مرجعا حديثا لملف اولا. قل `delete <path>` مرة واحدة ثم يمكنك قول `احذفه`.",
+        "ar": "محتاج مرجع قريب لملف الاول. قول `delete <path>` مرة واحدة وبعدها تقدر تقول `امسحه`.",
     },
     "missing_last_file_rename": {
         "en": "I do not know which file to rename yet. Specify a file first, then use `rename it to <name>`.",
-        "ar": "لا اعرف اي ملف تريد اعادة تسميته بعد. حدد ملفا اولا ثم استخدم `rename it to <name>`.",
+        "ar": "لسه مش عارف انهي ملف عايز تعيد تسميته. حدد ملف الاول وبعدها استخدم `rename it to <name>`.",
     },
     "missing_last_file_move": {
         "en": "I do not know which file to move yet. Specify a file first, then use `move it to <destination>`.",
-        "ar": "لا اعرف اي ملف تريد نقله بعد. حدد ملفا اولا ثم استخدم `move it to <destination>`.",
+        "ar": "لسه مش عارف انهي ملف عايز تنقله. حدد ملف الاول وبعدها استخدم `move it to <destination>`.",
     },
     "missing_last_app_open": {
         "en": "I need a recent app reference first. Open or mention an app, then you can say `open it`.",
-        "ar": "احتاج مرجعا حديثا لتطبيق اولا. افتح او اذكر تطبيقا ثم يمكنك قول `افتحه`.",
+        "ar": "محتاج مرجع قريب لبرنامج الاول. افتح او اذكر برنامج وبعدها تقدر تقول `افتحه`.",
     },
     "missing_last_app_close": {
         "en": "I need a recent app reference first. Open or mention an app, then you can say `close it`.",
-        "ar": "احتاج مرجعا حديثا لتطبيق اولا. افتح او اذكر تطبيقا ثم يمكنك قول `اغلقه`.",
+        "ar": "محتاج مرجع قريب لبرنامج الاول. افتح او اذكر برنامج وبعدها تقدر تقول `اقفله`.",
     },
     "stale_followup_reference": {
         "en": "That reference is too old, so I do not want to guess. Please mention the app or file again.",
-        "ar": "هذا المرجع قديم جدا، لذلك لا اريد التخمين. يرجى ذكر التطبيق او الملف مرة اخرى.",
+        "ar": "المرجع ده قديم قوي، فمش هخمن. قول اسم البرنامج او الملف تاني.",
     },
     "destructive_followup_requires_explicit_target": {
         "en": "For safety, I do not delete with vague references like `delete it`. Please say the exact file or path.",
-        "ar": "للامان، لا احذف بمرجع غامض مثل `delete it`. يرجى ذكر الملف او المسار بشكل صريح.",
+        "ar": "عشان الامان، مش همسح بحاجة مبهمة زي `delete it`. قول الملف او المسار بشكل واضح.",
     },
     "destructive_followup_low_confidence": {
         "en": "I need a more certain file target before deleting. Please specify the file/path explicitly.",
-        "ar": "احتاج هدف ملف اوضح قبل الحذف. يرجى تحديد الملف او المسار بشكل صريح.",
+        "ar": "محتاج هدف ملف اوضح قبل المسح. حدد الملف او المسار بشكل واضح.",
     },
     "missing_followup_reference": {
         "en": "I need a recent app or file reference first. Mention one, then try again.",
-        "ar": "احتاج مرجعا حديثا لتطبيق او ملف اولا. اذكره ثم حاول مرة اخرى.",
+        "ar": "محتاج مرجع قريب لبرنامج او ملف الاول. اذكره وبعدين جرب تاني.",
     },
     "followup_reference_conflict": {
         "en": "I found both a recent app and file with similar recency. Say `open the app` or `open the file`.",
-        "ar": "وجدت تطبيقا وملفا حديثين بزمن متقارب. قل `open the app` او `open the file`.",
+        "ar": "لقيت برنامج وملف قريبين في نفس الوقت. قول `open the app` او `open the file`.",
     },
     "missing_second_recent_app": {
         "en": "I only have one recent app. Mention another app first, then say `open both` or `close them`.",
-        "ar": "لدي تطبيق حديث واحد فقط. اذكر تطبيقا اخر اولا ثم قل `open both` او `close them`.",
+        "ar": "عندي برنامج حديث واحد بس. اذكر برنامج تاني الاول وبعدها قول `open both` او `close them`.",
     },
     "missing_filename_search": {
         "en": "Please provide a filename to search for.",
-        "ar": "يرجى تحديد اسم الملف المراد البحث عنه.",
+        "ar": "قول اسم الملف اللي عايز تدور عليه.",
     },
     "missing_app_name_open": {
         "en": "Please provide an app name to open.",
-        "ar": "يرجى تحديد اسم التطبيق المراد فتحه.",
+        "ar": "قول اسم البرنامج اللي عايز تفتحه.",
     },
     "missing_app_name_close": {
         "en": "Please provide an app name to close.",
-        "ar": "يرجى تحديد اسم التطبيق المراد اغلاقه.",
+        "ar": "قول اسم البرنامج اللي عايز تقفله.",
     },
     "file_not_found": {
         "en": "File not found.",
@@ -112,27 +112,27 @@ _TEMPLATES = {
     },
     "low_confidence_action_like_query": {
         "en": "I am not fully sure which action you want. Please rephrase as one clear command (for example: `open app notepad`, `find file notes.txt`, or `delete file.txt`).",
-        "ar": "لست متاكدا تماما من الاجراء المطلوب. يرجى اعادة الصياغة كأمر واحد واضح (مثال: `open app notepad` او `find file notes.txt` او `delete file.txt`).",
+        "ar": "لسه مش متأكد انت عايز انهي إجراء. صيغه كأمر واحد واضح (مثال: `open app notepad` او `find file notes.txt` او `delete file.txt`).",
     },
     "low_confidence_unclear_query": {
         "en": "I did not fully catch that short phrase. Please say one clear request (for example: `search web for market news` or `open app calculator`).",
-        "ar": "لم التقط هذه العبارة القصيرة بشكل كاف. يرجى قول طلب واضح واحد (مثال: `ابحث في الويب عن اخبار السوق` او `افتح التطبيق الحاسبة`).",
+        "ar": "العبارة القصيرة دي موضحتش كفاية. قول طلب واحد واضح (مثال: `دور في الويب على اخبار السوق` او `افتح البرنامج الحاسبة`).",
     },
     "low_entity_confidence": {
         "en": "I need a clearer target before I execute this. Please include the exact app name, file name, or path.",
-        "ar": "احتاج هدفا اوضح قبل التنفيذ. يرجى ذكر اسم التطبيق او اسم الملف او المسار بشكل ادق.",
+        "ar": "محتاج هدف اوضح قبل التنفيذ. قول اسم البرنامج او اسم الملف او المسار بدقة.",
     },
     "multiple_actions_detected": {
         "en": "I detected more than one action in one command. Please split it into one step at a time.",
-        "ar": "اكتشفت اكثر من اجراء في امر واحد. يرجى تقسيمه الى خطوة واحدة في كل مرة.",
+        "ar": "لقيت اكتر من إجراء في نفس الأمر. قسمه خطوة خطوة.",
     },
     "open_target_ambiguous_intro": {
         "en": "I want to confirm before acting. Did you mean:",
-        "ar": "اريد التاكيد قبل التنفيذ. هل تقصد:",
+        "ar": "عايز أتأكد قبل التنفيذ. تقصد:",
     },
     "open_target_option_app": {
         "en": "Open application '{target}'",
-        "ar": "فتح التطبيق '{target}'",
+        "ar": "فتح البرنامج '{target}'",
     },
     "open_target_option_path": {
         "en": "Open folder/path '{target}'",
@@ -144,11 +144,11 @@ _TEMPLATES = {
     },
     "app_ambiguous_open_intro": {
         "en": "I found multiple app matches. Which one should I open?",
-        "ar": "وجدت اكثر من تطبيق مطابق. اي تطبيق تريد ان افتح؟",
+        "ar": "لقيت اكتر من برنامج مطابق. انهي واحد افتحه؟",
     },
     "app_ambiguous_close_intro": {
         "en": "I found multiple app matches. Which one should I close?",
-        "ar": "وجدت اكثر من تطبيق مطابق. اي تطبيق تريد ان اغلق؟",
+        "ar": "لقيت اكتر من برنامج مطابق. انهي واحد اقفله؟",
     },
     "file_ambiguous_intro": {
         "en": "I found multiple files for '{filename}'. Which one do you mean?",
@@ -168,23 +168,23 @@ _TEMPLATES = {
     },
     "clarification_confidence_line": {
         "en": "I am {confidence_percent}% confident this is the right disambiguation.",
-        "ar": "انا واثق بنسبة {confidence_percent}% ان هذا هو التوضيح الصحيح.",
+        "ar": "انا واثق بنسبة {confidence_percent}% إن ده التوضيح الصح.",
     },
     "no_more_options": {
         "en": "There are no more options to show.",
-        "ar": "لا توجد خيارات اضافية لعرضها.",
+        "ar": "مفيش اختيارات تانية تتعرض.",
     },
     "clarification_none_selected": {
         "en": "Understood. None of these options match. Please restate your target.",
-        "ar": "مفهوم. لا يوجد خيار مناسب من هذه الخيارات. يرجى اعادة صياغة الهدف.",
+        "ar": "تمام. ولا اختيار من دول مناسب. صيّغ هدفك تاني.",
     },
     "clarification_retry_with_examples": {
         "en": "I still need a direct selection. Reply like `1`, `the chrome one`, `the first app`, or `cancel`.",
-        "ar": "ما زلت احتاج اختيارا مباشرا. اكتب مثل `1` او `تطبيق كروم` او `الخيار الاول` او `cancel`.",
+        "ar": "لسه محتاج اختيار مباشر. اكتب زي `1` او `برنامج كروم` او `الاختيار الاول` او `cancel`.",
     },
     "clarification_retry_unclear_query": {
         "en": "I still need one clear request. For example: `explain how the ozone layer works` or `search web for ozone layer`.",
-        "ar": "ما زلت احتاج طلبا واضحا واحدا. مثال: `اشرح كيف تعمل طبقة الاوزون` او `ابحث في الويب عن طبقة الاوزون`.",
+        "ar": "لسه محتاج طلب واحد واضح. مثال: `اشرح ازاي طبقة الاوزون بتشتغل` او `دور في الويب على طبقة الاوزون`.",
     },
     "response_mode_explain_on": {
         "en": "Explain mode is on. I will include short reasoning with command outputs.",
@@ -196,7 +196,7 @@ _TEMPLATES = {
     },
     "response_mode_default_on": {
         "en": "Default mode restored.",
-        "ar": "تمت استعادة الوضع الافتراضي.",
+        "ar": "رجعت للوضع الافتراضي.",
     },
     "response_explain_bridge": {
         "en": "Why:",
@@ -208,7 +208,7 @@ _TEMPLATES = {
     },
     "confirmation_prompt_base": {
         "en": "Confirmation required (risk: {risk_tier}) for: {description}. Say `confirm {token}`",
-        "ar": "التاكيد مطلوب (مستوى المخاطر: {risk_tier}) للعملية: {description}. قل `confirm {token}`",
+        "ar": "التأكيد مطلوب (مستوى المخاطر: {risk_tier}) للعملية: {description}. قول `confirm {token}`",
     },
     "confirmation_prompt_second_factor": {
         "en": " and provide PIN/passphrase as second factor.",

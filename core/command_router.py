@@ -23,6 +23,8 @@ from core.config import (
     FOLLOWUP_REFERENCE_MAX_AGE_SECONDS,
     FOLLOWUP_REFERENCE_MIN_CONFIDENCE,
     LLM_APPEND_SOURCE_CITATIONS,
+    LLM_REALTIME_REWRITE_ENABLED,
+    NLU_LLM_QUERY_EXTRACTION_ENABLED,
     NLU_PARSER_FASTPATH_CONFIDENCE_FLOOR,
     NLU_PARSER_FASTPATH_ENABLED,
     NLU_INTENT_CONFIDENCE_THRESHOLD,
@@ -52,6 +54,10 @@ from core.response_templates import anti_repetition_prefixes, detect_language_hi
 from core.session_memory import session_memory
 from llm.ollama_client import ask_llm
 from llm.prompt_builder import build_prompt_package
+try:
+    from nlp.intent_classifier import classify_intent as _classify_keyword_intent
+except Exception:
+    _classify_keyword_intent = None
 from os_control.action_log import log_action, read_recent_actions
 from os_control.adapter_result import to_router_tuple
 from os_control.app_ops import execute_confirmed_app_operation, open_app_result, request_close_app_result, resolve_app_request
@@ -123,6 +129,139 @@ def _select_parser_fastpath_assessment(source_text, parser_candidate, language):
     if confidence >= fastpath_gate:
         return assessment
     return None
+
+
+def _should_skip_nlu_llm_query(parser_candidate):
+    intent = str(getattr(parser_candidate, "intent", "") or "").strip().upper()
+    return intent == "LLM_QUERY" and not NLU_LLM_QUERY_EXTRACTION_ENABLED
+
+
+_KEYWORD_NLP_MIN_CONFIDENCE = 0.45
+_KEYWORD_NLP_SEARCH_PREFIX_RE = re.compile(
+    r"^(?:search|find|look\s+up|google|دور|دوّر|دورلي|دوّرلي|ابحث)(?:\s+(?:for|about|on|in|عن|على|في))?\s+",
+    re.IGNORECASE,
+)
+_KEYWORD_NLP_SEARCH_WEB_PREFIX_RE = re.compile(
+    r"^(?:the\s+)?(?:web|internet|online|الويب|النت)\s*(?:for|about|عن)?\s+",
+    re.IGNORECASE,
+)
+_KEYWORD_NLP_URL_INTENT_MAP = {
+    "open_youtube": "https://www.youtube.com",
+    "open_google": "https://www.google.com",
+}
+_KEYWORD_NLP_APP_OPEN_INTENT_MAP = {
+    "play_music": "spotify",
+    "open_spotify": "spotify",
+    "open_chrome": "chrome",
+    "open_calculator": "calculator",
+}
+_KEYWORD_NLP_SYSTEM_ACTION_INTENT_MAP = {
+    "volume_up": "volume_up",
+    "volume_down": "volume_down",
+    "wifi_on": "wifi_on",
+    "wifi_off": "wifi_off",
+    "bluetooth_on": "bluetooth_on",
+    "bluetooth_off": "bluetooth_off",
+    "screenshot": "screenshot",
+}
+
+
+def _extract_keyword_nlp_search_query(source_text):
+    value = " ".join(str(source_text or "").split()).strip()
+    if not value:
+        return ""
+
+    value = _KEYWORD_NLP_SEARCH_PREFIX_RE.sub("", value, count=1).strip()
+    value = _KEYWORD_NLP_SEARCH_WEB_PREFIX_RE.sub("", value, count=1).strip()
+    value = value.strip(" .,!?؟،")
+    return value
+
+
+def _map_keyword_nlp_intent_to_command(source_text, nlp_result):
+    intent_name = str((nlp_result or {}).get("intent") or "").strip().lower()
+    if intent_name in {"", "unknown"}:
+        return None
+
+    try:
+        confidence = float((nlp_result or {}).get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    if confidence < _KEYWORD_NLP_MIN_CONFIDENCE:
+        return None
+
+    normalized = " ".join(str(source_text or "").lower().split()).strip()
+    target_url = _KEYWORD_NLP_URL_INTENT_MAP.get(intent_name)
+    if target_url:
+        return ParsedCommand(
+            intent="OS_SYSTEM_COMMAND",
+            raw=source_text,
+            normalized=normalized,
+            args={"action_key": "browser_open_url", "url": target_url},
+        )
+
+    app_name = _KEYWORD_NLP_APP_OPEN_INTENT_MAP.get(intent_name)
+    if app_name:
+        return ParsedCommand(
+            intent="OS_APP_OPEN",
+            raw=source_text,
+            normalized=normalized,
+            args={"app_name": app_name},
+        )
+
+    action_key = _KEYWORD_NLP_SYSTEM_ACTION_INTENT_MAP.get(intent_name)
+    if action_key:
+        return ParsedCommand(
+            intent="OS_SYSTEM_COMMAND",
+            raw=source_text,
+            normalized=normalized,
+            args={"action_key": action_key},
+        )
+
+    if intent_name == "search":
+        query = _extract_keyword_nlp_search_query(source_text)
+        if not query:
+            return None
+        return ParsedCommand(
+            intent="OS_SYSTEM_COMMAND",
+            raw=source_text,
+            normalized=normalized,
+            args={"action_key": "browser_search_web", "search_query": query},
+        )
+
+    return None
+
+
+def _try_keyword_nlp_routing(source_text, parser_candidate):
+    meta = {
+        "nlp_used": False,
+        "nlp_accepted": False,
+        "nlp_intent": "",
+        "nlp_confidence": 0.0,
+        "nlp_matched_keywords": [],
+    }
+
+    intent = str(getattr(parser_candidate, "intent", "") or "").strip().upper()
+    if intent != "LLM_QUERY" or _classify_keyword_intent is None:
+        return None, meta
+
+    meta["nlp_used"] = True
+    try:
+        nlp_result = dict(_classify_keyword_intent(source_text) or {})
+    except Exception as exc:
+        logger.warning("Keyword NLP routing failed: %s", exc)
+        return None, meta
+
+    meta["nlp_intent"] = str(nlp_result.get("intent") or "").strip().lower()
+    try:
+        meta["nlp_confidence"] = float(nlp_result.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        meta["nlp_confidence"] = 0.0
+    meta["nlp_matched_keywords"] = list(nlp_result.get("matched_keywords") or [])
+
+    mapped = _map_keyword_nlp_intent_to_command(source_text, nlp_result)
+    if mapped is not None:
+        meta["nlp_accepted"] = True
+    return mapped, meta
 
 
 _CLARIFICATION_PREVENTED_REASONS = {
@@ -287,10 +426,9 @@ _CLOSE_FOLLOWUP_TEXTS = {
     "close that",
     "terminate it",
     "kill it",
-    "اغلقه",
-    "اغلقها",
     "اقفله",
     "اقفلها",
+    "اقفلهم",
     "سكره",
     "سكرها",
 }
@@ -301,12 +439,10 @@ _DELETE_FOLLOWUP_TEXTS = {
     "delete that",
     "remove it",
     "remove this",
-    "احذفه",
-    "احذفها",
     "امسحه",
     "امسحها",
-    "ازله",
-    "ازلها",
+    "شيله",
+    "شيلها",
 }
 
 _DELETE_VAGUE_FOLLOWUP_TEXTS = {
@@ -315,20 +451,18 @@ _DELETE_VAGUE_FOLLOWUP_TEXTS = {
     "delete that",
     "remove it",
     "remove this",
-    "احذفه",
-    "احذفها",
     "امسحه",
     "امسحها",
-    "ازله",
-    "ازلها",
+    "شيله",
+    "شيلها",
 }
 
 _OPEN_LAST_APP_FOLLOWUP_TEXTS = {
     "open the app",
     "open same app",
     "open that app",
-    "افتح التطبيق",
-    "افتح نفس التطبيق",
+    "افتح البرنامج",
+    "افتح نفس البرنامج",
 }
 
 _OPEN_LAST_FILE_FOLLOWUP_TEXTS = {
@@ -344,9 +478,9 @@ _CLOSE_LAST_APP_FOLLOWUP_TEXTS = {
     "close the app",
     "close same app",
     "close that app",
-    "اغلق التطبيق",
-    "اقفل التطبيق",
-    "سكر التطبيق",
+    "اقفل البرنامج",
+    "سكر البرنامج",
+    "سكرلي البرنامج",
 }
 
 _DELETE_LAST_FILE_FOLLOWUP_TEXTS = {
@@ -354,9 +488,8 @@ _DELETE_LAST_FILE_FOLLOWUP_TEXTS = {
     "delete same file",
     "delete that file",
     "remove the file",
-    "احذف الملف",
     "امسح الملف",
-    "ازل الملف",
+    "شيل الملف",
 }
 
 _OPEN_BOTH_FOLLOWUP_TEXTS = {
@@ -373,9 +506,8 @@ _CLOSE_BOTH_FOLLOWUP_TEXTS = {
     "close both of them",
     "close them",
     "close them both",
-    "اغلق الاثنين",
-    "اغلقهم",
     "اقفل الاثنين",
+    "اقفلهم",
     "سكرهم",
 }
 
@@ -440,13 +572,10 @@ _CANCEL_FOLLOWUP_TEXTS = {
     "abort",
     "abort it",
     "stop it",
-    "الغ",
-    "الغاء",
-    "إلغاء",
-    "الغه",
-    "ألغِه",
-    "الغها",
-    "ألغِها",
+    "الغي",
+    "الغيها",
+    "الغيه",
+    "سيبها",
 }
 
 _RENAME_IT_TO_RE = re.compile(r"^\s*(?:rename|change\s+name)\s+(?:it|this|that)\s+to\s+(.+)$", re.IGNORECASE)
@@ -456,11 +585,11 @@ _CONFIRM_IT_WITH_FACTOR_RE = re.compile(
     re.IGNORECASE,
 )
 _AR_RENAME_IT_TO_RE = re.compile(
-    r"^\s*(?:غيره|غيرها|غير\s+اسمه|غير\s+اسمها)\s+(?:الى|إلى)\s+(.+)$",
+    r"^\s*(?:غيره|غيرها|سميه|سميها|سمّيه|سمّيها)\s+(?:ل)\s+(.+)$",
     re.IGNORECASE,
 )
 _AR_MOVE_IT_TO_RE = re.compile(
-    r"^\s*(?:انقله|انقلها|حركه|حركها)\s+(?:الى|إلى)\s+(.+)$",
+    r"^\s*(?:انقله|انقلها|حركه|حركها|وديه|وديها)\s+(?:على)\s+(.+)$",
     re.IGNORECASE,
 )
 _AR_CONFIRM_IT_WITH_FACTOR_RE = re.compile(
@@ -520,8 +649,8 @@ _RESPONSE_MODE_EXPLAIN_OFF_MARKERS = {
     "explain mode off",
     "disable explain mode",
     "turn off explain mode",
-    "الغ وضع الشرح",
-    "الغاء وضع الشرح",
+    "الغي وضع الشرح",
+    "اقفل وضع الشرح",
 }
 
 _RESPONSE_MODE_CONCISE_ON_MARKERS = {
@@ -540,8 +669,8 @@ _RESPONSE_MODE_CONCISE_OFF_MARKERS = {
     "concise mode off",
     "disable concise mode",
     "turn off concise mode",
-    "الغ الوضع المختصر",
-    "الغاء الوضع المختصر",
+    "الغي الوضع المختصر",
+    "اقفل الوضع المختصر",
 }
 
 _RESPONSE_MODE_DEFAULT_MARKERS = {
@@ -568,8 +697,7 @@ _UNCLEAR_QUERY_CLARIFICATION_REPLY_TOKENS = {
     "that",
     "نعم",
     "لا",
-    "الغاء",
-    "إلغاء",
+    "الغي",
     "الاول",
     "الأول",
     "الثاني",
@@ -601,9 +729,9 @@ _UNCLEAR_QUERY_SUBSTANTIVE_MARKERS = {
     "اخبرني",
     "خبرني",
     "عن",
-    "ابحث",
+    "دور",
     "افتح",
-    "اغلق",
+    "اقفل",
 }
 
 
@@ -729,13 +857,13 @@ _LOW_VALUE_LLM_REPLY_MARKERS = {
     "بالطبع يمكنني",
     "هل لديك اي اسئلة اخرى",
     "هل هناك اي معلومات اخرى",
-    "لا استطيع مساعدتك",
-    "لا يمكنني مساعدتك",
-    "اعتذر لكنني",
-    "لا استطيع تقديم معلومات الطقس الحالية",
-    "لا يمكنني تقديم معلومات الطقس الحالية",
-    "يرجى التحقق من خدمة الطقس",
-    "يرجى التحقق من خدمة طقس",
+    "مش هقدر اساعدك",
+    "مش اقدر اساعدك",
+    "اسف بس",
+    "مش هقدر اديك معلومات الطقس دلوقتي",
+    "مش اقدر اديك معلومات الطقس دلوقتي",
+    "اتأكد من خدمة الطقس",
+    "شوف خدمة طقس",
     "اسف",
     "آسف",
 }
@@ -756,6 +884,14 @@ _WEATHER_QUERY_MARKERS = {
     "رياح",
     "رطوبة",
     "تنبؤ",
+    "اخبار الجو",
+    "أخبار الجو",
+    "الجو النهاردة",
+    "جو النهاردة",
+    "الجو ايه",
+    "الجو عامل ايه",
+    "حالة الجو",
+    "حاله الجو",
 }
 
 _CLOTHING_QUERY_MARKERS = {
@@ -1036,7 +1172,7 @@ def _apply_codeswitch_continuity(response_text, language, parsed=None):
     if dominant == "en" and en_ratio >= dominant_ratio:
         bridge = "I can switch to العربية anytime if you prefer."
     elif dominant == "ar" and ar_ratio >= dominant_ratio:
-        bridge = "يمكنني التبديل إلى English في أي وقت إذا رغبت."
+        bridge = "ممكن احول لـ English في اي وقت لو تحب."
     else:
         bridge = str(lexical.get("codeswitch_bridge") or "").strip()
 
@@ -1163,10 +1299,13 @@ def _enforce_llm_response_language(response_text, parsed, language, original_tex
     return rewritten
 
 
-def _finalize_success_response(response_text, parsed, language, original_text, tone_meta):
-    text = _repair_low_value_llm_response(response_text, parsed, language, original_text)
+def _finalize_success_response(response_text, parsed, language, original_text, tone_meta, *, realtime=False):
+    text = str(response_text or "").strip()
+    apply_rewrites = bool(LLM_REALTIME_REWRITE_ENABLED) or not bool(realtime)
+    if apply_rewrites:
+        text = _repair_low_value_llm_response(text, parsed, language, original_text)
+        text = _enforce_llm_response_language(text, parsed, language, original_text)
     text = _apply_persona_length_target(text, parsed)
-    text = _enforce_llm_response_language(text, parsed, language, original_text)
     text = _apply_output_mode(text, parsed, language)
     text = _apply_tone_adaptation(text, language, tone_meta, parsed=parsed)
     text = _apply_codeswitch_continuity(text, language, parsed=parsed)
@@ -2067,6 +2206,11 @@ def _format_demo_output(parsed, success, message, meta):
         lines.append(f"- nlu: {nlu_status} ({nlu_conf:.2f}/{nlu_thr:.2f}) cache={cache_tag}")
     elif meta.get("nlu_fastpath"):
         lines.append("- nlu: parser_fastpath")
+    if meta.get("nlp_used"):
+        nlp_conf = float(meta.get("nlp_confidence") or 0.0)
+        nlp_intent = str(meta.get("nlp_intent") or "unknown")
+        nlp_status = "accepted" if meta.get("nlp_accepted") else "fallback"
+        lines.append(f"- nlp: {nlp_status} ({nlp_intent} {nlp_conf:.2f})")
     if meta.get("entity_scores"):
         lines.append(f"- entity_scores: {meta.get('entity_scores')}")
     if meta.get("clarification_resolved"):
@@ -2133,7 +2277,7 @@ def _execute_followup_multi_actions(actions):
     return any_success, joined
 
 
-def route_command(text, detected_language=None):
+def route_command(text, detected_language=None, realtime=False):
     original_text = text or ""
     start = time.perf_counter()
     forced_language = _normalize_supported_language_tag(detected_language)
@@ -2348,6 +2492,7 @@ def route_command(text, detected_language=None):
                     language_result.language,
                     original_text,
                     tone_meta,
+                    realtime=realtime,
                 )
                 if _should_store_turn(parsed, response):
                     session_memory.add_turn(
@@ -2410,6 +2555,7 @@ def route_command(text, detected_language=None):
                 language_result.language,
                 original_text,
                 tone_meta,
+                realtime=realtime,
             )
             if _should_store_turn(parsed_for_memory, response):
                 session_memory.add_turn(
@@ -2434,6 +2580,12 @@ def route_command(text, detected_language=None):
         "nlu_threshold": float(NLU_INTENT_CONFIDENCE_THRESHOLD),
         "nlu_cache_hit": False,
         "nlu_fastpath": False,
+        "nlu_skipped_for_llm_query": False,
+        "nlp_used": False,
+        "nlp_accepted": False,
+        "nlp_intent": "",
+        "nlp_confidence": 0.0,
+        "nlp_matched_keywords": [],
     }
 
     if parsed is None and NLU_INTENT_ROUTING_ENABLED:
@@ -2445,6 +2597,8 @@ def route_command(text, detected_language=None):
         if parser_fastpath_assessment is not None:
             parsed = parser_candidate
             nlu_meta["nlu_fastpath"] = True
+        elif _should_skip_nlu_llm_query(parser_candidate):
+            nlu_meta["nlu_skipped_for_llm_query"] = True
         else:
             nlu_result = classify_with_nlu(effective_text, language=language_result.language)
             nlu_intent = str(nlu_result.get("intent") or "")
@@ -2466,6 +2620,15 @@ def route_command(text, detected_language=None):
                     args=dict(nlu_result.get("args") or {}),
                 )
                 nlu_meta["nlu_accepted"] = True
+
+    if parsed is None:
+        keyword_nlp_parsed, keyword_nlp_meta = _try_keyword_nlp_routing(
+            original_text,
+            parser_candidate,
+        )
+        nlu_meta.update(keyword_nlp_meta)
+        if keyword_nlp_parsed is not None:
+            parsed = keyword_nlp_parsed
 
     if parsed is None:
         parsed = parser_candidate
@@ -2583,6 +2746,7 @@ def route_command(text, detected_language=None):
                     language_result.language,
                     original_text,
                     tone_meta,
+                    realtime=realtime,
                 )
                 if _should_store_turn(parsed, response):
                     session_memory.add_turn(
@@ -2778,6 +2942,7 @@ def route_command(text, detected_language=None):
             language_result.language,
             original_text,
             tone_meta,
+            realtime=realtime,
         )
         if _should_store_turn(parsed, response):
             session_memory.add_turn(

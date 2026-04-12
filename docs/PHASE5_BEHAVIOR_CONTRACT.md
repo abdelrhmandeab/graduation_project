@@ -91,7 +91,7 @@ Assistant: `For safety, I do not delete with vague references like delete it. Pl
 User: `فعل وضع الشرح`
 Assistant: `تم تفعيل وضع الشرح. سأضيف سببا مختصرا مع نواتج الاوامر.`
 
-User: `افتح التطبيق نوت باد`
+User: `افتح البرنامج نوت باد`
 Assistant (example):
 `تم التنفيذ. ملاحظة تنفيذ: تم تفسير الطلب كـ intent=OS_APP_OPEN و action=n/a.`
 
@@ -109,7 +109,7 @@ Assistant (example):
 User: `open app chrome`
 Assistant: `...`
 
-User: `اغلق التطبيق`
+User: `اقفل البرنامج`
 Assistant (example):
 `... I can continue in English او العربية.`
 

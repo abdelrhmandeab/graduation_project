@@ -69,7 +69,7 @@ Expected:
 ### B1. Arabic command understanding
 Input:
 - حالة الصوت
-- ابحث عن ملف تقرير في المكتب
+- دور على ملف تقرير في المكتب
 
 Expected:
 - Arabic intent parsing succeeds.
@@ -77,14 +77,14 @@ Expected:
 
 ### B2. Arabic follow-up command
 Input:
-- احذفه
+- امسحه
 
 Expected:
 - Jarvis uses recent context and requests safe confirmation.
 
 ### B3. Safety refusal behavior
 Input:
-- احذف نهائيا الملف
+- امسح الملف نهائي
 
 Expected:
 - Permanent delete remains blocked by configuration unless explicitly permitted.

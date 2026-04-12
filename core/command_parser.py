@@ -129,7 +129,7 @@ _NATURAL_APP_REQUEST_PATTERNS = (
     re.compile(r"^(?:can\s+i\s+get|give\s+me)\s+(.+?)(?:\s+(?:now|please))?$", re.IGNORECASE),
     re.compile(
         (
-            r"^(?:\u0627\u0631\u064a\u062f|\u0623\u0631\u064a\u062f|\u0639\u0627\u064a\u0632|\u0639\u0627\u0648\u0632|\u0627\u0628\u063a\u0649|\u0623\u0628\u063a\u0649)"
+            r"^(?:\u0639\u0627\u064a\u0632|\u0639\u0627\u0648\u0632)"
             r"(?:\s+(?:\u0627\u0646|\u0623\u0646))?\s+(.+)$"
         ),
         re.IGNORECASE,
@@ -275,24 +275,16 @@ def _is_drive_open_request(text: str) -> bool:
         "access",
         "enter",
         "\u0627\u0641\u062a\u062d",
-        "\u0627\u0639\u0631\u0636",
-        "\u0627\u0638\u0647\u0631",
-        "\u062a\u0635\u0641\u062d",
-        "\u0627\u062f\u062e\u0644",
+        "\u0627\u0641\u062a\u062d\u0644\u064a",
+        "\u0648\u0631\u064a\u0646\u064a",
+        "\u0647\u0627\u062a\u0644\u064a",
+        "\u062e\u0634",
     )
     if any(verb in lowered for verb in explicit_verbs):
         return True
     if "go to" in lowered and ("drive" in lowered or "partition" in lowered):
         return True
-    if (
-        ("\u0627\u0630\u0647\u0628 \u0627\u0644\u0649" in lowered or "\u0627\u0646\u062a\u0642\u0644 \u0627\u0644\u0649" in lowered)
-        and (
-            "\u0642\u0631\u0635" in lowered
-            or "\u0628\u0627\u0631\u062a\u0634\u0646" in lowered
-            or "\u0642\u0633\u0645" in lowered
-            or "\u062f\u0631\u0627\u064a\u0641" in lowered
-        )
-    ):
+    if "\u0631\u0648\u062d \u0639\u0644\u0649" in lowered and ("\u062f\u0631\u0627\u064a\u0641" in lowered or "\u0642\u0631\u0635" in lowered):
         return True
     return False
 
@@ -439,7 +431,7 @@ def _duration_to_seconds(number_value, unit_text):
 
 def _normalize_url_target(value: str):
     candidate = str(value or "").strip().strip('"').strip("'")
-    candidate = re.sub(r"^(?:website|site|url|موقع|رابط)\s+", "", candidate, flags=re.IGNORECASE).strip()
+    candidate = re.sub(r"^(?:website|site|url|لينك|ويبسايت)\s+", "", candidate, flags=re.IGNORECASE).strip()
     if not candidate:
         return ""
     if _URL_RE.match(candidate):
@@ -468,9 +460,9 @@ def _canonical_window_query(value: str):
 
 def _normalize_language_value(value: str):
     token = _normalize_for_match(value)
-    if token in {"ar", "arabic", "العربية", "عربي"}:
+    if token in {"ar", "arabic", "عربي", "مصري", "المصري"}:
         return "ar"
-    if token in {"en", "english", "الانجليزية", "الإنجليزية", "انجليزي"}:
+    if token in {"en", "english", "انجليزي", "انجلش"}:
         return "en"
     return token
 
@@ -489,7 +481,7 @@ _KEYWORD_TABLE = [
     ({"persona list", "list personas"}, "PERSONA_COMMAND", "list"),
     ({"assistant mode", "assistant mode on"}, "PERSONA_COMMAND", "set", {"profile": "assistant"}),
     # Voice
-    ({"voice status", "speech status", "حالة الصوت", "حالة النطق"}, "VOICE_COMMAND", "status"),
+    ({"voice status", "speech status", "حالة الصوت", "حالة النطق", "الصوت عامل ايه", "النطق عامل ايه", "عامل ايه في الصوت"}, "VOICE_COMMAND", "status"),
     ({"voice diagnostic", "voice diagnostics", "speech diagnostic", "tts diagnostic"}, "VOICE_COMMAND", "diagnostic"),
     (
         {
@@ -501,6 +493,9 @@ _KEYWORD_TABLE = [
             "حالة الكمون",
             "حالة التأخير",
             "حالة الاستجابة",
+            "الاستجابة عاملة ايه",
+            "التاخير عامل ايه",
+            "التأخير عامل ايه",
         },
         "VOICE_COMMAND",
         "latency_status",
@@ -514,9 +509,9 @@ _KEYWORD_TABLE = [
             "fast response mode",
             "reduce latency mode",
             "turbo mode",
-            "وضع الكمون منخفض",
-            "وضع الاستجابة سريع",
-            "وضع السرعة سريع",
+            "خلي الاستجابة سريعة",
+            "خلّي الاستجابة سريعة",
+            "السرعة سريع",
         },
         "VOICE_COMMAND",
         "audio_ux_profile_set",
@@ -528,9 +523,8 @@ _KEYWORD_TABLE = [
             "latency mode normal",
             "speed mode normal",
             "performance mode balanced",
-            "وضع الكمون متوازن",
-            "وضع الاستجابة متوازن",
-            "وضع السرعة متوازن",
+            "خلي الاستجابة متوازنة",
+            "خلّي الاستجابة متوازنة",
         },
         "VOICE_COMMAND",
         "audio_ux_profile_set",
@@ -542,31 +536,35 @@ _KEYWORD_TABLE = [
             "latency mode stable",
             "latency mode reliable",
             "performance mode stable",
-            "وضع الكمون ثابت",
-            "وضع الاستجابة ثابت",
-            "وضع الاستجابة قوي",
+            "خلي الاستجابة ثابتة",
+            "خلّي الاستجابة ثابتة",
+            "خلي الاستجابة قوية",
         },
         "VOICE_COMMAND",
         "audio_ux_profile_set",
         {"profile": "robust"},
     ),
-    ({"audio ux status", "audio profile status", "voice audio status", "حالة تجربة الصوت", "حالة ملف تجربة الصوت"}, "VOICE_COMMAND", "audio_ux_status"),
-    ({"audio ux profiles", "audio ux profile list", "list audio ux profiles", "قائمة ملفات تجربة الصوت", "ملفات تجربة الصوت"}, "VOICE_COMMAND", "audio_ux_profiles"),
-    ({"audio ux profile balanced", "audio profile balanced", "set audio profile balanced", "ملف تجربة الصوت متوازن", "وضع تجربة الصوت متوازن", "وضع الصوت متوازن"}, "VOICE_COMMAND", "audio_ux_profile_set", {"profile": "balanced"}),
-    ({"audio ux profile responsive", "audio profile responsive", "set audio profile responsive", "ملف تجربة الصوت سريع", "وضع تجربة الصوت سريع", "وضع الصوت سريع"}, "VOICE_COMMAND", "audio_ux_profile_set", {"profile": "responsive"}),
-    ({"audio ux profile robust", "audio profile robust", "set audio profile robust", "ملف تجربة الصوت قوي", "وضع تجربة الصوت قوي", "وضع الصوت قوي", "وضع الصوت ثابت"}, "VOICE_COMMAND", "audio_ux_profile_set", {"profile": "robust"}),
-    ({"voice quality status", "speech quality status", "tts quality status", "حالة جودة الصوت", "حالة جودة النطق"}, "VOICE_COMMAND", "voice_quality_status"),
-    ({"voice quality natural", "speech quality natural", "tts quality natural", "natural voice mode", "جودة الصوت طبيعي", "وضع الصوت طبيعي", "وضع النطق طبيعي"}, "VOICE_COMMAND", "voice_quality_set", {"mode": "natural"}),
-    ({"voice quality standard", "speech quality standard", "tts quality standard", "robot voice mode", "robotic voice mode", "جودة الصوت قياسي", "وضع الصوت قياسي", "وضع الصوت روبوتي"}, "VOICE_COMMAND", "voice_quality_set", {"mode": "standard"}),
-    ({"stt profile status", "speech profile status", "voice stt profile status", "حالة ملف الاستماع"}, "VOICE_COMMAND", "stt_profile_status"),
-    ({"stt profile quiet", "speech profile quiet", "ملف الاستماع هادئ", "وضع الاستماع هادئ"}, "VOICE_COMMAND", "stt_profile_set", {"profile": "quiet"}),
-    ({"stt profile noisy", "speech profile noisy", "ملف الاستماع ضوضاء", "وضع الاستماع ضوضاء"}, "VOICE_COMMAND", "stt_profile_set", {"profile": "noisy"}),
-    ({"stt backend status", "speech backend status", "voice stt backend status", "حالة محرك الاستماع"}, "VOICE_COMMAND", "stt_backend_status"),
+    ({"audio ux status", "audio profile status", "voice audio status", "الصوت عامل ايه دلوقتي"}, "VOICE_COMMAND", "audio_ux_status"),
+    ({"audio ux profiles", "audio ux profile list", "list audio ux profiles", "ملفات الصوت ايه"}, "VOICE_COMMAND", "audio_ux_profiles"),
+    ({"audio ux profile balanced", "audio profile balanced", "set audio profile balanced", "خلي الصوت متوازن", "خلّي الصوت متوازن"}, "VOICE_COMMAND", "audio_ux_profile_set", {"profile": "balanced"}),
+    ({"audio ux profile responsive", "audio profile responsive", "set audio profile responsive", "خلي الصوت سريع", "خلّي الصوت سريع"}, "VOICE_COMMAND", "audio_ux_profile_set", {"profile": "responsive"}),
+    ({"audio ux profile robust", "audio profile robust", "set audio profile robust", "خلي الصوت ثابت", "خلّي الصوت ثابت"}, "VOICE_COMMAND", "audio_ux_profile_set", {"profile": "robust"}),
+    ({"voice quality status", "speech quality status", "tts quality status", "جودة الصوت عاملة ايه"}, "VOICE_COMMAND", "voice_quality_status"),
+    ({"voice quality natural", "speech quality natural", "tts quality natural", "natural voice mode", "خلي الصوت طبيعي", "خلّي الصوت طبيعي"}, "VOICE_COMMAND", "voice_quality_set", {"mode": "natural"}),
+    ({"voice quality standard", "speech quality standard", "tts quality standard", "robot voice mode", "robotic voice mode", "خلي الصوت عادي", "خلّي الصوت عادي", "خلي الصوت روبوتي"}, "VOICE_COMMAND", "voice_quality_set", {"mode": "standard"}),
+    ({"stt profile status", "speech profile status", "voice stt profile status", "الاستماع عامل ايه"}, "VOICE_COMMAND", "stt_profile_status"),
+    ({"stt profile quiet", "speech profile quiet", "خلي الاستماع هادي", "خلّي الاستماع هادي"}, "VOICE_COMMAND", "stt_profile_set", {"profile": "quiet"}),
+    ({"stt profile noisy", "speech profile noisy", "خلي الاستماع دوشة", "خلّي الاستماع دوشة"}, "VOICE_COMMAND", "stt_profile_set", {"profile": "noisy"}),
+    ({"stt profile arabic-egy", "stt profile arabic egy", "speech profile arabic egy", "stt profile egyptian", "خلي الاستماع مصري", "خلّي الاستماع مصري"}, "VOICE_COMMAND", "stt_profile_set", {"profile": "arabic_egy"}),
+    ({"stt profile code-switched", "stt profile code switched", "speech profile code switched", "stt profile mixed", "خلي الاستماع مختلط", "خلّي الاستماع مختلط"}, "VOICE_COMMAND", "stt_profile_set", {"profile": "code_switched"}),
+    ({"stt profile auto", "speech profile auto", "voice stt profile auto", "خلي الاستماع اوتو", "خلّي الاستماع اوتو"}, "VOICE_COMMAND", "stt_profile_set", {"profile": "auto"}),
+    ({"stt backend status", "speech backend status", "voice stt backend status", "محرك الاستماع عامل ايه"}, "VOICE_COMMAND", "stt_backend_status"),
     ({"stt backend whisper", "stt backend faster whisper", "set stt backend faster whisper", "set stt backend faster_whisper"}, "VOICE_COMMAND", "stt_backend_set", {"backend": "faster_whisper"}),
-    ({"wake triggers", "wake triggers list", "list wake triggers", "wake status", "wake mode status"}, "VOICE_COMMAND", "wake_status"),
+    ({"stt backend egyptalk", "stt backend egypt talk", "set stt backend egyptalk", "set stt backend nemo", "stt backend nemo egyptalk", "set stt backend masri", "محرك الاستماع مصري"}, "VOICE_COMMAND", "stt_backend_set", {"backend": "egyptalk_transformers"}),
+    ({"wake triggers", "wake triggers list", "list wake triggers", "wake status", "wake mode status", "كلمات التنبيه", "كلمات الصحوة"}, "VOICE_COMMAND", "wake_status"),
     ({"stop speaking", "interrupt speech", "be quiet", "stop talking"}, "VOICE_COMMAND", "interrupt"),
-    ({"speech on", "enable speech"}, "VOICE_COMMAND", "speech_on"),
-    ({"speech off", "disable speech"}, "VOICE_COMMAND", "speech_off"),
+    ({"speech on", "enable speech", "شغل الصوت"}, "VOICE_COMMAND", "speech_on"),
+    ({"speech off", "disable speech", "اطفي الصوت", "اقفل الصوت", "اسكت"}, "VOICE_COMMAND", "speech_off"),
     # Knowledge base
     ({"kb status", "knowledge status", "knowledge base status"}, "KNOWLEDGE_BASE_COMMAND", "status"),
     ({"kb quality", "knowledge quality", "kb quality report"}, "KNOWLEDGE_BASE_COMMAND", "quality"),
@@ -579,8 +577,8 @@ _KEYWORD_TABLE = [
     ({"memory on", "enable memory"}, "MEMORY_COMMAND", "on"),
     ({"memory off", "disable memory"}, "MEMORY_COMMAND", "off"),
     ({"memory show", "show memory"}, "MEMORY_COMMAND", "show"),
-    ({"language arabic", "set language arabic", "language ar", "set language ar", "اللغة العربية", "اللغة عربي"}, "MEMORY_COMMAND", "set_language", {"language": "ar"}),
-    ({"language english", "set language english", "language en", "set language en", "اللغة الانجليزية", "اللغة الإنجليزية", "اللغة انجليزي"}, "MEMORY_COMMAND", "set_language", {"language": "en"}),
+    ({"language arabic", "set language arabic", "language ar", "set language ar", "خلي اللغة عربي", "خلّي اللغة عربي"}, "MEMORY_COMMAND", "set_language", {"language": "ar"}),
+    ({"language english", "set language english", "language en", "set language en", "خلي اللغة انجليزي", "خلّي اللغة انجليزي"}, "MEMORY_COMMAND", "set_language", {"language": "en"}),
     # Demo
     ({"demo mode on", "demo on"}, "DEMO_MODE", "on"),
     ({"demo mode off", "demo off"}, "DEMO_MODE", "off"),
@@ -611,9 +609,9 @@ _KEYWORD_TABLE = [
             "undo",
             "rollback",
             "undo last action",
-            "\u062a\u0631\u0627\u062c\u0639",
-            "\u0627\u0644\u063a\u0627\u0621 \u0627\u062e\u0631 \u0639\u0645\u0644\u064a\u0629",
-            "\u0627\u0644\u063a\u0627\u0621 \u0627\u062e\u0631 \u0627\u0645\u0631",
+            "ارجع اخر حاجة",
+            "الغي اخر حاجة",
+            "رجعني لاخر خطوة",
         },
         "OS_ROLLBACK",
         "",
@@ -623,8 +621,8 @@ _KEYWORD_TABLE = [
         {
             "current directory",
             "pwd",
-            "\u0627\u0644\u0645\u062c\u0644\u062f \u0627\u0644\u062d\u0627\u0644\u064a",
-            "\u0627\u064a\u0646 \u0627\u0646\u0627",
+            "احنا فين",
+            "انا فين دلوقتي",
         },
         "OS_FILE_NAVIGATION",
         "pwd",
@@ -633,9 +631,9 @@ _KEYWORD_TABLE = [
         {
             "list drives",
             "drive list",
-            "\u0627\u0639\u0631\u0636 \u0627\u0644\u0627\u0642\u0631\u0627\u0635",
-            "\u0627\u0638\u0647\u0631 \u0627\u0644\u0627\u0642\u0631\u0627\u0635",
-            "\u0642\u0627\u0626\u0645\u0629 \u0627\u0644\u0627\u0642\u0631\u0627\u0635",
+            "وريني الدرايفات",
+            "هاتلي الدرايفات",
+            "الدرايفات ايه",
         },
         "OS_FILE_NAVIGATION",
         "list_drives",
@@ -671,15 +669,27 @@ _REGEX_TABLE = [
     ),
     # Voice
     (
-        re.compile(r"^(?:set\s+)?(?:voice\s+)?(?:stt|speech)\s+profile(?:\s+to)?\s+(quiet|noisy)(?:\s+room)?$"),
+        re.compile(
+            r"^(?:set\s+)?(?:voice\s+)?(?:stt|speech)\s+profile(?:\s+to)?\s+(quiet|noisy|arabic(?:[_\s-]?egy|[_\s-]?egyptian)?|egyptian|code[_\s-]?switched|mixed|auto)(?:\s+room)?$"
+        ),
         False,
         "VOICE_COMMAND",
         "stt_profile_set",
-        lambda m: {"profile": m.group(1)},
+        lambda m: {"profile": m.group(1).replace(" ", "_").replace("-", "_")},
     ),
     (
         re.compile(
-            r"^(?:set\s+)?(?:(?:voice|speech|stt)\s+)?(?:stt|speech)\s+backend(?:\s+to)?\s+(faster(?:[_\s-]?whisper)?|whisper)$",
+            r"^(?:ظبط|ظبّط|غير|غيّر|عدل|عدّل|خلي|خلّي)\s+(?:ملف|وضع)?\s*الاستماع(?:\s+ل)?\s+(هادي|دوشة|عربي\s+مصري|مصري|مختلط|اوتو)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "VOICE_COMMAND",
+        "stt_profile_set",
+        lambda m: {"profile": m.group(1).replace(" ", "_")},
+    ),
+    (
+        re.compile(
+            r"^(?:set\s+)?(?:(?:voice|speech|stt)\s+)?(?:stt|speech)\s+backend(?:\s+to)?\s+(faster(?:[_\s-]?whisper)?|whisper|egypt(?:[_\s-]?talk)?|egyptalk(?:[_\s-]?transformers)?|nemo(?:[_\s-]?egyptalk)?|masri)$",
             re.IGNORECASE,
         ),
         True,
@@ -709,7 +719,7 @@ _REGEX_TABLE = [
     ),
     (
         re.compile(
-            r"^(?:اضبط|حدد|غير|غيّر|اجعل)\s+(?:جودة|وضع)\s+(?:الصوت|النطق)(?:\s+(?:الى|إلى))?\s+(طبيعي|قياسي|افتراضي|روبوت|روبوتي)$",
+            r"^(?:ظبط|ظبّط|غير|غيّر|عدل|عدّل|خلي|خلّي)\s+(?:جودة|وضع)?\s*(?:الصوت|النطق)(?:\s+ل)?\s+(طبيعي|عادي|روبوت|روبوتي)$",
             re.IGNORECASE,
         ),
         True,
@@ -749,7 +759,7 @@ _REGEX_TABLE = [
     ),
     (
         re.compile(
-            r"^(?:اضبط|حدد|غير|غيّر|اجعل)\s+(?:ملف|وضع)\s+(?:تجربة\s+)?(?:الصوت|النطق)(?:\s+(?:الى|إلى))?\s+(متوازن|سريع(?:\s*الاستجابة)?|منخفض\s*الكمون|قوي|ثابت|موثوق)$",
+            r"^(?:ظبط|ظبّط|غير|غيّر|عدل|عدّل|خلي|خلّي)\s+(?:ملف|وضع)?\s*(?:تجربة\s+)?(?:الصوت|النطق|الاستجابة)(?:\s+ل)?\s+(متوازن|سريع(?:\s*الاستجابة)?|قوي|ثابت)$",
             re.IGNORECASE,
         ),
         True,
@@ -759,7 +769,7 @@ _REGEX_TABLE = [
     ),
     (
         re.compile(
-            r"^(?:اضبط|حدد|غير|غيّر|اجعل)\s+(?:وضع|نمط)\s+(?:السرعة|الكمون|الاستجابة)(?:\s+(?:الى|إلى))?\s+(سريع|متوازن|طبيعي|ثابت|موثوق|منخفض\s*الكمون)$",
+            r"^(?:ظبط|ظبّط|غير|غيّر|عدل|عدّل|خلي|خلّي)\s+(?:وضع|نمط)?\s*(?:السرعة|الكمون|الاستجابة)(?:\s+ل)?\s+(سريع|متوازن|طبيعي|ثابت)$",
             re.IGNORECASE,
         ),
         True,
@@ -769,7 +779,7 @@ _REGEX_TABLE = [
     ),
     (
         re.compile(
-            r"^(?:حالة\s+)?(?:الكمون|الاستجابة|التأخير)\s*$",
+            r"^(?:(?:الكمون|الاستجابة|التاخير|التأخير)\s+عامل(?:ة)?\s+ايه|(?:الكمون|الاستجابة|التاخير|التأخير)\s+اخباره\s+ايه)\s*$",
             re.IGNORECASE,
         ),
         True,
@@ -880,7 +890,7 @@ _REGEX_TABLE = [
     ),
     (
         re.compile(
-            r"^(?:اضبط|حدد|غير|غيّر|بدل|بدّل|حول|حوّل|خلي|خلّي|اجعل)?\s*(?:اللغة)(?:\s+(?:الى|إلى|ل))?\s*(العربية|عربي|الانجليزية|الإنجليزية|انجليزي|ar|en)(?:\s*[.!?؟،]+)?$",
+            r"^(?:ظبط|ظبّط|غير|غيّر|بدل|بدّل|حول|حوّل|خلي|خلّي)?\s*(?:اللغة)(?:\s+ل)?\s*(عربي|مصري|انجليزي|انجلش|ar|en)(?:\s*[.!?؟،]+)?$",
             re.IGNORECASE,
         ),
         True,
@@ -1027,7 +1037,7 @@ _REGEX_TABLE = [
     # File search
     (
         re.compile(
-            r"^(?:find file|search file|\u0627\u0628\u062d\u062b \u0639\u0646 \u0645\u0644\u0641|\u0627\u0628\u062d\u062b \u0645\u0644\u0641|\u062f\u0648\u0631 \u0639\u0644\u0649 \u0645\u0644\u0641)\s+(.+?)(?:\s+(?:in|\u0641\u064a)\s+(.+))?$",
+            r"^(?:find file|search file|دور على ملف|دوّر على ملف|وريني ملف|هاتلي ملف)\s+(.+?)(?:\s+(?:in|\u0641\u064a)\s+(.+))?$",
             re.IGNORECASE,
         ),
         True,
@@ -1038,7 +1048,7 @@ _REGEX_TABLE = [
     # File nav - regex-based
     (
         re.compile(
-            r"^(?:list files|list directory|show files|show directory|\u0627\u0639\u0631\u0636 \u0627\u0644\u0645\u0644\u0641\u0627\u062a|\u0627\u0638\u0647\u0631 \u0627\u0644\u0645\u0644\u0641\u0627\u062a|\u0627\u0639\u0631\u0636 \u0627\u0644\u0645\u062c\u0644\u062f|\u0627\u0638\u0647\u0631 \u0627\u0644\u0645\u062c\u0644\u062f)(?:\s+(?:in|\u0641\u064a)\s+(.+))?$",
+            r"^(?:list files|list directory|show files|show directory|وريني الملفات|هاتلي الملفات|وريني المجلد|هاتلي المجلد)(?:\s+(?:in|\u0641\u064a)\s+(.+))?$",
             re.IGNORECASE,
         ),
         True,
@@ -1055,7 +1065,7 @@ _REGEX_TABLE = [
     ),
     (
         re.compile(
-            r"^(?:file info|metadata|\u0645\u0639\u0644\u0648\u0645\u0627\u062a \u0645\u0644\u0641|\u0628\u064a\u0627\u0646\u0627\u062a \u0645\u0644\u0641)\s+(.+)$",
+            r"^(?:file info|metadata|معلومات الملف|بيانات الملف)\s+(.+)$",
             re.IGNORECASE,
         ),
         True,
@@ -1065,7 +1075,7 @@ _REGEX_TABLE = [
     ),
     (
         re.compile(
-            r"^(?:create folder|make folder|mkdir|\u0627\u0646\u0634\u0626 \u0645\u062c\u0644\u062f|\u0627\u0639\u0645\u0644 \u0645\u062c\u0644\u062f|\u0627\u0635\u0646\u0639 \u0645\u062c\u0644\u062f)\s+(.+)$",
+            r"^(?:create folder|make folder|mkdir|اعمل مجلد|اعمللي مجلد)\s+(.+)$",
             re.IGNORECASE,
         ),
         True,
@@ -1075,7 +1085,7 @@ _REGEX_TABLE = [
     ),
     (
         re.compile(
-            r"^(?:delete permanently|permanent delete|force delete|\u0627\u062d\u0630\u0641 \u0646\u0647\u0627\u0626\u064a\u0627|\u062d\u0630\u0641 \u0646\u0647\u0627\u0626\u064a)\s+(.+)$",
+            r"^(?:delete permanently|permanent delete|force delete|امسح نهائي|شيل نهائي)\s+(.+)$",
             re.IGNORECASE,
         ),
         True,
@@ -1084,7 +1094,7 @@ _REGEX_TABLE = [
         lambda m: {"path": m.group(1).strip()},
     ),
     (
-        re.compile(r"^(?:delete|remove|\u0627\u062d\u0630\u0641|\u0627\u0645\u0633\u062d|\u0627\u0632\u0644)\s+(.+)$", re.IGNORECASE),
+        re.compile(r"^(?:delete|remove|امسح|شيل)\s+(.+)$", re.IGNORECASE),
         True,
         "OS_FILE_NAVIGATION",
         "delete_item",
@@ -1092,7 +1102,7 @@ _REGEX_TABLE = [
     ),
     (
         re.compile(
-            r"^(?:move|\u0627\u0646\u0642\u0644|\u062d\u0631\u0643)\s+(.+?)\s+(?:to|\u0627\u0644\u0649|\u0625\u0644\u0649)\s+(.+)$",
+            r"^(?:move|حرك|ودي|ودّي)\s+(.+?)\s+(?:to|على)\s+(.+)$",
             re.IGNORECASE,
         ),
         True,
@@ -1102,7 +1112,7 @@ _REGEX_TABLE = [
     ),
     (
         re.compile(
-            r"^(?:rename|\u0627\u0639\u062f \u062a\u0633\u0645\u064a\u0629|\u063a\u064a\u0631 \u0627\u0633\u0645|\u063a\u064a\u0651\u0631 \u0627\u0633\u0645)\s+(.+?)\s+(?:to|\u0627\u0644\u0649|\u0625\u0644\u0649)\s+(.+)$",
+            r"^(?:rename|سمي|سميلي|سمّي|سمّيلي)\s+(.+?)\s+(?:to|ل)\s+(.+)$",
             re.IGNORECASE,
         ),
         True,
@@ -1112,7 +1122,7 @@ _REGEX_TABLE = [
     ),
     # Open app explicit
     (
-        re.compile(r"^(?:open app|\u0627\u0641\u062a\u062d \u062a\u0637\u0628\u064a\u0642|\u0634\u063a\u0644 \u062a\u0637\u0628\u064a\u0642)\s+(.+)$", re.IGNORECASE),
+        re.compile(r"^(?:open app|افتحلي برنامج|شغللي برنامج)\s+(.+)$", re.IGNORECASE),
         True,
         "OS_APP_OPEN",
         "",
@@ -1121,7 +1131,7 @@ _REGEX_TABLE = [
     # Close app explicit
     (
         re.compile(
-            r"^(?:close app|\u0627\u063a\u0644\u0642 \u062a\u0637\u0628\u064a\u0642|\u0627\u0642\u0641\u0644 \u062a\u0637\u0628\u064a\u0642|\u0633\u0643\u0631 \u062a\u0637\u0628\u064a\u0642|\u0627\u0646\u0647\u064a \u062a\u0637\u0628\u064a\u0642)\s+(.+)$",
+            r"^(?:close app|اقفللي برنامج|سكرلي برنامج|سكّرلي برنامج)\s+(.+)$",
             re.IGNORECASE,
         ),
         True,
@@ -1180,7 +1190,7 @@ def _try_open_command(raw, normalized):
         return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": system_action})
 
     open_match = re.match(
-        r"^(?:open|launch|start|\u0627\u0641\u062a\u062d|\u0634\u063a\u0644)\s+(.+)$",
+        r"^(?:open|launch|start|\u0627\u0641\u062a\u062d|\u0627\u0641\u062a\u062d\u0644\u064a|\u0634\u063a\u0644|\u0634\u063a\u0644\u0644\u064a)\s+(.+)$",
         raw,
         flags=re.IGNORECASE,
     )
@@ -1234,7 +1244,7 @@ def _try_open_command(raw, normalized):
 def _try_close_command(raw, normalized):
     close_match = re.match(
         (
-            r"^(?:close|terminate|kill|quit|exit|\u0627\u063a\u0644\u0642|\u0627\u0642\u0641\u0644|\u0633\u0643\u0631|\u0627\u0646\u0647\u064a)\s+"
+            r"^(?:close|terminate|kill|quit|exit|\u0627\u0642\u0641\u0644|\u0627\u0642\u0641\u0644\u0644\u064a|\u0633\u0643\u0631|\u0633\u0643\u0631\u0644\u064a|\u0633\u0643\u0651\u0631\u0644\u064a)\s+"
             r"(?:app\s+|application\s+|program\s+|\u062a\u0637\u0628\u064a\u0642\s+)?(.+)$"
         ),
         raw,
@@ -1309,7 +1319,6 @@ def _clean_browser_search_query(value):
     )
     return query.strip().strip(" .,!?؟")
 
-
 def _try_natural_file_search(raw, normalized):
     lowered = _normalize_for_match(raw)
     web_markers = (
@@ -1322,8 +1331,6 @@ def _try_natural_file_search(raw, normalized):
         "google",
         "الويب",
         "النت",
-        "الانترنت",
-        "الإنترنت",
         "جوجل",
         "اونلاين",
         "أونلاين",
@@ -1347,8 +1354,8 @@ def _try_natural_file_search(raw, normalized):
         ),
         re.compile(
             (
-                r"^(?:(?:\u0627\u0631\u064a\u062f|\u0623\u0631\u064a\u062f|\u0639\u0627\u064a\u0632|\u0627\u0628\u063a\u0649|\u0623\u0628\u063a\u0649)\s+(?:\u0627\u0646|\u0623\u0646)?\s+)?"
-                r"(?:\u0627\u062c\u062f|\u0623\u062c\u062f|\u0627\u062f\u0648\u0631|\u0623\u062f\u0648\u0631|\u0627\u0628\u062d\u062b|\u0623\u0628\u062d\u062b)(?:\s+\u0639\u0646)?\s+(?:\u0645\u0644\u0641\s+)?"
+                r"^(?:(?:\u0639\u0627\u064a\u0632|\u0639\u0627\u0648\u0632)\s+(?:\u0627\u0646|\u0623\u0646)?\s+)?"
+                r"(?:\u062f\u0648\u0631|\u062f\u0648\u0651\u0631|\u062f\u0648\u0631\u0644\u064a|\u062f\u0648\u0651\u0631\u0644\u064a)(?:\s+\u0639\u0646)?\s+(?:\u0645\u0644\u0641\s+)?"
                 r"(.+?)(?:\s+(?:\u0641\u064a|\u062f\u0627\u062e\u0644)\s+(.+))?$"
             ),
             re.IGNORECASE,
@@ -1459,13 +1466,13 @@ def _try_natural_schedule_command(raw, normalized):
 def _try_natural_browser_command(raw, normalized):
     lowered = _normalize_for_match(raw)
 
-    if re.search(r"\b(new tab|open tab)\b", lowered) or "تبويب جديد" in lowered:
+    if re.search(r"\b(new tab|open tab)\b", lowered) or "تاب جديد" in lowered:
         return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "browser_new_tab"})
-    if re.search(r"\b(close tab)\b", lowered) or "اغلق التبويب" in lowered:
+    if re.search(r"\b(close tab)\b", lowered) or "اقفل التاب" in lowered or "سكر التاب" in lowered:
         return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "browser_close_tab"})
     if re.search(r"\b(go back|browser back)\b", lowered) or "ارجع للخلف" in lowered:
         return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "browser_back"})
-    if re.search(r"\b(go forward|browser forward)\b", lowered) or "اذهب للامام" in lowered:
+    if re.search(r"\b(go forward|browser forward)\b", lowered) or "روح لقدام" in lowered:
         return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "browser_forward"})
 
     search_patterns = (
@@ -1474,7 +1481,7 @@ def _try_natural_browser_command(raw, normalized):
             re.IGNORECASE,
         ),
         re.compile(
-            r"(?:^|\b)(?:ابحث(?:\s+(?:في\s+)?)?(?:(?:الويب|النت|الانترنت|الإنترنت|جوجل|اونلاين|أونلاين)\s*(?:عن)?|عن)|دور(?:\s+على)?(?:\s+(?:النت|الانترنت|الإنترنت|اونلاين|أونلاين))?)\s+(.+)$",
+            r"(?:^|\b)(?:دور(?:\s+على)?(?:\s+(?:النت|اونلاين|أونلاين))?|دوّر(?:\s+على)?(?:\s+(?:النت|اونلاين|أونلاين))?)\s+(.+)$",
             re.IGNORECASE,
         ),
     )
@@ -1493,7 +1500,7 @@ def _try_natural_browser_command(raw, normalized):
 
     open_patterns = (
         re.compile(r"^(?:open|visit|go to|browse to)\s+(?:website|site|url\s+)?(.+)$", re.IGNORECASE),
-        re.compile(r"^(?:افتح|روح على|اذهب الى)\s+(?:موقع\s+)?(.+)$", re.IGNORECASE),
+        re.compile(r"^(?:افتح|افتحلي|روح على|خش على|ادخل على)\s+(?:موقع\s+)?(.+)$", re.IGNORECASE),
     )
     for pattern in open_patterns:
         match = pattern.match(raw)
@@ -1520,14 +1527,14 @@ def _try_natural_window_command(raw, normalized):
         return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "window_snap_left"})
     if "snap" in lowered and "right" in lowered:
         return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "window_snap_right"})
-    if re.search(r"\b(next window|switch window)\b", lowered) or "النافذة التالية" in lowered:
+    if re.search(r"\b(next window|switch window)\b", lowered) or "الشباك اللي بعده" in lowered:
         return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "window_next"})
-    if re.search(r"\b(close (?:active|this) window)\b", lowered) or "اغلق النافذة" in lowered:
+    if re.search(r"\b(close (?:active|this) window)\b", lowered) or "اقفل الشباك" in lowered:
         return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "window_close_active"})
 
     focus_patterns = (
         re.compile(r"^(?:focus|switch to|bring)\s+(?:the\s+)?(?:window\s+)?(.+)$", re.IGNORECASE),
-        re.compile(r"^(?:ركز على|روح على)\s+(?:نافذة\s+)?(.+)$", re.IGNORECASE),
+        re.compile(r"^(?:ركز على|روح على|خش على|ادخل على)\s+(?:شباك\s+)?(.+)$", re.IGNORECASE),
     )
     for pattern in focus_patterns:
         match = pattern.match(raw)
@@ -1550,11 +1557,11 @@ def _try_natural_media_control_command(raw, normalized):
 
     if re.search(r"\b(pause|play|resume)\b", lowered) and any(token in lowered for token in ("music", "media", "track", "song")):
         return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "media_play_pause"})
-    if any(token in lowered for token in ("next track", "next song", "skip track", "skip song", "الاغنية التالية")):
+    if any(token in lowered for token in ("next track", "next song", "skip track", "skip song", "الاغنية اللي بعد كده", "الأغنية اللي بعد كده")):
         return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "media_next_track"})
-    if any(token in lowered for token in ("previous track", "prev track", "previous song", "الاغنية السابقة")):
+    if any(token in lowered for token in ("previous track", "prev track", "previous song", "الاغنية اللي قبلها", "الأغنية اللي قبلها")):
         return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "media_previous_track"})
-    if any(token in lowered for token in ("stop music", "stop media", "اوقف التشغيل")):
+    if any(token in lowered for token in ("stop music", "stop media", "وقف المزيكا", "وقف الميديا")):
         return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "media_stop"})
 
     forward = re.search(r"(?:seek|skip|forward|قدم)\s+(?:by\s+)?(.+?)?\s*(seconds?|secs?|ثانية|ثواني)?$", raw, flags=re.IGNORECASE)
@@ -1586,7 +1593,7 @@ def _try_natural_file_operation(raw, normalized):
             re.IGNORECASE,
         ),
         re.compile(
-            r"^(?:انشئ|اعمل|اصنع)\s+(?:مجلد\s+)?(?:باسم\s+)?(.+?)(?:\s+(?:في|داخل)\s+(.+))?$",
+            r"^(?:اعمل|اعمللي)\s+(?:مجلد\s+)?(?:باسم\s+)?(.+?)(?:\s+(?:في|داخل)\s+(.+))?$",
             re.IGNORECASE,
         ),
     )
@@ -1607,7 +1614,7 @@ def _try_natural_file_operation(raw, normalized):
             re.IGNORECASE,
         ),
         re.compile(
-            r"^(?:انقل|حرك)\s+(?:الملف|المجلد)?\s*(.+?)\s+(?:الى|إلى|داخل)\s+(.+)$",
+            r"^(?:حرك|ودي|ودّي)\s+(?:الملف|المجلد)?\s*(.+?)\s+(?:على)\s+(.+)$",
             re.IGNORECASE,
         ),
     )
@@ -1624,7 +1631,7 @@ def _try_natural_file_operation(raw, normalized):
 
     rename_patterns = (
         re.compile(r"^(?:rename|change name of)\s+(.+?)\s+(?:to|as)\s+(.+)$", re.IGNORECASE),
-        re.compile(r"^(?:اعد تسمية|غير اسم|غيّر اسم)\s+(.+?)\s+(?:الى|إلى)\s+(.+)$", re.IGNORECASE),
+        re.compile(r"^(?:سمي|سميلي|سمّي|سمّيلي)\s+(.+?)\s+(?:ل)\s+(.+)$", re.IGNORECASE),
     )
     for pattern in rename_patterns:
         match = pattern.match(raw)
@@ -1639,7 +1646,7 @@ def _try_natural_file_operation(raw, normalized):
 
     delete_patterns = (
         re.compile(r"^(?:delete|remove)\s+(?:the\s+)?(?:file|folder)?\s*(.+?)(?:\s+(permanently|forever))?$", re.IGNORECASE),
-        re.compile(r"^(?:احذف|امسح|ازل)\s+(?:الملف|المجلد)?\s*(.+?)(?:\s+(نهائيا|نهائي))?$", re.IGNORECASE),
+        re.compile(r"^(?:امسح|شيل)\s+(?:الملف|المجلد)?\s*(.+?)(?:\s+(نهائيا|نهائي))?$", re.IGNORECASE),
     )
     for pattern in delete_patterns:
         match = pattern.match(raw)
@@ -1698,7 +1705,7 @@ def _try_cd_commands(normalized, raw):
         )
 
     arabic_match = re.match(
-        r"^(?:\u0627\u0630\u0647\u0628|\u0631\u0648\u062d|\u0627\u0646\u062a\u0642\u0644)\s+(?:\u0627\u0644\u0649|\u0625\u0644\u0649)\s+(.+)$",
+        r"^(?:\u0631\u0648\u062d|\u0627\u062f\u062e\u0644|\u062e\u0634)\s+(?:\u0639\u0644\u0649)\s+(.+)$",
         raw,
         flags=re.IGNORECASE,
     )

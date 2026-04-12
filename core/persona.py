@@ -129,7 +129,7 @@ PERSONA_LEXICAL_BANKS = {
         "ar": {
             "gentle_prefixes": ["بكل سرور.", "اكيد."],
             "urgent_prefixes": ["حاضر حالا.", "اكيد.. بنفذ بسرعة."],
-            "explain_bridge": "وذلك لان:",
+            "explain_bridge": "وده عشان:",
             "codeswitch_bridge": "Sure, we can keep going in English او العربية.",
         },
     },

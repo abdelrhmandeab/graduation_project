@@ -212,10 +212,9 @@ _SHOW_MORE_REPLY_TOKENS = {
     "another page",
     "المزيد",
     "اكتر",
-    "أكثر",
-    "التالي",
+    "اللي بعده",
     "صفحة تانية",
-    "صفحة ثانية",
+    "صفحة كمان",
 }
 _NONE_OF_THESE_REPLY_TOKENS = {
     "none",
@@ -233,17 +232,17 @@ _THIS_REFERENCE_TOKENS = {
     "this one",
     "this app",
     "this file",
-    "هذا الخيار",
-    "هذا التطبيق",
-    "هذا الملف",
+    "الخيار ده",
+    "البرنامج ده",
+    "الملف ده",
 }
 _THAT_REFERENCE_TOKENS = {
     "that one",
     "that app",
     "that file",
-    "ذلك الخيار",
-    "ذلك التطبيق",
-    "ذلك الملف",
+    "الخيار ده",
+    "البرنامج ده",
+    "الملف ده",
 }
 
 

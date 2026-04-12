@@ -14,36 +14,133 @@ _STT_PROFILE_PRESETS = {
     "quiet": {
         "mic": {
             "energy_threshold": 0.009,
-            "silence_seconds": 0.95,
-            "min_speech_seconds": 0.30,
+            "silence_seconds": 1.05,
+            "min_speech_seconds": 0.26,
+            "pre_roll_seconds": 0.35,
             "start_timeout_seconds": 5.0,
-            "max_speech_seconds": 8.0,
+            "max_speech_seconds": 8.5,
         },
         "stt": {
-            "beam_size": 2,
-            "vad_filter": False,
-            "condition_on_previous_text": False,
+            "beam_size": 5,
+            "best_of": 5,
+            "vad_filter": True,
+            "condition_on_previous_text": True,
             "quality_retry_threshold": 0.50,
             "quality_retry_beam_size": 4,
+            "egyptalk_fallback_threshold": 0.48,
+            "egyptalk_fallback_low_quality_score": 0.58,
+            "egyptalk_fallback_min_text_chars": 4,
+            "language_hint": "auto",
+            "no_speech_threshold": 0.88,
+            "log_prob_threshold": -2.0,
         },
         "speech_guard_threshold": 0.009,
     },
     "noisy": {
         "mic": {
-            "energy_threshold": 0.020,
-            "silence_seconds": 0.60,
-            "min_speech_seconds": 0.45,
-            "start_timeout_seconds": 3.2,
-            "max_speech_seconds": 6.5,
+            "energy_threshold": 0.017,
+            "silence_seconds": 0.82,
+            "min_speech_seconds": 0.30,
+            "pre_roll_seconds": 0.50,
+            "start_timeout_seconds": 3.4,
+            "max_speech_seconds": 7.5,
         },
         "stt": {
-            "beam_size": 4,
+            "beam_size": 5,
+            "best_of": 5,
             "vad_filter": True,
-            "condition_on_previous_text": False,
+            "condition_on_previous_text": True,
             "quality_retry_threshold": 0.62,
             "quality_retry_beam_size": 6,
+            "egyptalk_fallback_threshold": 0.55,
+            "egyptalk_fallback_low_quality_score": 0.66,
+            "egyptalk_fallback_min_text_chars": 4,
+            "language_hint": "auto",
+            "no_speech_threshold": 0.93,
+            "log_prob_threshold": -2.4,
         },
-        "speech_guard_threshold": 0.020,
+        "speech_guard_threshold": 0.017,
+    },
+    "arabic_egy": {
+        "mic": {
+            "energy_threshold": 0.014,
+            "silence_seconds": 0.88,
+            "min_speech_seconds": 0.28,
+            "pre_roll_seconds": 0.55,
+            "start_timeout_seconds": 3.6,
+            "max_speech_seconds": 7.8,
+        },
+        "stt": {
+            "beam_size": 2,
+            "best_of": 2,
+            "vad_filter": True,
+            "condition_on_previous_text": False,
+            "quality_retry_threshold": 0.56,
+            "quality_retry_beam_size": 6,
+            "egyptalk_fallback_threshold": 0.64,
+            "egyptalk_fallback_low_quality_score": 0.74,
+            "egyptalk_fallback_min_text_chars": 3,
+            "language_hint": "auto",
+            "no_speech_threshold": 0.95,
+            "log_prob_threshold": -2.6,
+            "egyptalk_chunk_seconds": 22.0,
+            "egyptalk_stride_seconds": 5.0,
+        },
+        "speech_guard_threshold": 0.013,
+    },
+    "code_switched": {
+        "mic": {
+            "energy_threshold": 0.015,
+            "silence_seconds": 0.70,
+            "min_speech_seconds": 0.28,
+            "pre_roll_seconds": 0.45,
+            "start_timeout_seconds": 3.0,
+            "max_speech_seconds": 7.0,
+        },
+        "stt": {
+            "beam_size": 5,
+            "best_of": 5,
+            "vad_filter": True,
+            "condition_on_previous_text": True,
+            "quality_retry_threshold": 0.52,
+            "quality_retry_beam_size": 6,
+            "egyptalk_fallback_threshold": 0.56,
+            "egyptalk_fallback_low_quality_score": 0.66,
+            "egyptalk_fallback_min_text_chars": 4,
+            "language_hint": "auto",
+            "no_speech_threshold": 0.90,
+            "log_prob_threshold": -2.2,
+            "egyptalk_chunk_seconds": 18.0,
+            "egyptalk_stride_seconds": 4.0,
+        },
+        "speech_guard_threshold": 0.012,
+    },
+    "auto": {
+        "mic": {
+            "energy_threshold": 0.015,
+            "silence_seconds": 0.72,
+            "min_speech_seconds": 0.28,
+            "pre_roll_seconds": 0.50,
+            "start_timeout_seconds": 3.1,
+            "max_speech_seconds": 7.3,
+        },
+        "stt": {
+            "beam_size": 5,
+            "best_of": 5,
+            "vad_filter": True,
+            "condition_on_previous_text": True,
+            "quality_retry_threshold": 0.54,
+            "quality_retry_beam_size": 6,
+            "egyptalk_fallback_threshold": 0.50,
+            "egyptalk_fallback_low_quality_score": 0.60,
+            "egyptalk_fallback_min_text_chars": 4,
+            "language_hint": "auto",
+            "no_speech_threshold": 0.90,
+            "log_prob_threshold": -2.2,
+            "egyptalk_chunk_seconds": 16.0,
+            "egyptalk_stride_seconds": 4.0,
+        },
+        "speech_guard_threshold": 0.012,
     },
 }
 _AUDIO_UX_PROFILE_PRESETS = {
@@ -135,6 +232,29 @@ def _normalize_profile_name(value):
     aliases = {
         "quiet_room": "quiet",
         "noisy_room": "noisy",
+        "هادئ": "quiet",
+        "ضوضاء": "noisy",
+        "arabic_eg": "arabic_egy",
+        "arabic_egyptian": "arabic_egy",
+        "arabic": "arabic_egy",
+        "egyptian": "arabic_egy",
+        "arabic_fast": "arabic_egy",
+        "masri_fast": "arabic_egy",
+        "egyptian_arabic": "arabic_egy",
+        "masri": "arabic_egy",
+        "مصري": "arabic_egy",
+        "عربي_مصري": "arabic_egy",
+        "عربي_مصرى": "arabic_egy",
+        "code_switch": "code_switched",
+        "codeswitched": "code_switched",
+        "mixed": "code_switched",
+        "mixed_language": "code_switched",
+        "mixed_script": "code_switched",
+        "مختلط": "code_switched",
+        "auto_select": "auto",
+        "automatic": "auto",
+        "default": "auto",
+        "تلقائي": "auto",
     }
     return aliases.get(profile, profile)
 
@@ -145,9 +265,17 @@ def _normalize_stt_backend_name(value):
         "fw": "faster_whisper",
         "faster": "faster_whisper",
         "whisper": "faster_whisper",
+        "nemo": "egyptalk_transformers",
+        "nemo_egyptalk": "egyptalk_transformers",
+        "egyptalk": "egyptalk_transformers",
+        "egypt_talk": "egyptalk_transformers",
+        "egyptalk_transformer": "egyptalk_transformers",
+        "egypt_talk_transformers": "egyptalk_transformers",
+        "egyptian": "egyptalk_transformers",
+        "masri": "egyptalk_transformers",
     }
     normalized = aliases.get(raw, raw)
-    if normalized != "faster_whisper":
+    if normalized not in {"faster_whisper", "egyptalk_transformers"}:
         return ""
     return normalized
 
@@ -221,7 +349,7 @@ def _apply_stt_profile(profile_name, *, persist=True):
     profile = _normalize_profile_name(profile_name)
     preset = _STT_PROFILE_PRESETS.get(profile)
     if not preset:
-        return False, "Unsupported STT profile. Use: quiet or noisy.", {}
+        return False, "Unsupported STT profile. Use: quiet, noisy, arabic_egy, code_switched, or auto.", {}
 
     mic_capture.set_runtime_vad_settings(**dict(preset["mic"]))
     stt_runtime.set_runtime_stt_settings(**dict(preset["stt"]))
@@ -326,9 +454,19 @@ def initialize_runtime_profiles(force=False):
             logger.warning("Failed to restore persisted STT profile '%s': %s", persisted_stt, message)
             session_memory.set_stt_profile("")
             summary.append("failed_stt_restore")
-            restored_ok = False
+            fallback_ok, _fallback_message, _fallback_snapshot = _apply_stt_profile("auto", persist=False)
+            if fallback_ok:
+                summary.append("fallback_stt_profile:auto")
+            else:
+                summary.append("fallback_stt_profile_failed")
+                restored_ok = False
     else:
-        summary.append("no_persisted_stt_profile")
+        ok, _message, _snapshot = _apply_stt_profile("auto", persist=False)
+        if ok:
+            summary.append("default_stt_profile:auto")
+        else:
+            summary.append("default_stt_profile_failed")
+            restored_ok = False
 
     summary.append("legacy_speech_profiles_removed")
 
@@ -361,11 +499,20 @@ def _format_stt_profile_status():
         "STT Profile Status",
         f"stt_profile: {snapshot['profile']}",
         f"stt_profile_persisted: {snapshot['persisted_profile']}",
+        "stt_profiles_available: quiet,noisy,arabic_egy,code_switched,auto",
         f"mic_energy_threshold: {snapshot['mic']['energy_threshold']:.4f}",
         f"mic_silence_seconds: {snapshot['mic']['silence_seconds']:.2f}",
         f"mic_min_speech_seconds: {snapshot['mic']['min_speech_seconds']:.2f}",
         f"stt_beam_size: {snapshot['stt']['beam_size']}",
         f"stt_vad_filter: {snapshot['stt']['vad_filter']}",
+        f"stt_language_hint: {snapshot['stt'].get('language_hint')}",
+        f"stt_no_speech_threshold: {float(snapshot['stt'].get('no_speech_threshold', 0.0)):.2f}",
+        f"stt_log_prob_threshold: {float(snapshot['stt'].get('log_prob_threshold', 0.0)):.2f}",
+        f"stt_egyptalk_chunk_seconds: {float(snapshot['stt'].get('egyptalk_chunk_seconds', 0.0)):.1f}",
+        f"stt_egyptalk_stride_seconds: {float(snapshot['stt'].get('egyptalk_stride_seconds', 0.0)):.1f}",
+        f"stt_egyptalk_fallback_threshold: {float(snapshot['stt'].get('egyptalk_fallback_threshold', 0.0)):.2f}",
+        f"stt_egyptalk_fallback_quality: {float(snapshot['stt'].get('egyptalk_fallback_low_quality_score', 0.0)):.2f}",
+        f"stt_egyptalk_fallback_min_chars: {int(snapshot['stt'].get('egyptalk_fallback_min_text_chars', 0))}",
         f"stt_retry_threshold: {snapshot['stt']['quality_retry_threshold']:.2f}",
         f"speech_guard_threshold: {snapshot['speech_guard_threshold']:.4f}",
     ]
@@ -373,18 +520,23 @@ def _format_stt_profile_status():
 
 
 def _format_stt_backend_status():
-    backend = stt_runtime.get_runtime_stt_backend()
+    backend_info = stt_runtime.get_runtime_stt_backend_info()
+    backend = backend_info.get("backend") or stt_runtime.get_runtime_stt_backend()
     stt_settings = stt_runtime.get_runtime_stt_settings()
 
     lines = [
         "STT Backend Status",
         f"stt_backend: {backend}",
         f"stt_language_hint: {stt_settings.get('language_hint')}",
+        f"stt_egyptalk_enabled: {backend_info.get('egyptalk_enabled')}",
+        f"stt_egyptalk_model: {backend_info.get('egyptalk_model')}",
     ]
 
     return "\n".join(lines), {
         "stt_backend": backend,
         "stt_language_hint": stt_settings.get("language_hint"),
+        "stt_egyptalk_enabled": backend_info.get("egyptalk_enabled"),
+        "stt_egyptalk_model": backend_info.get("egyptalk_model"),
     }
 
 
@@ -748,7 +900,15 @@ def handle(parsed):
         requested_backend = args.get("backend", "")
         backend = _normalize_stt_backend_name(requested_backend)
         if not backend:
-            return False, "Unsupported STT backend. Use: faster_whisper.", {}
+            return False, "Unsupported STT backend. Use: egyptalk_transformers or faster_whisper.", {}
+
+        backend_info = stt_runtime.get_runtime_stt_backend_info()
+        if backend == "egyptalk_transformers" and not bool(backend_info.get("egyptalk_enabled")):
+            return (
+                False,
+                "Egyptian dialect backend is disabled. Set JARVIS_STT_EGYPTALK_ENABLED=true and restart Jarvis.",
+                backend_info,
+            )
 
         active_backend = stt_runtime.set_runtime_stt_backend(backend)
         message, snapshot = _format_stt_backend_status()

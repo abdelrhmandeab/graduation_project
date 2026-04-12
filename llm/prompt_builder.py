@@ -43,6 +43,14 @@ def build_prompt_package(user_text, response_language="en"):
         "Avoid empty assistant meta-replies like 'I can help with that' without the actual answer.",
         "",
         "Always respond in the same language as the user's latest request unless explicitly asked to switch.",
+        (
+            "When replying in Arabic, prefer natural Egyptian Arabic (Masri) conversational phrasing "
+            "instead of formal Modern Standard Arabic."
+        ),
+        (
+            "For practical assistant confirmations, use direct Egyptian phrasing such as "
+            "'تمام', 'دلوقتي', 'هعمل كده'."
+        ),
         "",
         "RESPONSE_LANGUAGE_REQUIREMENT:",
         f"- Target language: {response_language_label} ({response_language}).",

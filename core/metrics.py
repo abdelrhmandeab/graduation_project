@@ -149,7 +149,7 @@ def _normalize_ambiguous_token(source_text):
         text,
     )
     text = re.sub(
-        r"^(?:افتح تطبيق|افتح|شغل تطبيق|شغل|اغلق تطبيق|اقفل تطبيق|سكر تطبيق|ابحث عن ملف|ابحث)\s+",
+        r"^(?:افتحلي برنامج|افتح|شغللي برنامج|شغل|اقفللي برنامج|اقفل برنامج|سكر برنامج|دور على ملف|دوّر على ملف|دور)\s+",
         "",
         text,
     )
@@ -171,11 +171,11 @@ def _normalize_ambiguous_token(source_text):
         "path",
         "option",
         "one",
-        "تطبيق",
+        "برنامج",
         "ملف",
         "مجلد",
         "مسار",
-        "الخيار",
+        "الاختيار",
     }
     parts = [part for part in text.split() if part not in stop_words]
     if not parts:

@@ -52,10 +52,10 @@ If audio dependencies are missing, Jarvis falls back to text interaction.
 
 ### Arabic
 - افتح المفكرة
-- اغلق الحاسبة
-- ابحث عن ملف تقرير في المكتب
-- اذهب الى التنزيلات
-- اعرض الملفات
+- اقفل الحاسبة
+- دور على ملف تقرير في المكتب
+- روح على التنزيلات
+- وريني الملفات
 - حالة الصوت
 
 ## 4. Follow-up Commands
@@ -68,8 +68,8 @@ You can use context-aware commands:
 
 Arabic follow-up examples:
 - افتحه
-- احذفه
-- غيره الى التقرير_النهائي.txt
+- امسحه
+- غيره ل التقرير_النهائي.txt
 - اكد
 
 ## 5. Safety and Confirmation

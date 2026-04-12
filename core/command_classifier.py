@@ -215,7 +215,7 @@ _VOICE_SPEECH_OFF_PATTERNS = (
     re.compile(r"\bturn\s+(?:speech|voice)\s+off\b", re.IGNORECASE),
     re.compile(r"\b(?:be quiet|stop talking|stop speaking)\b", re.IGNORECASE),
     re.compile(
-        r"(?:\u0627\u0637\u0641\u064a|\u0627\u0637\u0641\u0626|\u0627\u0642\u0641\u0644|\u0627\u0643\u062a\u0645|\u0648\u0642\u0641|\u0623\u0648\u0642\u0641)\s+(?:\u0627\u0644\u0635\u0648\u062a|\u0627\u0644\u0646\u0637\u0642|\u0627\u0644\u0643\u0644\u0627\u0645)",
+        r"(?:\u0627\u0637\u0641\u064a|\u0627\u0642\u0641\u0644|\u0627\u0643\u062a\u0645|\u0648\u0642\u0641)\s+(?:\u0627\u0644\u0635\u0648\u062a|\u0627\u0644\u0646\u0637\u0642|\u0627\u0644\u0643\u0644\u0627\u0645)",
         re.IGNORECASE,
     ),
 )
@@ -247,10 +247,8 @@ _SYSTEM_ACTION_MARKERS = {
     "pause",
     "افتح",
     "شغل",
-    "اغلق",
     "اقفل",
     "اطفي",
-    "اطفئ",
     "اقفل",
     "ارفع",
     "اخفض",
@@ -263,18 +261,17 @@ _SYSTEM_ACTION_MARKERS = {
     "فعّل",
     "عطل",
     "اكتم",
-    "ابحث",
     "دور",
     "جوجل",
     "الصوت",
     "السطوع",
-    "النافذة",
+    "الشباك",
     "موسيقى",
     "اغنية",
     "أغنية",
     "ويب",
     "موقع",
-    "تبويب",
+    "تاب",
 }
 _INFORMATIONAL_QUERY_MARKERS = {
     "tell me",
@@ -316,11 +313,11 @@ _ACTION_KEY_REQUIRED_MARKERS = {
     "brightness_set": ("brightness", "screen", "display", "السطوع", "الشاشة"),
     "brightness_up": ("brightness", "screen", "display", "السطوع", "الشاشة"),
     "brightness_down": ("brightness", "screen", "display", "السطوع", "الشاشة"),
-    "browser_search_web": ("search", "google", "look up", "ابحث", "دور", "جوجل"),
+    "browser_search_web": ("search", "google", "look up", "دور", "دوّر", "جوجل"),
     "browser_open_url": ("http", "www", ".com", ".net", ".org", "site", "website", "موقع", "رابط"),
-    "focus_window": ("focus", "switch", "bring", "window", "ركز", "روح", "نافذة"),
-    "wifi_on": ("wifi", "wi fi", "wireless", "واي فاي", "الانترنت"),
-    "wifi_off": ("wifi", "wi fi", "wireless", "واي فاي", "الانترنت"),
+    "focus_window": ("focus", "switch", "bring", "window", "ركز", "روح", "شباك"),
+    "wifi_on": ("wifi", "wi fi", "wireless", "واي فاي", "النت"),
+    "wifi_off": ("wifi", "wi fi", "wireless", "واي فاي", "النت"),
     "bluetooth_on": ("bluetooth", "بلوتوث"),
     "bluetooth_off": ("bluetooth", "بلوتوث"),
     "notifications_on": (
@@ -359,16 +356,13 @@ _ACTION_KEY_REQUIRED_MARKERS = {
         "turn off pc",
         "turn off the pc",
         "اطفي",
-        "اطفئ",
-        "اغلق",
         "اقفل",
-        "ايقاف تشغيل",
-        "إيقاف تشغيل",
+        "قفل الجهاز",
     ),
     "restart": ("restart", "reboot", "اعادة تشغيل", "إعادة تشغيل", "ريستارت"),
     "sleep": ("sleep", "suspend", "sleep mode", "سكون", "وضع السكون"),
     "lock": ("lock", "lock screen", "قفل", "اقفل", "قفل الشاشة", "اقفل الشاشة"),
-    "logoff": ("log off", "logout", "sign out", "تسجيل الخروج", "سجل خروج", "اخرج"),
+    "logoff": ("log off", "logout", "sign out", "اخرج من الحساب", "سجل خروج", "اخرج"),
     "empty_recycle_bin": (
         "recycle bin",
         "trash",
@@ -527,7 +521,7 @@ def _parse_duration_seconds(value, unit_hint="seconds"):
 def _normalize_url(value):
     candidate = str(value or "").strip().strip('"').strip("'")
     candidate = re.sub(
-        r"^(?:open|visit|go to|browse to|website|site|url|افتح|روح على|اذهب الى|موقع|رابط)\s+",
+        r"^(?:open|visit|go to|browse to|website|site|url|افتح|افتحلي|روح على|خش على|ادخل على|موقع|لينك)\s+",
         "",
         candidate,
         flags=re.IGNORECASE,
@@ -561,7 +555,7 @@ def _extract_search_query(source_text: str):
     text = str(source_text or "").strip()
     patterns = (
         r"(?:^|\b)(?:search(?:\s+(?:the\s+)?)?(?:(?:web|online|internet)\s*(?:for|about)?|(?:for|about))|google|look\s+up)\s+(.+)$",
-        r"(?:^|\b)(?:ابحث(?:\s+(?:في\s+)?)?(?:(?:الويب|النت|الانترنت|الإنترنت|جوجل|اونلاين|أونلاين)\s*(?:عن)?|عن)|دور(?:\s+على)?(?:\s+(?:النت|الانترنت|الإنترنت|اونلاين|أونلاين))?)\s+(.+)$",
+        r"(?:^|\b)(?:دور(?:\s+على)?(?:\s+(?:النت|اونلاين|أونلاين))?|دوّر(?:\s+على)?(?:\s+(?:النت|اونلاين|أونلاين))?)\s+(.+)$",
     )
     for pattern in patterns:
         match = re.search(pattern, text, flags=re.IGNORECASE)
@@ -650,14 +644,14 @@ def _extract_focus_query(text: str):
     patterns = [
         r"(?:focus|switch\s+to|bring)\s+(?:window\s+)?(.+)$",
         r"(?:go\s+to|open)\s+(.+)$",
-        r"(?:\u0631\u0648\u062d\s+\u0639\u0644\u0649|\u0631\u0643\u0632\s+\u0639\u0644\u0649)\s+(.+)$",
+        r"(?:\u0631\u0648\u062d\s+\u0639\u0644\u0649|\u0631\u0643\u0632\s+\u0639\u0644\u0649|\u062e\u0634\s+\u0639\u0644\u0649|\u0627\u062f\u062e\u0644\s+\u0639\u0644\u0649)\s+(.+)$",
     ]
     for pattern in patterns:
         match = re.search(pattern, value, flags=re.IGNORECASE)
         if match:
             candidate = match.group(1).strip().strip(".\"'")
             candidate = re.sub(r"^(?:the\s+)?(?:window\s+)?", "", candidate, flags=re.IGNORECASE)
-            candidate = re.sub(r"^(?:\u0646\u0627\u0641\u0630\u0629\s+)", "", candidate, flags=re.IGNORECASE)
+            candidate = re.sub(r"^(?:\u0634\u0628\u0627\u0643\s+)", "", candidate, flags=re.IGNORECASE)
             candidate = re.sub(r"(?:\s+window)$", "", candidate, flags=re.IGNORECASE)
             return candidate.strip()
     return ""
@@ -706,9 +700,9 @@ def _infer_system_action_key(source_text: str, args: dict, action_key_hint: str 
             "روح على",
         )
     )
-    has_window = any(token in text for token in ("window", "نافذة"))
+    has_window = any(token in text for token in ("window", "شباك"))
     has_media = any(token in text for token in ("media", "music", "song", "track", "موسيقى", "اغنية"))
-    has_browser = any(token in text for token in ("browser", "tab", "website", "site", "url", "ويب", "موقع", "تبويب"))
+    has_browser = any(token in text for token in ("browser", "tab", "website", "site", "url", "ويب", "موقع", "تاب"))
     has_media_app = any(token in text for token in ("spotify", "vlc", "youtube music", "سبوتيفاي", "يوتيوب ميوزك"))
     has_number = _extract_first_number(text) is not None
 
@@ -728,40 +722,40 @@ def _infer_system_action_key(source_text: str, args: dict, action_key_hint: str 
         return "window_snap_left"
     if has_window and "right" in text and "snap" in text:
         return "window_snap_right"
-    if any(token in text for token in ("next window", "switch window", "النافذة التالية")):
+    if any(token in text for token in ("next window", "switch window", "الشباك اللي بعده")):
         return "window_next"
-    if any(token in text for token in ("close active window", "close this window", "اغلق النافذة")):
+    if any(token in text for token in ("close active window", "close this window", "اقفل الشباك", "سكر الشباك")):
         return "window_close_active"
     if has_focus:
         return "focus_window"
 
     if has_media and not has_media_app and any(token in text for token in ("pause", "resume", "play", "اوقف", "شغل")):
         return "media_play_pause"
-    if any(token in text for token in ("next track", "next song", "skip song", "الاغنية التالية")):
+    if any(token in text for token in ("next track", "next song", "skip song", "الاغنية اللي بعد كده", "الاغنيه اللي بعد كده")):
         return "media_next_track"
-    if any(token in text for token in ("previous track", "prev track", "previous song", "الاغنية السابقة")):
+    if any(token in text for token in ("previous track", "prev track", "previous song", "الاغنية اللي قبلها", "الاغنيه اللي قبلها")):
         return "media_previous_track"
-    if has_media and any(token in text for token in ("stop", "اوقف التشغيل")):
+    if has_media and any(token in text for token in ("stop", "وقف الميديا", "وقف المزيكا", "وقف المزيكه")):
         return "media_stop"
     if any(token in text for token in ("seek forward", "skip forward", "forward", "قدم")) and has_media:
         return "media_seek_forward"
     if any(token in text for token in ("seek back", "seek backward", "rewind", "backward", "ارجع")) and has_media:
         return "media_seek_backward"
 
-    if has_browser and any(token in text for token in ("new tab", "open tab", "تبويب جديد")):
+    if has_browser and any(token in text for token in ("new tab", "open tab", "تاب جديد")):
         return "browser_new_tab"
-    if has_browser and any(token in text for token in ("close tab", "اغلق التبويب")):
+    if has_browser and any(token in text for token in ("close tab", "اقفل التاب", "سكر التاب")):
         return "browser_close_tab"
     if any(token in text for token in ("go back", "browser back", "ارجع للخلف")):
         return "browser_back"
-    if any(token in text for token in ("go forward", "browser forward", "اذهب للامام")):
+    if any(token in text for token in ("go forward", "browser forward", "روح لقدام")):
         return "browser_forward"
     if _normalize_url(source_text):
         return "browser_open_url"
     if _extract_search_query(source_text):
         return "browser_search_web"
 
-    if any(token in text for token in ("wifi", "wi fi", "wireless", "واي فاي", "الانترنت")):
+    if any(token in text for token in ("wifi", "wi fi", "wireless", "واي فاي", "النت")):
         if any(token in text for token in ("off", "disable", "turn off", "افصل", "اطفي")):
             return "wifi_off"
         if any(token in text for token in ("on", "enable", "turn on", "شغل", "فعل")):

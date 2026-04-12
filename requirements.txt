@@ -10,6 +10,9 @@ sounddevice==0.5.5
 
 # Speech-to-text
 faster-whisper==1.2.1
+# Optional Egyptian dialect backend (only needed when using STT backend egyptalk_transformers)
+# transformers>=5.5.0
+# torch>=2.10.0
 
 # Wake word detection
 openwakeword==0.6.0
@@ -26,3 +29,6 @@ psutil==7.2.2
 
 # HTTP (used by ollama client & general networking)
 httpx==0.28.1
+
+# NLP fuzzy matching for noisy STT intent parsing
+rapidfuzz==3.14.3

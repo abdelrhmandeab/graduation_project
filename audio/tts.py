@@ -261,7 +261,7 @@ class SpeechEngine:
             thread.join(timeout=2)
         return True
 
-    def speak_async(self, text):
+    def speak_async(self, text, language=None):
         if not (text or "").strip():
             return False, "Nothing to speak."
 
@@ -273,7 +273,7 @@ class SpeechEngine:
 
         thread = threading.Thread(
             target=self._run_speech,
-            args=(text,),
+            args=(text, language),
             name="jarvis-speech",
             daemon=True,
         )
@@ -285,12 +285,12 @@ class SpeechEngine:
     def _resolve_backend(self):
         return self.get_backend()
 
-    def _prepare_text_for_speech(self, text):
+    def _prepare_text_for_speech(self, text, *, preferred_language=None):
         normalized = " ".join(str(text or "").split()).strip()
         if not normalized:
             return normalized
 
-        if not self._is_arabic_preferred_text(normalized):
+        if not self._is_arabic_preferred_text(normalized, preferred_language=preferred_language):
             return normalized
 
         dialect = str(TTS_ARABIC_SPOKEN_DIALECT or "egyptian").strip().lower()
@@ -449,34 +449,34 @@ class SpeechEngine:
         }
         return True, "\n".join(lines), meta
 
-    def _run_speech(self, text):
+    def _run_speech(self, text, language=None):
         started = time.perf_counter()
         success = True
         backend = str(self._resolve_backend() or "auto").strip().lower()
         quality_mode = self.get_quality_mode()
         style = persona_manager.get_speech_style()
         logger.info("Speech backend=%s quality=%s style=%s", backend, quality_mode, style)
-        spoken_text = self._prepare_text_for_speech(text)
+        spoken_text = self._prepare_text_for_speech(text, preferred_language=language)
 
         try:
             if backend == "auto":
-                if self._speak_pyttsx3(spoken_text):
+                if self._speak_pyttsx3(spoken_text, preferred_language=language):
                     return
-                if self._speak_edge_tts(spoken_text):
+                if self._speak_edge_tts(spoken_text, preferred_language=language):
                     return
                 self._speak_console(spoken_text, prefix="TTS fallback")
                 return
 
             if backend == "pyttsx3":
-                if self._speak_pyttsx3(spoken_text):
+                if self._speak_pyttsx3(spoken_text, preferred_language=language):
                     return
                 self._speak_console(spoken_text, prefix="TTS fallback")
                 return
 
             if backend == "edge_tts":
-                if self._speak_edge_tts(spoken_text):
+                if self._speak_edge_tts(spoken_text, preferred_language=language):
                     return
-                if self._speak_pyttsx3(spoken_text):
+                if self._speak_pyttsx3(spoken_text, preferred_language=language):
                     logger.warning("Edge-TTS failed; pyttsx3 fallback succeeded")
                     return
                 self._speak_console(spoken_text, prefix="Edge-TTS fallback")
@@ -508,7 +508,15 @@ class SpeechEngine:
             time.sleep(max(0.01, len(word) * delay))
         print("")
 
-    def _choose_pyttsx3_voice(self, engine, text, *, prefer_last_voice=False, force_english_voice=False):
+    def _choose_pyttsx3_voice(
+        self,
+        engine,
+        text,
+        *,
+        prefer_last_voice=False,
+        force_english_voice=False,
+        preferred_language=None,
+    ):
         voices = list(engine.getProperty("voices") or [])
         if not voices:
             return "", "", False
@@ -523,7 +531,7 @@ class SpeechEngine:
                         True,
                     )
 
-        wants_arabic = self._is_arabic_preferred_text(text)
+        wants_arabic = self._is_arabic_preferred_text(text, preferred_language=preferred_language)
         if force_english_voice:
             wants_arabic = False
         best_voice = None
@@ -569,7 +577,15 @@ class SpeechEngine:
             bool(best_language_match),
         )
 
-    def _speak_pyttsx3(self, text, *, require_language_match=False, prefer_last_voice=False, force_english_voice=False):
+    def _speak_pyttsx3(
+        self,
+        text,
+        *,
+        require_language_match=False,
+        prefer_last_voice=False,
+        force_english_voice=False,
+        preferred_language=None,
+    ):
         try:
             import pyttsx3  # type: ignore
         except Exception as exc:
@@ -583,6 +599,7 @@ class SpeechEngine:
                 text,
                 prefer_last_voice=prefer_last_voice,
                 force_english_voice=force_english_voice,
+                preferred_language=preferred_language,
             )
             if require_language_match and not language_match:
                 try:
@@ -602,7 +619,7 @@ class SpeechEngine:
             if self.get_quality_mode() == "natural":
                 rate = max(145, min(185, rate - 12))
 
-            if self._is_arabic_preferred_text(text):
+            if self._is_arabic_preferred_text(text, preferred_language=preferred_language):
                 rate -= 8
 
             tuning = self.get_tuning_settings()
@@ -747,7 +764,13 @@ class SpeechEngine:
     def _is_arabic_only_text(self, text):
         return _contains_arabic(text) and not _contains_latin(text)
 
-    def _is_arabic_preferred_text(self, text):
+    def _is_arabic_preferred_text(self, text, preferred_language=None):
+        normalized_language = str(preferred_language or "").strip().lower()
+        if normalized_language in {"ar", "arabic"}:
+            return True
+        if normalized_language in {"en", "english"}:
+            return False
+
         arabic_letters = _count_arabic_letters(text)
         if arabic_letters <= 0:
             return False
@@ -784,9 +807,9 @@ class SpeechEngine:
         with self._lock:
             self._edge_tts_unsupported_voices.add(voice_key)
 
-    def _edge_tts_voice_candidates(self, normalized_text):
+    def _edge_tts_voice_candidates(self, normalized_text, *, preferred_language=None):
         configured_voice = str(TTS_EDGE_VOICE or "").strip() or "en-US-AriaNeural"
-        if not self._is_arabic_preferred_text(normalized_text):
+        if not self._is_arabic_preferred_text(normalized_text, preferred_language=preferred_language):
             return [configured_voice]
 
         with self._lock:
@@ -839,7 +862,7 @@ class SpeechEngine:
         filtered = [voice for voice in deduped if voice.lower() not in unsupported]
         return filtered or deduped[:1]
 
-    def _edge_tts_text_chunks(self, normalized_text):
+    def _edge_tts_text_chunks(self, normalized_text, *, preferred_language=None):
         text = " ".join(str(normalized_text or "").split()).strip()
         if not text:
             return []
@@ -850,7 +873,9 @@ class SpeechEngine:
             return [
                 {
                     "text": text,
-                    "script": "arabic" if self._is_arabic_preferred_text(text) else "latin",
+                    "script": "arabic"
+                    if self._is_arabic_preferred_text(text, preferred_language=preferred_language)
+                    else "latin",
                 }
             ]
 
@@ -883,7 +908,11 @@ class SpeechEngine:
             else:
                 chunks.append({"script": token_script, "tokens": [token]})
 
-        default_script = "arabic" if self._is_arabic_preferred_text(text) else "latin"
+        default_script = (
+            "arabic"
+            if self._is_arabic_preferred_text(text, preferred_language=preferred_language)
+            else "latin"
+        )
         finalized = []
         for chunk in chunks:
             script = str(chunk.get("script") or "").strip().lower()
@@ -923,11 +952,12 @@ class SpeechEngine:
         supports_pitch,
         supports_volume,
         can_decode_compressed,
+        preferred_language=None,
     ):
         if not supports_output_format and not can_decode_compressed:
             return False
 
-        chunks = self._edge_tts_text_chunks(normalized_text)
+        chunks = self._edge_tts_text_chunks(normalized_text, preferred_language=preferred_language)
         if len(chunks) <= 1:
             return False
 
@@ -982,7 +1012,8 @@ class SpeechEngine:
             if not chunk_text:
                 continue
             chunk_is_arabic = str(chunk.get("script") or "").strip().lower() == "arabic"
-            chunk_candidates = self._edge_tts_voice_candidates(chunk_text)
+            chunk_language = "ar" if chunk_is_arabic else "en"
+            chunk_candidates = self._edge_tts_voice_candidates(chunk_text, preferred_language=chunk_language)
             first_voice = chunk_candidates[0] if chunk_candidates else ""
             chunk_ok = False
             chunk_last_error = ""
@@ -1130,7 +1161,7 @@ class SpeechEngine:
                 pass
             return False
 
-    def _speak_edge_tts(self, text):
+    def _speak_edge_tts(self, text, *, preferred_language=None):
         try:
             import edge_tts  # type: ignore
         except Exception as exc:
@@ -1147,8 +1178,8 @@ class SpeechEngine:
         if not normalized_text:
             return False
 
-        arabic_preferred = self._is_arabic_preferred_text(normalized_text)
-        voice_candidates = self._edge_tts_voice_candidates(normalized_text)
+        arabic_preferred = self._is_arabic_preferred_text(normalized_text, preferred_language=preferred_language)
+        voice_candidates = self._edge_tts_voice_candidates(normalized_text, preferred_language=preferred_language)
         edge_rate = str(TTS_EDGE_RATE or "+0%").strip() or "+0%"
         edge_pitch = ""
         edge_volume = ""
@@ -1175,6 +1206,7 @@ class SpeechEngine:
                 supports_pitch,
                 supports_volume,
                 can_decode_compressed,
+                preferred_language=preferred_language,
             )
             if mixed_chunk_ok:
                 return True

@@ -1,126 +1,123 @@
-import re
+from typing import Dict
 
 from core.config import (
-    STT_ARABIC_POST_NORMALIZATION,
     STT_BACKEND,
     STT_EGYPTIAN_DIALECT_ONLY,
     WHISPER_BEAM_SIZE,
-    WHISPER_COMPUTE_TYPE,
+    WHISPER_BEST_OF,
     WHISPER_CONDITION_ON_PREVIOUS_TEXT,
-    WHISPER_DEVICE,
-    WHISPER_LANGUAGE_HINT,
-    WHISPER_MODEL,
+    WHISPER_LANGUAGE,
     WHISPER_VAD_FILTER,
 )
-from core.language_gate import detect_supported_language
 from core.logger import logger
+from stt.dual_transcriber import dual_transcribe
+from stt.stt_engine import get_model as _engine_get_model
+from stt.stt_engine import transcribe as _engine_transcribe
+from utils.language_detector import detect_language
 
-try:
-    from faster_whisper import WhisperModel
-except Exception as exc:
-    WhisperModel = None
-    _WHISPER_IMPORT_ERROR = exc
-else:
-    _WHISPER_IMPORT_ERROR = None
-
-_model = None
-_MOJIBAKE_CHARS = set("ØÙÃÂÐ")
-_ARABIC_CHAR_RE = re.compile(r"[\u0600-\u06FF]")
-_ARABIC_DIACRITICS_RE = re.compile(r"[\u0610-\u061a\u064b-\u065f\u0670\u06d6-\u06ed]")
-_ARABIC_POST_WS_RE = re.compile(r"\s+")
-_ARABIC_POST_CHAR_TRANSLATE = str.maketrans(
-    {
-        "\u0623": "\u0627",
-        "\u0625": "\u0627",
-        "\u0622": "\u0627",
-        "\u0624": "\u0648",
-        "\u0626": "\u064a",
-        "\u0649": "\u064a",
-    }
-)
-_ARABIC_POST_PHRASE_REPLACEMENTS = (
-    ("الواى فاى", "الواي فاي"),
-    ("الواي فاى", "الواي فاي"),
-    ("واى فاى", "واي فاي"),
-    ("واى فاي", "واي فاي"),
-    ("واي فاى", "واي فاي"),
-    ("جوجلكروم", "جوجل كروم"),
-    ("سكرينشوت", "سكرين شوت"),
-    ("نوتباد", "نوت باد"),
-    ("افتحلي", "افتح لي"),
-    ("شغللي", "شغل لي"),
-    ("دورلي", "دور لي"),
-    ("هاتلي", "هات لي"),
-    ("اريدك", "عايزك"),
-    ("اعزك", "عايزك"),
-    ("اريد ان", "عايز"),
-    ("تتلاني", "تقولي"),
-    ("اخبرني", "قولي"),
-    ("اخبار التكس", "اخبار الطقس"),
-    ("اسبوري فايل", "سبوتيفاي"),
-    ("سبوري فايل", "سبوتيفاي"),
-)
-_ARABIC_POST_TOKEN_REPLACEMENTS = {
-    "عاوز": "عايز",
-    "عاوزه": "عايزة",
-    "عاوزين": "عايزين",
-    "اريد": "عايز",
-    "اعز": "عايز",
-    "اطفئ": "اطفي",
-    "اطفى": "اطفي",
-    "واطفئ": "واطفي",
-    "واطفى": "واطفي",
-    "دلوقتى": "دلوقتي",
-    "دلوقت": "دلوقتي",
-    "فى": "في",
-    "اللى": "اللي",
-    "شويه": "شوية",
-    "سرعه": "سرعة",
-    "قهوه": "قهوة",
-    "ساده": "سادة",
-    "لاقى": "لاقي",
-    "النهارده": "النهاردة",
-    "نهارده": "نهاردة",
-    "الدونلودز": "الداونلودز",
-    "الاشعرات": "الاشعارات",
-    "الاعدادت": "الاعدادات",
-    "اصعار": "اسعار",
-    "الذهب": "الدهب",
-    "البورسه": "البورصة",
-    "البورسة": "البورصة",
-    "بورسان": "بورصة",
-    "سبوتفي": "سبوتيفاي",
-    "سبوتفى": "سبوتيفاي",
-    "سبوتيفي": "سبوتيفاي",
-}
-_runtime_stt_settings = {
+_RUNTIME_DEFAULT_SETTINGS = {
     "beam_size": max(1, int(WHISPER_BEAM_SIZE)),
+    "best_of": max(1, int(WHISPER_BEST_OF)),
     "vad_filter": bool(WHISPER_VAD_FILTER),
     "condition_on_previous_text": bool(WHISPER_CONDITION_ON_PREVIOUS_TEXT),
-    "language_hint": str(WHISPER_LANGUAGE_HINT or "auto").strip().lower(),
-    "quality_retry_threshold": 0.50,
-    "quality_retry_beam_size": max(4, int(WHISPER_BEAM_SIZE) + 2),
+    "language_hint": str(WHISPER_LANGUAGE or "auto").strip().lower(),
+    # Compatibility keys kept for runtime profile/status interfaces.
+    "quality_retry_threshold": 0.0,
+    "quality_retry_beam_size": max(1, int(WHISPER_BEAM_SIZE)),
+    "egyptalk_fallback_threshold": 0.0,
+    "egyptalk_fallback_low_quality_score": 0.0,
+    "egyptalk_fallback_min_text_chars": 5,
+    "no_speech_threshold": 0.0,
+    "log_prob_threshold": 0.0,
+    "egyptalk_chunk_seconds": 0.0,
+    "egyptalk_stride_seconds": 0.0,
 }
+
+_runtime_stt_settings = dict(_RUNTIME_DEFAULT_SETTINGS)
 _runtime_stt_backend = str(STT_BACKEND or "faster_whisper").strip().lower()
-_last_transcription_meta = {
+_last_transcription_meta: Dict[str, object] = {
     "text": "",
-    "language": "en",
+    "language": "unknown",
     "backend": "faster_whisper",
     "language_confidence": 0.0,
+    "method": "auto",
 }
 
 
 def _normalize_stt_backend(value) -> str:
-    raw = str(value or "faster_whisper").strip().lower().replace("-", "_")
+    raw = str(value or "faster_whisper").strip().lower().replace("-", "_").replace(" ", "_")
     aliases = {
         "fw": "faster_whisper",
         "faster": "faster_whisper",
         "whisper": "faster_whisper",
+        "nemo": "egyptalk_transformers",
+        "nemo_egyptalk": "egyptalk_transformers",
+        "egyptalk": "egyptalk_transformers",
+        "egypt_talk": "egyptalk_transformers",
+        "egyptian": "egyptalk_transformers",
+        "masri": "egyptalk_transformers",
     }
-    backend = aliases.get(raw, raw)
-    if backend != "faster_whisper":
-        return "faster_whisper"
-    return backend
+    normalized = aliases.get(raw, raw)
+    if normalized in {"faster_whisper", "egyptalk_transformers"}:
+        return normalized
+    return "faster_whisper"
+
+
+def _normalize_language_hint(value) -> str:
+    raw = str(value or "").strip().lower().replace("-", "_")
+    aliases = {
+        "arabic": "ar",
+        "english": "en",
+        "none": "auto",
+        "": "auto",
+    }
+    normalized = aliases.get(raw, raw)
+    if normalized in {"ar", "en", "auto"}:
+        return normalized
+    return "auto"
+
+
+def _coerce_language(language: str, text: str, fallback: str = "unknown") -> str:
+    candidate = str(language or "").strip().lower()
+    if candidate in {"ar", "en", "mixed", "unknown"}:
+        return candidate
+
+    detected = detect_language(text)
+    if detected in {"ar", "en", "mixed"}:
+        return detected
+
+    fb = str(fallback or "unknown").strip().lower()
+    if fb in {"ar", "en", "mixed", "unknown"}:
+        return fb
+    return "unknown"
+
+
+def _language_confidence(language: str, text: str) -> float:
+    cleaned = " ".join(str(text or "").split()).strip()
+    if not cleaned:
+        return 0.0
+
+    label = str(language or "").strip().lower()
+    if label == "unknown":
+        return 0.0
+    if label == "mixed":
+        return 0.60
+    if label in {"ar", "en"}:
+        return 0.95
+    return 0.0
+
+
+def _is_weak_result(text: str) -> bool:
+    cleaned = " ".join(str(text or "").split()).strip()
+    return (not cleaned) or len(cleaned) < 5
+
+
+def _update_last_transcription_meta(*, text: str, language: str, backend: str, method: str, confidence: float):
+    _last_transcription_meta["text"] = str(text or "")
+    _last_transcription_meta["language"] = _coerce_language(language, text)
+    _last_transcription_meta["backend"] = _normalize_stt_backend(backend)
+    _last_transcription_meta["method"] = str(method or "auto").strip().lower() or "auto"
+    _last_transcription_meta["language_confidence"] = max(0.0, min(1.0, float(confidence or 0.0)))
 
 
 def get_runtime_stt_backend() -> str:
@@ -133,31 +130,12 @@ def set_runtime_stt_backend(backend: str) -> str:
     return _runtime_stt_backend
 
 
-def _normalize_language_hint(value):
-    raw = str(value or "").strip().lower()
-    aliases = {
-        "arabic": "ar",
-        "english": "en",
-        "none": "auto",
+def get_runtime_stt_backend_info():
+    return {
+        "backend": get_runtime_stt_backend(),
+        "egyptalk_enabled": True,
+        "egyptalk_model": "dual_faster_whisper",
     }
-    hint = aliases.get(raw, raw)
-    if hint in {"auto", ""}:
-        return "auto"
-    if hint in {"ar", "en"}:
-        return hint
-    return "auto"
-
-
-def _normalize_detected_language(value, fallback=""):
-    raw = str(value or "").strip().lower()
-    aliases = {
-        "arabic": "ar",
-        "english": "en",
-    }
-    language = aliases.get(raw, raw)
-    if language in {"ar", "en"}:
-        return language
-    return str(fallback or "").strip().lower()
 
 
 def get_runtime_stt_settings():
@@ -166,194 +144,61 @@ def get_runtime_stt_settings():
     return settings
 
 
-def set_runtime_stt_settings(
-    *,
-    beam_size=None,
-    vad_filter=None,
-    condition_on_previous_text=None,
-    language_hint=None,
-    quality_retry_threshold=None,
-    quality_retry_beam_size=None,
-):
-    if beam_size is not None:
-        _runtime_stt_settings["beam_size"] = max(1, int(beam_size))
-    if vad_filter is not None:
-        _runtime_stt_settings["vad_filter"] = bool(vad_filter)
-    if condition_on_previous_text is not None:
-        _runtime_stt_settings["condition_on_previous_text"] = bool(condition_on_previous_text)
-    if language_hint is not None:
-        _runtime_stt_settings["language_hint"] = _normalize_language_hint(language_hint)
-    if quality_retry_threshold is not None:
-        _runtime_stt_settings["quality_retry_threshold"] = max(0.0, min(1.0, float(quality_retry_threshold)))
-    if quality_retry_beam_size is not None:
-        _runtime_stt_settings["quality_retry_beam_size"] = max(1, int(quality_retry_beam_size))
+def set_runtime_stt_settings(**kwargs):
+    for key, value in kwargs.items():
+        if value is None:
+            continue
+
+        if key in {"beam_size", "best_of", "quality_retry_beam_size", "egyptalk_fallback_min_text_chars"}:
+            _runtime_stt_settings[key] = max(1, int(value))
+            continue
+
+        if key in {
+            "quality_retry_threshold",
+            "egyptalk_fallback_threshold",
+            "egyptalk_fallback_low_quality_score",
+            "no_speech_threshold",
+            "log_prob_threshold",
+            "egyptalk_chunk_seconds",
+            "egyptalk_stride_seconds",
+        }:
+            _runtime_stt_settings[key] = float(value)
+            continue
+
+        if key in {"vad_filter", "condition_on_previous_text"}:
+            _runtime_stt_settings[key] = bool(value)
+            continue
+
+        if key == "language_hint":
+            _runtime_stt_settings[key] = _normalize_language_hint(value)
+            continue
+
+        _runtime_stt_settings[key] = value
+
     return get_runtime_stt_settings()
-
-
-def _coerce_supported_language(language, text, fallback="en"):
-    direct = _normalize_detected_language(language, fallback="")
-    if direct in {"ar", "en"}:
-        inferred_from_text = detect_supported_language(
-            text,
-            previous_language=direct,
-        )
-        if inferred_from_text.supported and inferred_from_text.language in {"ar", "en"}:
-            if inferred_from_text.language != direct:
-                return inferred_from_text.language
-        return direct
-
-    normalized_fallback = _normalize_detected_language(fallback, fallback="")
-    inferred = detect_supported_language(
-        text,
-        previous_language=normalized_fallback,
-    )
-    if inferred.supported and inferred.language in {"ar", "en"}:
-        return inferred.language
-    return normalized_fallback or "en"
-
-
-def _update_last_transcription_meta(text, language, backend, *, language_confidence=None):
-    _last_transcription_meta["text"] = str(text or "")
-    _last_transcription_meta["language"] = _coerce_supported_language(language, text, fallback="en")
-    _last_transcription_meta["backend"] = _normalize_stt_backend(backend)
-    try:
-        confidence_value = float(language_confidence)
-    except (TypeError, ValueError):
-        confidence_value = 0.0
-    _last_transcription_meta["language_confidence"] = max(0.0, min(1.0, confidence_value))
 
 
 def get_last_transcription_meta():
     return dict(_last_transcription_meta)
 
 
-def _resolve_whisper_language(language_hint=None):
-    explicit = _normalize_language_hint(language_hint)
-    if explicit in {"ar", "en"}:
-        return explicit
-    return None
-
-
-def _transcript_quality_score(text: str) -> float:
-    raw = (text or "").strip()
-    if not raw:
-        return 0.0
-    visible_chars = [ch for ch in raw if not ch.isspace()]
-    if not visible_chars:
-        return 0.0
-
-    alpha_count = sum(1 for ch in visible_chars if ch.isalpha())
-    alpha_ratio = float(alpha_count) / float(len(visible_chars))
-    words = [token for token in raw.split() if token]
-    if not words:
-        return 0.0
-    unique_ratio = float(len(set(token.lower() for token in words))) / float(len(words))
-    short_ratio = float(sum(1 for token in words if len(token) <= 2)) / float(len(words))
-
-    score = alpha_ratio
-    score += 0.35 * unique_ratio
-    score -= 0.25 * short_ratio
-    if len(words) >= 3:
-        score += 0.1
-    return max(0.0, min(1.0, score))
-
-
 def _get_whisper_model():
-    global _model
-    if _model is not None:
-        return _model
-
-    if WhisperModel is None:
-        raise RuntimeError(
-            "faster-whisper is unavailable in the active Python environment."
-        ) from _WHISPER_IMPORT_ERROR
-
-    _model = WhisperModel(
-        WHISPER_MODEL,
-        device=WHISPER_DEVICE,
-        compute_type=WHISPER_COMPUTE_TYPE,
-    )
-    return _model
-
-
-def transcribe(audio_file: str, language_hint=None) -> str:
-    return transcribe_streaming(audio_file, language_hint=language_hint)
+    return _engine_get_model()
 
 
 def _collect_text(segments, on_partial=None) -> str:
-    partials = []
+    pieces = []
     for segment in segments:
-        piece = (segment.text or "").strip()
-        if not piece:
+        text = (getattr(segment, "text", "") or "").strip()
+        if not text:
             continue
-        partials.append(piece)
+        pieces.append(text)
         if on_partial:
             try:
-                on_partial(" ".join(partials))
-            except Exception as callback_exc:
-                logger.warning("STT partial callback failed: %s", callback_exc)
-    return " ".join(partials).strip()
-
-
-def _maybe_fix_mojibake(text: str) -> str:
-    raw = (text or "").strip()
-    if not raw:
-        return ""
-    mojibake_hits = sum(1 for ch in raw if ch in _MOJIBAKE_CHARS)
-    if mojibake_hits < 3:
-        return raw
-    try:
-        repaired = raw.encode("cp1252", errors="strict").decode("utf-8", errors="strict").strip()
-    except Exception:
-        return raw
-    if repaired and repaired != raw:
-        logger.info("STT mojibake repair applied")
-        return repaired
-    return raw
-
-
-def _replace_whole_token(text: str, source: str, target: str) -> str:
-    pattern = rf"(?<!\w){re.escape(source)}(?!\w)"
-    return re.sub(pattern, target, text)
-
-
-def normalize_arabic_post_transcript(text: str) -> str:
-    value = " ".join(str(text or "").split()).strip()
-    if not value:
-        return ""
-    if not _ARABIC_CHAR_RE.search(value):
-        return value
-
-    value = _ARABIC_DIACRITICS_RE.sub("", value)
-    value = value.replace("\u0640", "")
-    value = value.translate(_ARABIC_POST_CHAR_TRANSLATE)
-
-    for source, target in _ARABIC_POST_PHRASE_REPLACEMENTS:
-        value = _replace_whole_token(value, source, target)
-
-    for source, target in _ARABIC_POST_TOKEN_REPLACEMENTS.items():
-        value = _replace_whole_token(value, source, target)
-
-    value = _ARABIC_POST_WS_RE.sub(" ", value).strip()
-    return value
-
-
-def _extract_faster_whisper_language(info):
-    if isinstance(info, dict):
-        return _normalize_detected_language(info.get("language"), fallback="")
-    return _normalize_detected_language(getattr(info, "language", ""), fallback="")
-
-
-def _extract_faster_whisper_language_confidence(info):
-    if isinstance(info, dict):
-        raw_confidence = info.get("language_probability")
-    else:
-        raw_confidence = getattr(info, "language_probability", None)
-    try:
-        value = float(raw_confidence)
-    except (TypeError, ValueError):
-        return 0.0
-    return max(0.0, min(1.0, value))
+                on_partial(" ".join(pieces))
+            except Exception:
+                pass
+    return " ".join(pieces).strip()
 
 
 def _transcribe_once_with_meta(
@@ -362,219 +207,174 @@ def _transcribe_once_with_meta(
     *,
     language,
     beam_size: int,
+    best_of: int,
     vad_filter: bool,
     condition_on_previous_text: bool,
+    no_speech_threshold: float,
+    log_prob_threshold: float,
     on_partial=None,
 ):
-    segments, info = model.transcribe(
+    _ = best_of
+    _ = condition_on_previous_text
+    _ = no_speech_threshold
+    _ = log_prob_threshold
+
+    segments, _info = model.transcribe(
         audio_file,
         language=language,
         beam_size=max(1, int(beam_size)),
+        temperature=0.0,
         vad_filter=bool(vad_filter),
-        condition_on_previous_text=bool(condition_on_previous_text),
     )
-    text = _maybe_fix_mojibake(_collect_text(segments, on_partial=on_partial))
-    detected_language = _extract_faster_whisper_language(info)
-    detected_language_confidence = _extract_faster_whisper_language_confidence(info)
-    return text, detected_language, detected_language_confidence
+    text = _collect_text(segments, on_partial=on_partial)
+    detected_language = detect_language(text)
+    confidence = _language_confidence(detected_language, text)
+    return text, detected_language, confidence
+
+
+def normalize_arabic_post_transcript(text: str) -> str:
+    # Minimal post-processing by design.
+    cleaned = " ".join(str(text or "").split()).strip()
+    if STT_EGYPTIAN_DIALECT_ONLY:
+        return cleaned
+    return cleaned
 
 
 def _transcribe_faster_whisper_with_meta(audio_file: str, on_partial=None, language_hint=None):
     model = _get_whisper_model()
     runtime = get_runtime_stt_settings()
-    beam_size = int(runtime["beam_size"])
-    use_vad_filter = bool(runtime["vad_filter"])
-    use_previous_text = bool(runtime["condition_on_previous_text"])
-    quality_retry_threshold = float(runtime["quality_retry_threshold"])
-    quality_retry_beam_size = int(runtime["quality_retry_beam_size"])
-    effective_language = _resolve_whisper_language(language_hint=language_hint)
-    text, detected_language, detected_language_confidence = _transcribe_once_with_meta(
+    _ = runtime
+    _ = language_hint
+    whisper_language = None
+
+    text, detected_language, confidence = _transcribe_once_with_meta(
         model,
         audio_file,
-        language=effective_language,
-        beam_size=beam_size,
-        vad_filter=use_vad_filter,
-        condition_on_previous_text=use_previous_text,
+        language=whisper_language,
+        beam_size=int(runtime.get("beam_size", WHISPER_BEAM_SIZE)),
+        best_of=int(runtime.get("best_of", WHISPER_BEST_OF)),
+        vad_filter=bool(runtime.get("vad_filter", WHISPER_VAD_FILTER)),
+        condition_on_previous_text=bool(runtime.get("condition_on_previous_text", WHISPER_CONDITION_ON_PREVIOUS_TEXT)),
+        no_speech_threshold=float(runtime.get("no_speech_threshold", 0.0)),
+        log_prob_threshold=float(runtime.get("log_prob_threshold", 0.0)),
         on_partial=on_partial,
     )
 
-    if not text and use_vad_filter:
-        logger.info("Retrying STT without internal VAD after empty transcript")
-        retry_text, retry_language, retry_language_confidence = _transcribe_once_with_meta(
-            model,
-            audio_file,
-            language=effective_language,
-            beam_size=beam_size,
-            vad_filter=False,
-            condition_on_previous_text=use_previous_text,
-            on_partial=on_partial,
-        )
-        if retry_text:
-            text = retry_text
-            detected_language = retry_language
-            detected_language_confidence = retry_language_confidence
+    text = normalize_arabic_post_transcript(text)
+    detected_language = _coerce_language(detected_language, text, fallback="unknown")
+    return text, detected_language, confidence
 
-    if not text and effective_language is not None:
-        logger.info("Retrying STT with auto language detection after empty transcript")
-        retry_text, retry_language, retry_language_confidence = _transcribe_once_with_meta(
-            model,
-            audio_file,
-            language=None,
-            beam_size=beam_size,
-            vad_filter=False,
-            condition_on_previous_text=use_previous_text,
-            on_partial=on_partial,
-        )
-        if retry_text:
-            text = retry_text
-            detected_language = retry_language
-            detected_language_confidence = retry_language_confidence
 
-    if text and _transcript_quality_score(text) < quality_retry_threshold:
-        logger.info("Retrying STT with stronger decoding after low-quality transcript")
-        retry_text, retry_language, retry_language_confidence = _transcribe_once_with_meta(
-            model,
-            audio_file,
-            language=effective_language,
-            beam_size=quality_retry_beam_size,
-            vad_filter=False,
-            condition_on_previous_text=False,
-            on_partial=on_partial,
-        )
-        if _transcript_quality_score(retry_text) >= _transcript_quality_score(text):
-            text = retry_text
-            detected_language = retry_language
-            detected_language_confidence = retry_language_confidence
+def _transcribe_egyptalk_transformers_with_meta(audio_file: str, on_partial=None, language_hint=None):
+    _ = language_hint
+    text, detected_language = dual_transcribe(audio_file)
+    text = normalize_arabic_post_transcript(text)
 
-    provisional_language = _coerce_supported_language(
-        detected_language,
-        text,
-        fallback=effective_language or language_hint or "en",
-    )
+    if on_partial and text:
+        try:
+            on_partial(text)
+        except Exception:
+            pass
 
-    if (
-        text
-        and effective_language is None
-        and provisional_language in {"ar", "en"}
-        and 0.0 < float(detected_language_confidence or 0.0) < 0.72
-    ):
-        opposite_hint = "en" if provisional_language == "ar" else "ar"
-        logger.info(
-            "Retrying STT with explicit %s hint due low language confidence (%.2f)",
-            opposite_hint,
-            float(detected_language_confidence or 0.0),
-        )
-        opposite_text, opposite_detected, opposite_confidence = _transcribe_once_with_meta(
-            model,
-            audio_file,
-            language=opposite_hint,
-            beam_size=max(beam_size, quality_retry_beam_size),
-            vad_filter=False,
-            condition_on_previous_text=False,
-            on_partial=on_partial,
-        )
-        if opposite_text:
-            base_score = _transcript_quality_score(text)
-            opposite_score = _transcript_quality_score(opposite_text)
-            opposite_language = _coerce_supported_language(
-                opposite_detected,
-                opposite_text,
-                fallback=opposite_hint,
-            )
-            if opposite_language == opposite_hint:
-                opposite_score += 0.08
-            if opposite_score > (base_score + 0.10):
-                text = opposite_text
-                provisional_language = opposite_language
-                detected_language_confidence = opposite_confidence
+    confidence = _language_confidence(detected_language, text)
+    return text, detected_language, confidence
 
-    detected_language = _coerce_supported_language(
-        provisional_language,
-        text,
-        fallback=effective_language or language_hint or "en",
-    )
-    return text, detected_language, max(0.0, min(1.0, float(detected_language_confidence or 0.0)))
+
+def _should_try_egyptalk_fallback(
+    detected_language: str,
+    language_confidence: float,
+    *,
+    text: str,
+    language_hint=None,
+) -> bool:
+    _ = language_confidence
+    _ = language_hint
+    language = _coerce_language(detected_language, text, fallback="unknown")
+    return _is_weak_result(text) and language in {"ar", "mixed", "unknown"}
 
 
 def transcribe_backend_direct_with_meta(audio_file: str, *, backend: str, on_partial=None, language_hint=None):
     requested_backend = _normalize_stt_backend(backend)
-    text, detected_language, detected_language_confidence = _transcribe_faster_whisper_with_meta(
-        audio_file,
-        on_partial=on_partial,
-        language_hint=language_hint,
-    )
-    normalized_language = _coerce_supported_language(
-        detected_language,
-        text,
-        fallback=language_hint or "",
-    )
+
+    if requested_backend == "egyptalk_transformers":
+        try:
+            text, language, confidence = _transcribe_egyptalk_transformers_with_meta(
+                audio_file,
+                on_partial=on_partial,
+                language_hint=language_hint,
+            )
+            method = "dual"
+            effective_backend = "egyptalk_transformers"
+        except Exception as exc:
+            logger.warning(
+                "Dual transcription path failed (%s). Falling back to faster-whisper auto.",
+                exc,
+            )
+            text, language, confidence = _transcribe_faster_whisper_with_meta(
+                audio_file,
+                on_partial=on_partial,
+                language_hint=language_hint,
+            )
+            method = "auto"
+            effective_backend = "faster_whisper"
+    else:
+        auto_result = _engine_transcribe(audio_file)
+        text = normalize_arabic_post_transcript(auto_result.get("text", ""))
+        language = _coerce_language(auto_result.get("language", "unknown"), text)
+        method = str(auto_result.get("method", "auto") or "auto").strip().lower()
+        confidence = _language_confidence(language, text)
+        effective_backend = "faster_whisper"
+
+        if on_partial and text:
+            try:
+                on_partial(text)
+            except Exception:
+                pass
+
+    logger.info("STT method=%s detected_language=%s final_text=%s", method, language, text)
     return {
         "text": str(text or ""),
-        "language": normalized_language,
-        "language_confidence": max(0.0, min(1.0, float(detected_language_confidence or 0.0))),
-        "backend": requested_backend,
+        "language": _coerce_language(language, text),
+        "language_confidence": max(0.0, min(1.0, float(confidence or 0.0))),
+        "backend": effective_backend,
+        "method": method,
     }
 
 
 def transcribe_streaming_with_meta(audio_file: str, on_partial=None, language_hint=None):
     try:
-        direct_result = transcribe_backend_direct_with_meta(
+        active_backend = get_runtime_stt_backend()
+        result = transcribe_backend_direct_with_meta(
             audio_file,
-            backend="faster_whisper",
+            backend=active_backend,
             on_partial=on_partial,
             language_hint=language_hint,
         )
-        text = str((direct_result or {}).get("text") or "")
-        detected_language = str((direct_result or {}).get("language") or "")
-        try:
-            language_confidence = float((direct_result or {}).get("language_confidence") or 0.0)
-        except (TypeError, ValueError):
-            language_confidence = 0.0
-
-        if text and (STT_ARABIC_POST_NORMALIZATION or STT_EGYPTIAN_DIALECT_ONLY):
-            should_normalize_arabic = (
-                bool(STT_EGYPTIAN_DIALECT_ONLY)
-                or _normalize_detected_language(detected_language, fallback="") == "ar"
-                or bool(_ARABIC_CHAR_RE.search(text))
-            )
-            if should_normalize_arabic:
-                text = normalize_arabic_post_transcript(text)
-
-        if STT_EGYPTIAN_DIALECT_ONLY and text and _ARABIC_CHAR_RE.search(text):
-            detected_language = "ar"
-
-        normalized_language = _coerce_supported_language(
-            detected_language,
-            text,
-            fallback=language_hint or "",
-        )
         _update_last_transcription_meta(
-            text,
-            normalized_language,
-            "faster_whisper",
-            language_confidence=language_confidence,
+            text=str(result.get("text", "")),
+            language=str(result.get("language", "unknown")),
+            backend=str(result.get("backend", active_backend)),
+            method=str(result.get("method", "auto")),
+            confidence=float(result.get("language_confidence", 0.0) or 0.0),
         )
-        return {
-            "text": text,
-            "language": normalized_language,
-            "language_confidence": max(0.0, min(1.0, float(language_confidence or 0.0))),
-            "backend": "faster_whisper",
-        }
+        return result
     except Exception as exc:
         logger.error("STT failed: %s", exc)
-        fallback_language = _coerce_supported_language(language_hint, "", fallback="en")
-        _update_last_transcription_meta(
-            "",
-            fallback_language,
-            "faster_whisper",
-            language_confidence=0.0,
-        )
-        return {
+        fallback = {
             "text": "",
-            "language": fallback_language,
+            "language": "unknown",
             "language_confidence": 0.0,
-            "backend": "faster_whisper",
+            "backend": get_runtime_stt_backend(),
+            "method": "auto",
         }
+        _update_last_transcription_meta(
+            text="",
+            language="unknown",
+            backend=fallback["backend"],
+            method="auto",
+            confidence=0.0,
+        )
+        return fallback
 
 
 def transcribe_streaming(audio_file: str, on_partial=None, language_hint=None) -> str:
@@ -583,4 +383,8 @@ def transcribe_streaming(audio_file: str, on_partial=None, language_hint=None) -
         on_partial=on_partial,
         language_hint=language_hint,
     )
-    return str((result or {}).get("text") or "")
+    return str(result.get("text", ""))
+
+
+def transcribe(audio_file: str, language_hint=None) -> str:
+    return transcribe_streaming(audio_file, language_hint=language_hint)

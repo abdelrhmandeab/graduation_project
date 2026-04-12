@@ -54,7 +54,7 @@ _LAST_STT_LANGUAGE_CONFIDENCE = 0.0
 
 def _resolve_stt_language_hint(*, wake_source=None):
     _ = wake_source
-    # Keep realtime STT in true auto-detect mode for every utterance.
+    # Keep STT language fully automatic with no wake/profile forcing.
     return None
 
 
@@ -231,7 +231,10 @@ def _run_text_fallback_loop():
 
         print(f"Jarvis: {response}")
         if not _is_interrupt_command(text):
-            speech_engine.speak_async(_speech_safe_response(response))
+            speech_engine.speak_async(
+                _speech_safe_response(response),
+                language=session_memory.get_preferred_language(),
+            )
 
 
 def _process_utterance(audio_file, pipeline_started, wake_source=None):
@@ -275,7 +278,7 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None):
 
         route_started = time.perf_counter()
         try:
-            response = route_command(text, detected_language=detected_language)
+            response = route_command(text, detected_language=detected_language, realtime=True)
             route_success = True
             metrics.record_stage("router", time.perf_counter() - route_started, success=True)
         except Exception as exc:
@@ -285,7 +288,10 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None):
 
         print(f"Jarvis: {response}")
         if not _is_interrupt_command(text):
-            speech_engine.speak_async(_speech_safe_response(response))
+            speech_engine.speak_async(
+                _speech_safe_response(response),
+                language=detected_language or session_memory.get_preferred_language(),
+            )
     finally:
         metrics.record_stage("pipeline", time.perf_counter() - pipeline_started, success=bool(text) and route_success)
         _safe_remove(audio_file)
