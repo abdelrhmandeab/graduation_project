@@ -419,6 +419,15 @@ ALIASES = {
 }
 
 _RETRYABLE_NON_DESTRUCTIVE_ERRORS = ("timed out", "temporarily unavailable")
+_PERMISSION_DENIED_ERROR_MARKERS = (
+    "access is denied",
+    "permissiondenied",
+    "windows system error 5",
+    "requires elevation",
+    "requested operation requires elevation",
+    "not have sufficient privilege",
+)
+_NETWORK_RADIO_ACTIONS = {"wifi_on", "wifi_off", "bluetooth_on", "bluetooth_off"}
 _URL_RE = re.compile(r"^(?:https?://|www\.)[^\s]+$", flags=re.IGNORECASE)
 _DURATION_UNIT_SECONDS = {
     "s": 1,
@@ -739,6 +748,48 @@ def _render_system_success_message(action_key, normalized_args, output):
     return f"Executed system command: {action_key}."
 
 
+def _compact_system_error(error_text, max_chars=220):
+    lines = [line.strip() for line in str(error_text or "").splitlines() if line.strip()]
+    if not lines:
+        return "Unknown system execution error."
+
+    for line in lines:
+        lowered = line.lower()
+        if lowered.startswith("at line:"):
+            continue
+        if lowered.startswith("+"):
+            continue
+        if lowered.startswith("categoryinfo"):
+            continue
+        if lowered.startswith("fullyqualifiederrorid"):
+            continue
+        if len(line) > max_chars:
+            return line[: max_chars - 3] + "..."
+        return line
+
+    fallback = lines[0]
+    if len(fallback) > max_chars:
+        return fallback[: max_chars - 3] + "..."
+    return fallback
+
+
+def _is_permission_denied_error(error_text):
+    lowered = str(error_text or "").lower()
+    return any(marker in lowered for marker in _PERMISSION_DENIED_ERROR_MARKERS)
+
+
+def _permission_denied_message(action_key):
+    if action_key in _NETWORK_RADIO_ACTIONS:
+        return (
+            "I need Administrator privileges to change Wi-Fi/Bluetooth state. "
+            "Please run Jarvis as Administrator and try again."
+        )
+    return (
+        "Windows denied permission for this action. "
+        "Please run Jarvis as Administrator and try again."
+    )
+
+
 def normalize_system_action(text):
     phrase = text.lower().strip()
     if phrase.startswith("system "):
@@ -897,11 +948,30 @@ def execute_system_command_result(action_key, command_args=None):
         details={"action": action_key, "args": dict(normalized_args or {}), "attempts": attempts},
         error=error,
     )
-    error_code = "timeout" if "timed out" in (error or "").lower() else "execution_failed"
+    error_text = str(error or "").strip()
+    compact_error = _compact_system_error(error_text)
+    if _is_permission_denied_error(error_text):
+        return failure_result(
+            _permission_denied_message(action_key),
+            error_code="permission_denied",
+            debug_info={
+                "action": action_key,
+                "args": dict(normalized_args or {}),
+                "attempts": attempts,
+                "error_summary": compact_error,
+            },
+        )
+
+    error_code = "timeout" if "timed out" in error_text.lower() else "execution_failed"
     return failure_result(
-        f"Execution failed: {error}",
+        f"Execution failed: {compact_error}",
         error_code=error_code,
-        debug_info={"action": action_key, "args": dict(normalized_args or {}), "attempts": attempts},
+        debug_info={
+            "action": action_key,
+            "args": dict(normalized_args or {}),
+            "attempts": attempts,
+            "error_summary": compact_error,
+        },
     )
 
 

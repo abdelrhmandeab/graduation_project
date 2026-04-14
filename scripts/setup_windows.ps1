@@ -23,4 +23,4 @@ Write-Host "[Jarvis Setup] Running doctor checks..." -ForegroundColor Yellow
 python core\doctor.py
 
 Write-Host "[Jarvis Setup] Completed." -ForegroundColor Green
-Write-Host "Next: start Ollama (ollama serve), then run python core\\orchestrator.py" -ForegroundColor Green
+Write-Host "Next: start Ollama (ollama serve), then run python main.py" -ForegroundColor Green

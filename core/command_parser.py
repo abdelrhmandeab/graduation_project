@@ -552,15 +552,8 @@ _KEYWORD_TABLE = [
     ({"voice quality status", "speech quality status", "tts quality status", "جودة الصوت عاملة ايه"}, "VOICE_COMMAND", "voice_quality_status"),
     ({"voice quality natural", "speech quality natural", "tts quality natural", "natural voice mode", "خلي الصوت طبيعي", "خلّي الصوت طبيعي"}, "VOICE_COMMAND", "voice_quality_set", {"mode": "natural"}),
     ({"voice quality standard", "speech quality standard", "tts quality standard", "robot voice mode", "robotic voice mode", "خلي الصوت عادي", "خلّي الصوت عادي", "خلي الصوت روبوتي"}, "VOICE_COMMAND", "voice_quality_set", {"mode": "standard"}),
-    ({"stt profile status", "speech profile status", "voice stt profile status", "الاستماع عامل ايه"}, "VOICE_COMMAND", "stt_profile_status"),
-    ({"stt profile quiet", "speech profile quiet", "خلي الاستماع هادي", "خلّي الاستماع هادي"}, "VOICE_COMMAND", "stt_profile_set", {"profile": "quiet"}),
-    ({"stt profile noisy", "speech profile noisy", "خلي الاستماع دوشة", "خلّي الاستماع دوشة"}, "VOICE_COMMAND", "stt_profile_set", {"profile": "noisy"}),
-    ({"stt profile arabic-egy", "stt profile arabic egy", "speech profile arabic egy", "stt profile egyptian", "خلي الاستماع مصري", "خلّي الاستماع مصري"}, "VOICE_COMMAND", "stt_profile_set", {"profile": "arabic_egy"}),
-    ({"stt profile code-switched", "stt profile code switched", "speech profile code switched", "stt profile mixed", "خلي الاستماع مختلط", "خلّي الاستماع مختلط"}, "VOICE_COMMAND", "stt_profile_set", {"profile": "code_switched"}),
-    ({"stt profile auto", "speech profile auto", "voice stt profile auto", "خلي الاستماع اوتو", "خلّي الاستماع اوتو"}, "VOICE_COMMAND", "stt_profile_set", {"profile": "auto"}),
-    ({"stt backend status", "speech backend status", "voice stt backend status", "محرك الاستماع عامل ايه"}, "VOICE_COMMAND", "stt_backend_status"),
-    ({"stt backend whisper", "stt backend faster whisper", "set stt backend faster whisper", "set stt backend faster_whisper"}, "VOICE_COMMAND", "stt_backend_set", {"backend": "faster_whisper"}),
-    ({"stt backend egyptalk", "stt backend egypt talk", "set stt backend egyptalk", "set stt backend nemo", "stt backend nemo egyptalk", "set stt backend masri", "محرك الاستماع مصري"}, "VOICE_COMMAND", "stt_backend_set", {"backend": "egyptalk_transformers"}),
+    ({"stt backend hybrid", "speech backend hybrid", "voice stt backend hybrid", "use hybrid stt", "use elevenlabs stt", "set stt backend hybrid", "set stt backend elevenlabs", "محرك الاستماع هجين", "محرك الاستماع اليفن لابس"}, "VOICE_COMMAND", "stt_backend_hybrid"),
+    ({"stt backend local", "speech backend local", "voice stt backend local", "stt backend whisper", "set stt backend local", "use local stt", "محرك الاستماع محلي", "محرك الاستماع ويسبر"}, "VOICE_COMMAND", "stt_backend_local"),
     ({"wake triggers", "wake triggers list", "list wake triggers", "wake status", "wake mode status", "كلمات التنبيه", "كلمات الصحوة"}, "VOICE_COMMAND", "wake_status"),
     ({"stop speaking", "interrupt speech", "be quiet", "stop talking"}, "VOICE_COMMAND", "interrupt"),
     ({"speech on", "enable speech", "شغل الصوت"}, "VOICE_COMMAND", "speech_on"),
@@ -670,41 +663,42 @@ _REGEX_TABLE = [
     # Voice
     (
         re.compile(
-            r"^(?:set\s+)?(?:voice\s+)?(?:stt|speech)\s+profile(?:\s+to)?\s+(quiet|noisy|arabic(?:[_\s-]?egy|[_\s-]?egyptian)?|egyptian|code[_\s-]?switched|mixed|auto)(?:\s+room)?$"
-        ),
-        False,
-        "VOICE_COMMAND",
-        "stt_profile_set",
-        lambda m: {"profile": m.group(1).replace(" ", "_").replace("-", "_")},
-    ),
-    (
-        re.compile(
-            r"^(?:ظبط|ظبّط|غير|غيّر|عدل|عدّل|خلي|خلّي)\s+(?:ملف|وضع)?\s*الاستماع(?:\s+ل)?\s+(هادي|دوشة|عربي\s+مصري|مصري|مختلط|اوتو)$",
+            r"^(?:set\s+)?(?:(?:voice|speech|stt)\s+)?(?:stt|speech)\s+backend(?:\s+to)?\s+(hybrid|elevenlabs?|arabic(?:\s+hybrid)?)$",
             re.IGNORECASE,
         ),
         True,
         "VOICE_COMMAND",
-        "stt_profile_set",
-        lambda m: {"profile": m.group(1).replace(" ", "_")},
+        "stt_backend_hybrid",
+        lambda _m: {},
     ),
     (
         re.compile(
-            r"^(?:set\s+)?(?:(?:voice|speech|stt)\s+)?(?:stt|speech)\s+backend(?:\s+to)?\s+(faster(?:[_\s-]?whisper)?|whisper|egypt(?:[_\s-]?talk)?|egyptalk(?:[_\s-]?transformers)?|nemo(?:[_\s-]?egyptalk)?|masri)$",
+            r"^(?:set\s+)?(?:(?:voice|speech|stt)\s+)?(?:stt|speech)\s+backend(?:\s+to)?\s+(local|whisper|faster(?:[_\s-]?whisper)?)$",
             re.IGNORECASE,
         ),
         True,
         "VOICE_COMMAND",
-        "stt_backend_set",
-        lambda m: {"backend": m.group(1)},
+        "stt_backend_local",
+        lambda _m: {},
     ),
     (
         re.compile(
-            r"^(?:(?:voice|speech|stt)\s+)?(?:stt|speech)\s+backend\s+status$",
+            r"^(?:ظبط|ظبّط|غير|غيّر|عدل|عدّل|خلي|خلّي)\s+(?:محرك|باكند)?\s*الاستماع(?:\s+على)?\s+(?:هجين|اليفن\s*لابس|elevenlabs?)$",
             re.IGNORECASE,
         ),
         True,
         "VOICE_COMMAND",
-        "stt_backend_status",
+        "stt_backend_hybrid",
+        lambda _m: {},
+    ),
+    (
+        re.compile(
+            r"^(?:ظبط|ظبّط|غير|غيّر|عدل|عدّل|خلي|خلّي)\s+(?:محرك|باكند)?\s*الاستماع(?:\s+على)?\s+(?:محلي|لوكال|ويسبر)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "VOICE_COMMAND",
+        "stt_backend_local",
         lambda _m: {},
     ),
     (

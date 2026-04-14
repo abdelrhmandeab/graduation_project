@@ -13,6 +13,9 @@ MATCH_THRESHOLD = 70
 MIN_INTENT_SCORE = 1
 MIN_CONFIDENCE = 0.35
 SUGGEST_THRESHOLD = 0.45
+_TARGET_REQUIRED_INTENTS = {
+    "screenshot",
+}
 
 
 def _unique_sorted_keywords(matches: List[tuple[str, int]]) -> List[str]:
@@ -35,6 +38,14 @@ def _evaluate_intent(text: str, intent_name: str, payload: Dict[str, List[str]])
 
     has_action = len(action_matches) > 0
     has_target = len(target_matches) > 0
+
+    if intent_name in _TARGET_REQUIRED_INTENTS and not has_target:
+        return {
+            "intent": intent_name,
+            "score": 0,
+            "confidence": 0.0,
+            "matched_keywords": [],
+        }
 
     score = 0
     if has_action:

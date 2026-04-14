@@ -424,6 +424,52 @@ def _get_model():
     return _model
 
 
+def preload_runtime_wake_word():
+    """Preload wake-word runtime resources so first listen has no cold start."""
+    if sd is None:
+        raise RuntimeError(
+            "sounddevice is unavailable. Install sounddevice in the active Python environment."
+        ) from _SOUNDDEVICE_IMPORT_ERROR
+
+    phrase_runtime = get_runtime_wake_word_phrase_settings()
+    wake_mode = _normalize_wake_mode(phrase_runtime.get("mode"))
+    english_layer_enabled = wake_mode in {"english", "both"}
+    arabic_layer_enabled = bool(phrase_runtime.get("arabic_enabled")) and wake_mode in {
+        "english",
+        "arabic",
+        "both",
+    }
+    arabic_triggers = tuple(phrase_runtime.get("arabic_triggers") or ())
+    if not arabic_triggers:
+        arabic_layer_enabled = False
+
+    if not english_layer_enabled and not arabic_layer_enabled:
+        raise RuntimeError("Wake word mode disabled all wake layers. Enable english, arabic, or both.")
+
+    input_device = _resolve_input_device()
+
+    english_model_loaded = False
+    arabic_model_loaded = False
+
+    if english_layer_enabled:
+        _get_model()
+        english_model_loaded = True
+
+    if arabic_layer_enabled:
+        ar_model_name = str(phrase_runtime.get("ar_stt_model") or WAKE_WORD_AR_STT_MODEL)
+        _get_ar_stt_model(ar_model_name)
+        arabic_model_loaded = True
+
+    return {
+        "mode": wake_mode,
+        "input_device": input_device if input_device is not None else "default",
+        "english_layer_enabled": bool(english_layer_enabled),
+        "arabic_layer_enabled": bool(arabic_layer_enabled),
+        "english_model_loaded": bool(english_model_loaded),
+        "arabic_model_loaded": bool(arabic_model_loaded),
+    }
+
+
 def _resolve_input_device():
     cfg = WAKE_WORD_INPUT_DEVICE
     if cfg is None or str(cfg).strip() == "":

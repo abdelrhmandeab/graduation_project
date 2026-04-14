@@ -1,12 +1,16 @@
 import glob
 import json
 import os
+import queue
 import re
+import subprocess
 import tempfile
 import time
 import sys
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+
+import httpx
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -17,7 +21,11 @@ from audio import stt as stt_runtime
 from audio.stt import transcribe_streaming
 from audio.tts import speech_engine
 from audio.vad import is_speech
-from audio.wake_word import get_runtime_wake_word_behavior, listen_for_wake_word
+from audio.wake_word import (
+    get_runtime_wake_word_behavior,
+    listen_for_wake_word,
+    preload_runtime_wake_word,
+)
 from core.command_parser import parse_command
 from core.command_router import initialize_command_services, route_command
 from core.doctor import collect_diagnostics
@@ -25,10 +33,17 @@ from core.config import (
     DOCTOR_INCLUDE_MODEL_LOAD_CHECKS,
     DOCTOR_SCHEDULE_INTERVAL_SECONDS,
     DOCTOR_STARTUP_ENABLED,
+    LLM_OLLAMA_AUTOSTART,
+    LLM_OLLAMA_AUTOSTART_TIMEOUT_SECONDS,
+    LLM_OLLAMA_BASE_URL,
+    LLM_OLLAMA_EXECUTABLE,
     MAX_RECORD_DURATION,
     REALTIME_BACKPRESSURE_POLL_SECONDS,
     REALTIME_DROP_WHEN_BUSY,
     REALTIME_MAX_PENDING_UTTERANCES,
+    SPEECH_GUARD_SKIP_NON_RESPONSIVE_PROFILES,
+    STARTUP_PARSER_NLP_PREWARM_ENABLED,
+    TTS_PREWARM_ENABLED,
 )
 from core.intent_confidence import assess_intent_confidence
 from core.logger import logger
@@ -50,11 +65,18 @@ _TRANSCRIPT_TOKEN_RE = re.compile(r"[A-Za-z0-9\u0600-\u06FF]+")
 _ARABIC_CHAR_RE = re.compile(r"[\u0600-\u06FF]")
 _LATIN_CHAR_RE = re.compile(r"[A-Za-z]")
 _LAST_STT_LANGUAGE_CONFIDENCE = 0.0
+_OLLAMA_AUTOSTART_PROCESS = None
 
 
 def _resolve_stt_language_hint(*, wake_source=None):
     _ = wake_source
-    # Keep STT language fully automatic with no wake/profile forcing.
+    # Use the session's preferred language as a soft hint so the Egyptian model
+    # is selected immediately for Arabic speakers, avoiding the extra auto-detect
+    # pass on every utterance.  Falls back to None (fully automatic) when no
+    # language preference has been established yet.
+    lang = session_memory.get_preferred_language()
+    if lang in {"ar", "en"}:
+        return lang
     return None
 
 
@@ -69,6 +91,27 @@ def _speech_safe_response(text):
     if idx >= 0:
         content = content[:idx]
     return content.strip()
+
+
+def _remaining_after_streamed_sentences(full_text, streamed_sentences):
+    normalized_full = " ".join(str(full_text or "").split()).strip()
+    if not normalized_full:
+        return ""
+
+    normalized_streamed = [
+        " ".join(str(sentence or "").split()).strip()
+        for sentence in (streamed_sentences or [])
+        if str(sentence or "").strip()
+    ]
+    if not normalized_streamed:
+        return normalized_full
+
+    prefix = " ".join(normalized_streamed).strip()
+    if not prefix:
+        return normalized_full
+    if normalized_full.startswith(prefix):
+        return normalized_full[len(prefix):].strip()
+    return ""
 
 
 def _create_utterance_audio_file():
@@ -206,6 +249,42 @@ def _transcribe_with_runtime_stt(audio_file, wake_source=None):
     return text, detected_language
 
 
+def _precompute_post_stt_routing(text, *, detected_language=None):
+    normalized_text = " ".join(str(text or "").split()).strip()
+    if not normalized_text:
+        return None, None
+
+    forced_language = str(detected_language or "").strip().lower()
+    if forced_language not in {"ar", "en"}:
+        forced_language = ""
+    previous_language = forced_language or session_memory.get_preferred_language()
+
+    try:
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="jarvis-route-precompute") as executor:
+            language_future = executor.submit(
+                detect_supported_language,
+                normalized_text,
+                previous_language=previous_language,
+            )
+            parser_future = executor.submit(parse_command, normalized_text)
+            language_result = language_future.result()
+            parser_candidate = parser_future.result()
+    except Exception as exc:
+        logger.debug("Routing precompute failed; falling back to route-time parse: %s", exc)
+        return None, None
+
+    gated_text = " ".join(
+        str(getattr(language_result, "normalized_text", "") or normalized_text).split()
+    ).strip()
+    if gated_text and gated_text != normalized_text:
+        try:
+            parser_candidate = parse_command(gated_text)
+        except Exception as exc:
+            logger.debug("Routing precompute parser re-run failed: %s", exc)
+
+    return language_result, parser_candidate
+
+
 def _run_text_fallback_loop():
     print("Jarvis is running in text fallback mode (no wake-word/audio stack).")
     print("Type 'exit' to stop.")
@@ -237,12 +316,16 @@ def _run_text_fallback_loop():
             )
 
 
-def _process_utterance(audio_file, pipeline_started, wake_source=None):
+def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_summary=None):
     text = ""
     route_success = False
     try:
         active_audio_ux_profile = str(session_memory.get_audio_ux_profile() or "").strip().lower()
         skip_post_capture_guard = active_audio_ux_profile in _LOW_LATENCY_AUDIO_UX_PROFILES
+        if not skip_post_capture_guard and bool(SPEECH_GUARD_SKIP_NON_RESPONSIVE_PROFILES):
+            capture_detected_speech = bool((capture_summary or {}).get("speech_detected"))
+            if capture_detected_speech:
+                skip_post_capture_guard = True
 
         if skip_post_capture_guard:
             # record_utterance already runs mic VAD; skip duplicate file-based guard in fast profile.
@@ -276,9 +359,52 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None):
             return
         logger.info("Transcript[%s]: %s", detected_language or "unknown", _safe_log_text(text))
 
+        precomputed_language_result, precomputed_parser_candidate = _precompute_post_stt_routing(
+            text,
+            detected_language=detected_language,
+        )
+
+        # Streaming TTS state: queue sentence chunks immediately as they arrive
+        # so playback pipelines naturally without polling for completion.
+        tts_language = detected_language or session_memory.get_preferred_language()
+        should_speak_response = not _is_interrupt_command(text)
+        streamed_sentences = []
+        sentence_queue = queue.Queue()
+        sentence_queue_started = False
+
+        def _iter_streamed_sentences():
+            while True:
+                item = sentence_queue.get()
+                if item is None:
+                    break
+                yield item
+
+        if should_speak_response:
+            sentence_queue_started, _ = speech_engine.speak_sentence_queue(
+                _iter_streamed_sentences(),
+                language=tts_language,
+            )
+
+        def _on_sentence_streamed(sentence):
+            if not (should_speak_response and sentence_queue_started):
+                return
+            normalized = _speech_safe_response(sentence)
+            normalized = " ".join(str(normalized or "").split()).strip()
+            if not normalized:
+                return
+            streamed_sentences.append(normalized)
+            sentence_queue.put(normalized)
+
         route_started = time.perf_counter()
         try:
-            response = route_command(text, detected_language=detected_language, realtime=True)
+            response = route_command(
+                text,
+                detected_language=detected_language,
+                realtime=True,
+                on_sentence=_on_sentence_streamed,
+                precomputed_language_result=precomputed_language_result,
+                precomputed_parser_candidate=precomputed_parser_candidate,
+            )
             route_success = True
             metrics.record_stage("router", time.perf_counter() - route_started, success=True)
         except Exception as exc:
@@ -287,11 +413,16 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None):
             response = "Sorry, I had an internal error."
 
         print(f"Jarvis: {response}")
-        if not _is_interrupt_command(text):
-            speech_engine.speak_async(
-                _speech_safe_response(response),
-                language=detected_language or session_memory.get_preferred_language(),
-            )
+        if should_speak_response:
+            safe_response = _speech_safe_response(response)
+            if sentence_queue_started:
+                remaining = _remaining_after_streamed_sentences(safe_response, streamed_sentences)
+                if remaining:
+                    sentence_queue.put(remaining)
+                sentence_queue.put(None)
+            else:
+                # Fallback when queue startup failed.
+                speech_engine.speak_async(safe_response, language=tts_language)
     finally:
         metrics.record_stage("pipeline", time.perf_counter() - pipeline_started, success=bool(text) and route_success)
         _safe_remove(audio_file)
@@ -335,11 +466,188 @@ def _run_doctor_diagnostics(trigger):
         }
 
 
+def _preload_stt_model():
+    """Warm the active STT runtime backend during startup prewarm."""
+    try:
+        preload_snapshot = stt_runtime.preload_runtime_models()
+        logger.info("STT preload complete: %s", preload_snapshot)
+    except Exception as exc:
+        logger.warning("STT model preload failed (will load on first use): %s", exc)
+
+
+
+def _prewarm_llm():
+    """Send a minimal prompt to Ollama so the model is loaded into memory before the user speaks."""
+    try:
+        from llm.ollama_client import ask_llm
+        ask_llm("Hi", num_ctx=64)
+        logger.info("LLM prewarmed successfully.")
+    except Exception as exc:
+        logger.warning("LLM prewarm failed (will load on first query): %s", exc)
+
+
+def _ollama_version_endpoint() -> str:
+    return f"{str(LLM_OLLAMA_BASE_URL or 'http://localhost:11434').rstrip('/')}/api/version"
+
+
+def _is_ollama_reachable(timeout_seconds: float = 1.0) -> bool:
+    try:
+        response = httpx.get(_ollama_version_endpoint(), timeout=max(0.2, float(timeout_seconds)))
+    except Exception:
+        return False
+    return bool(response.status_code == 200)
+
+
+def _ensure_ollama_running():
+    global _OLLAMA_AUTOSTART_PROCESS
+
+    if _is_ollama_reachable(timeout_seconds=1.0):
+        logger.info("Ollama already running at %s", str(LLM_OLLAMA_BASE_URL or "http://localhost:11434"))
+        return True
+
+    if not bool(LLM_OLLAMA_AUTOSTART):
+        logger.warning("Ollama is not reachable and auto-start is disabled.")
+        return False
+
+    command = [str(LLM_OLLAMA_EXECUTABLE or "ollama"), "serve"]
+    creation_flags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+    logger.info("Ollama not reachable; starting background server via: %s", " ".join(command))
+    try:
+        _OLLAMA_AUTOSTART_PROCESS = subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creation_flags,
+            start_new_session=True,
+        )
+    except Exception as exc:
+        logger.warning("Failed to start Ollama server process: %s", exc)
+        return False
+
+    wait_seconds = max(3.0, float(LLM_OLLAMA_AUTOSTART_TIMEOUT_SECONDS or 25.0))
+    deadline = time.perf_counter() + wait_seconds
+    while time.perf_counter() < deadline:
+        if _is_ollama_reachable(timeout_seconds=0.8):
+            logger.info("Ollama server is ready at %s", str(LLM_OLLAMA_BASE_URL or "http://localhost:11434"))
+            return True
+        if _OLLAMA_AUTOSTART_PROCESS is not None and _OLLAMA_AUTOSTART_PROCESS.poll() is not None:
+            logger.warning("Ollama server process exited before becoming ready.")
+            return False
+        time.sleep(0.4)
+
+    logger.warning("Timed out waiting for Ollama server startup after %.1fs", wait_seconds)
+    return False
+
+
+def _preload_wake_word_runtime():
+    """Warm wake-word model/device resources before entering wake listening loop."""
+    started = time.perf_counter()
+    try:
+        snapshot = preload_runtime_wake_word()
+        metrics.record_stage("wake_word_prewarm", time.perf_counter() - started, success=True)
+        logger.info("Wake-word preload complete: %s", snapshot)
+    except Exception as exc:
+        metrics.record_stage("wake_word_prewarm", time.perf_counter() - started, success=False)
+        logger.warning("Wake-word preload failed (will retry on first listen): %s", exc)
+
+
+def _prewarm_tts():
+    """Warm TTS backend resources so first spoken response avoids cold-start penalty."""
+    started = time.perf_counter()
+    try:
+        preferred_language = session_memory.get_preferred_language()
+        warmed, backend = speech_engine.prewarm(preferred_language=preferred_language)
+        metrics.record_stage("tts_prewarm", time.perf_counter() - started, success=bool(warmed))
+        if warmed:
+            logger.info("TTS prewarmed successfully (%s).", backend)
+        else:
+            logger.info("TTS prewarm skipped/unavailable (%s).", backend)
+    except Exception as exc:
+        metrics.record_stage("tts_prewarm", time.perf_counter() - started, success=False)
+        logger.warning("TTS prewarm failed (will initialize on first response): %s", exc)
+
+
+def _prewarm_parser_nlp():
+    """Warm parser and keyword-NLU modules to reduce first-command import/init latency."""
+    started = time.perf_counter()
+    parser_ready = False
+    keyword_nlu_ready = False
+    try:
+        parse_command("open chrome")
+        parse_command("افتح كروم")
+        parser_ready = True
+    except Exception as exc:
+        logger.warning("Parser prewarm failed (will initialize on first command): %s", exc)
+
+    if parser_ready:
+        try:
+            from nlp.intent_classifier import classify_intent
+
+            classify_intent("open youtube")
+            classify_intent("افتح يوتيوب")
+            keyword_nlu_ready = True
+        except Exception as exc:
+            logger.warning("Keyword NLU prewarm skipped/unavailable: %s", exc)
+
+    success = bool(parser_ready)
+    metrics.record_stage("parser_nlp_prewarm", time.perf_counter() - started, success=success)
+    if parser_ready and keyword_nlu_ready:
+        logger.info("Parser + keyword NLU prewarmed successfully.")
+    elif parser_ready:
+        logger.info("Parser prewarmed successfully (keyword NLU unavailable).")
+
+
+def _run_startup_prewarm_blocking():
+    _ensure_ollama_running()
+
+    tasks = [
+        ("wake_word", _preload_wake_word_runtime),
+        ("stt", _preload_stt_model),
+        ("llm", _prewarm_llm),
+    ]
+    if STARTUP_PARSER_NLP_PREWARM_ENABLED:
+        tasks.append(("parser_nlp", _prewarm_parser_nlp))
+    if TTS_PREWARM_ENABLED:
+        tasks.append(("tts", _prewarm_tts))
+
+    if not tasks:
+        return
+
+    logger.info("Startup prewarm started; waiting before wake-word listening begins.")
+    started = time.perf_counter()
+
+    with ThreadPoolExecutor(
+        max_workers=max(1, len(tasks)),
+        thread_name_prefix="jarvis-startup-prewarm",
+    ) as prewarm_executor:
+        futures = {
+            prewarm_executor.submit(task_fn): task_name
+            for task_name, task_fn in tasks
+        }
+        for future in as_completed(futures):
+            task_name = futures[future]
+            try:
+                future.result()
+            except Exception as exc:
+                logger.warning("Startup prewarm task '%s' crashed: %s", task_name, exc)
+
+    logger.info(
+        "Startup prewarm finished in %.2fs; entering wake-word loop.",
+        time.perf_counter() - started,
+    )
+
+
 def run():
     shutdown_event = setup_shutdown()
     _cleanup_stale_temp_files()
     initialize_command_services()
     stt_runtime.set_runtime_stt_settings(language_hint="auto")
+
+    # Block startup until warm-up completes so wake-word listening begins on a fully loaded runtime.
+    _run_startup_prewarm_blocking()
+
     if DOCTOR_STARTUP_ENABLED:
         _run_doctor_diagnostics("startup")
 
@@ -425,6 +733,7 @@ def run():
                     audio_file,
                     pipeline_started,
                     wake_source,
+                    capture,
                 )
             )
     finally:

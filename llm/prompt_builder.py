@@ -119,6 +119,46 @@ def build_prompt(user_text):
     return build_prompt_package(user_text)["prompt"]
 
 
+def build_lightweight_prompt(user_text, response_language="en"):
+    """Minimal prompt for short/simple queries — skips KB retrieval and session memory.
+
+    Reduces prompt size and eliminates KB embedding latency for quick factual or
+    conversational questions that don't need long-term context.
+    """
+    query = (user_text or "").strip()
+    response_language = _normalize_response_language(response_language)
+    response_language_label = "Arabic" if response_language == "ar" else "English"
+    persona_prompt = persona_manager.get_system_prompt()
+
+    sections = [
+        "SYSTEM:",
+        persona_prompt,
+        "",
+        "You are Jarvis, a helpful, concise voice assistant.",
+        "Answer directly and briefly — one to three sentences maximum.",
+        "Do not use generic refusal language unless the request is harmful or illegal.",
+        "",
+        f"Reply in {response_language_label} only.",
+        (
+            "When replying in Arabic, use natural Egyptian Arabic (Masri) phrasing "
+            "instead of formal Modern Standard Arabic."
+        ),
+        "",
+        "USER:",
+        query,
+        "",
+        "ASSISTANT:",
+    ]
+
+    return {
+        "prompt": "\n".join(sections),
+        "kb_sources": [],
+        "kb_results": [],
+        "kb_context_used": False,
+        "memory_used": False,
+    }
+
+
 def build_intent_extraction_prompt(user_text, language="en"):
     query = (user_text or "").strip()
     lang = (language or "en").strip().lower() or "en"

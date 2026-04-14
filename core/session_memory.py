@@ -886,6 +886,47 @@ class SessionMemory:
         with self._lock:
             return list(self._turns[-max(1, int(limit)) :])
 
+    def has_recent_context(self, language=None, intents=None):
+        """Fast boolean probe used by latency-sensitive routing paths."""
+        if not self.is_enabled():
+            return False
+
+        target_language = str(language or "").strip().lower()
+        if target_language not in _SUPPORTED_LANGUAGES:
+            target_language = ""
+
+        allowed_intents = None
+        if intents is not None:
+            allowed_intents = {
+                _normalize_intent_tag(item)
+                for item in list(intents or [])
+                if _normalize_intent_tag(item)
+            }
+            if not allowed_intents:
+                allowed_intents = None
+
+        rows = self.recent()
+        if not rows:
+            return False
+
+        for row in reversed(rows):
+            assistant_text = _sanitize_assistant_text(row.get("assistant"))
+            if _is_low_value_assistant_text(assistant_text):
+                continue
+
+            row_intent = _normalize_intent_tag(row.get("intent"))
+            if allowed_intents is not None and row_intent not in allowed_intents:
+                continue
+
+            if target_language:
+                row_language = str(row.get("language") or "").strip().lower()
+                if row_language != target_language:
+                    continue
+
+            return True
+
+        return False
+
     def build_context(self, max_chars=MEMORY_MAX_CONTEXT_CHARS, language=None, intents=None):
         if not self.is_enabled():
             return ""

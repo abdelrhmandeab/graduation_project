@@ -8,21 +8,18 @@ python-dotenv==1.2.2
 numpy==2.4.2
 sounddevice==0.5.5
 
-# Speech-to-text
+# Speech-to-text (cloud-first)
+# Local fallback backend
 faster-whisper==1.2.1
-# Optional Egyptian dialect backend (only needed when using STT backend egyptalk_transformers)
-# transformers>=5.5.0
-# torch>=2.10.0
 
 # Wake word detection
 openwakeword==0.6.0
 
 # Text-to-speech
-pyttsx3==2.99
-# Optional neural TTS (edge); runtime falls back to pyttsx3 when missing
-# edge-tts>=6.1.12
-# Optional edge stream decoder for older edge-tts versions that emit MP3 chunks
-# soundfile>=0.12.1
+# Neural TTS (edge-tts is the active TTS engine)
+edge-tts>=6.1.12
+# Edge stream decoder for older edge-tts versions that emit MP3 chunks
+soundfile>=0.12.1
 
 # System monitoring
 psutil==7.2.2

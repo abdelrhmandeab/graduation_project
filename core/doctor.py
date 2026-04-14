@@ -8,22 +8,31 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from core.config import (
+    ELEVENLABS_API_KEY,
+    STT_BACKEND,
+    TTS_DEFAULT_BACKEND,
+    TTS_ELEVENLABS_ARABIC_ENABLED,
+)
+
 
 REQUIRED_MODULES = (
     "numpy",
     "sounddevice",
     "openwakeword",
-    "faster_whisper",
-    "pyttsx3",
 )
 
 OPTIONAL_MODULES = (
     "edge_tts",
+    "faster_whisper",
 )
 
 
 def _check_module(name):
-    ok = importlib.util.find_spec(name) is not None
+    try:
+        ok = importlib.util.find_spec(name) is not None
+    except (ImportError, ModuleNotFoundError):
+        ok = False
     return ok, "installed" if ok else "missing"
 
 
@@ -56,6 +65,25 @@ def collect_diagnostics(*, include_model_load_checks=False):
                 "required": False,
             }
         )
+
+    elevenlabs_key_configured = bool(str(ELEVENLABS_API_KEY or "").strip())
+    elevenlabs_required = bool(
+        str(STT_BACKEND or "").strip().lower() == "hybrid_elevenlabs"
+        or (
+            str(TTS_DEFAULT_BACKEND or "").strip().lower() == "hybrid"
+            and bool(TTS_ELEVENLABS_ARABIC_ENABLED)
+        )
+    )
+    checks.append(
+        {
+            "name": "elevenlabs_api_key",
+            "ok": bool(elevenlabs_key_configured or not elevenlabs_required),
+            "details": (
+                f"configured={elevenlabs_key_configured} required={elevenlabs_required}"
+            ),
+            "required": bool(elevenlabs_required),
+        }
+    )
 
     try:
         import sounddevice as sd
@@ -106,9 +134,9 @@ def collect_diagnostics(*, include_model_load_checks=False):
         from audio import stt as stt_runtime
 
         backend = stt_runtime.get_runtime_stt_backend()
-        if include_model_load_checks and backend == "faster_whisper":
-            _ = stt_runtime._get_whisper_model()
-            details = f"backend={backend} model_load=ok"
+        if include_model_load_checks:
+            preload_snapshot = stt_runtime.preload_runtime_models()
+            details = f"backend={backend} preload={preload_snapshot}"
         else:
             details = f"backend={backend} model_load_skipped={not include_model_load_checks}"
         checks.append(
@@ -179,7 +207,7 @@ def format_diagnostics_report(payload):
         state = "OK" if row.get("ok") else "FAIL"
         lines.append(f"[{state}] {row.get('name')}: {row.get('details')}")
     lines.append("")
-    lines.append("If all checks are OK, run: python core\\orchestrator.py")
+    lines.append("If all checks are OK, run: python main.py")
     return "\n".join(lines)
 
 

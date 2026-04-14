@@ -262,20 +262,19 @@ def _normalize_profile_name(value):
 def _normalize_stt_backend_name(value):
     raw = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
     aliases = {
+        "hybrid": "hybrid_elevenlabs",
+        "hybrid_elevenlabs": "hybrid_elevenlabs",
+        "elevenlabs": "hybrid_elevenlabs",
+        "eleven": "hybrid_elevenlabs",
+        "arabic_hybrid": "hybrid_elevenlabs",
         "fw": "faster_whisper",
         "faster": "faster_whisper",
+        "local": "faster_whisper",
         "whisper": "faster_whisper",
-        "nemo": "egyptalk_transformers",
-        "nemo_egyptalk": "egyptalk_transformers",
-        "egyptalk": "egyptalk_transformers",
-        "egypt_talk": "egyptalk_transformers",
-        "egyptalk_transformer": "egyptalk_transformers",
-        "egypt_talk_transformers": "egyptalk_transformers",
-        "egyptian": "egyptalk_transformers",
-        "masri": "egyptalk_transformers",
+        "faster_whisper": "faster_whisper",
     }
     normalized = aliases.get(raw, raw)
-    if normalized not in {"faster_whisper", "egyptalk_transformers"}:
+    if normalized not in {"hybrid_elevenlabs", "faster_whisper"}:
         return ""
     return normalized
 
@@ -444,31 +443,11 @@ def initialize_runtime_profiles(force=False):
     summary = []
     restored_ok = True
 
-    persisted_stt = _normalize_profile_name(session_memory.get_stt_profile())
-    if persisted_stt:
-        ok, message, _snapshot = _apply_stt_profile(persisted_stt, persist=False)
-        if ok:
-            logger.info("Restored persisted STT profile: %s", persisted_stt)
-            summary.append(f"restored_stt:{persisted_stt}")
-        else:
-            logger.warning("Failed to restore persisted STT profile '%s': %s", persisted_stt, message)
-            session_memory.set_stt_profile("")
-            summary.append("failed_stt_restore")
-            fallback_ok, _fallback_message, _fallback_snapshot = _apply_stt_profile("auto", persist=False)
-            if fallback_ok:
-                summary.append("fallback_stt_profile:auto")
-            else:
-                summary.append("fallback_stt_profile_failed")
-                restored_ok = False
+    if session_memory.get_stt_profile():
+        session_memory.set_stt_profile("")
+        summary.append("legacy_stt_profile_cleared")
     else:
-        ok, _message, _snapshot = _apply_stt_profile("auto", persist=False)
-        if ok:
-            summary.append("default_stt_profile:auto")
-        else:
-            summary.append("default_stt_profile_failed")
-            restored_ok = False
-
-    summary.append("legacy_speech_profiles_removed")
+        summary.append("legacy_stt_profile_not_set")
 
     persisted_audio_ux = _normalize_audio_ux_profile(session_memory.get_audio_ux_profile())
     if persisted_audio_ux:
@@ -522,21 +501,24 @@ def _format_stt_profile_status():
 def _format_stt_backend_status():
     backend_info = stt_runtime.get_runtime_stt_backend_info()
     backend = backend_info.get("backend") or stt_runtime.get_runtime_stt_backend()
-    stt_settings = stt_runtime.get_runtime_stt_settings()
 
     lines = [
         "STT Backend Status",
         f"stt_backend: {backend}",
-        f"stt_language_hint: {stt_settings.get('language_hint')}",
-        f"stt_egyptalk_enabled: {backend_info.get('egyptalk_enabled')}",
-        f"stt_egyptalk_model: {backend_info.get('egyptalk_model')}",
+        f"stt_language_detector_model: {backend_info.get('language_detector_model') or 'not_set'}",
+        f"stt_elevenlabs_enabled: {backend_info.get('elevenlabs_enabled')}",
+        f"stt_elevenlabs_key_configured: {backend_info.get('elevenlabs_key_configured')}",
+        f"stt_elevenlabs_model: {backend_info.get('elevenlabs_stt_model') or 'not_set'}",
+        f"stt_local_model: {backend_info.get('whisper_model')}",
     ]
 
     return "\n".join(lines), {
         "stt_backend": backend,
-        "stt_language_hint": stt_settings.get("language_hint"),
-        "stt_egyptalk_enabled": backend_info.get("egyptalk_enabled"),
-        "stt_egyptalk_model": backend_info.get("egyptalk_model"),
+        "stt_language_detector_model": backend_info.get("language_detector_model") or "",
+        "stt_elevenlabs_enabled": bool(backend_info.get("elevenlabs_enabled")),
+        "stt_elevenlabs_key_configured": bool(backend_info.get("elevenlabs_key_configured")),
+        "stt_elevenlabs_model": backend_info.get("elevenlabs_stt_model") or "",
+        "stt_local_model": backend_info.get("whisper_model"),
     }
 
 
@@ -679,8 +661,8 @@ def handle(parsed):
     if action == "status":
         speaking = speech_engine.is_speaking()
         enabled = speech_engine.is_enabled()
-        stt_profile = _stt_runtime_snapshot()
         audio_ux = _audio_ux_runtime_snapshot()
+        stt_backend_info = stt_runtime.get_runtime_stt_backend_info()
         lines = [
             "Voice Status",
             f"speech_enabled: {enabled}",
@@ -690,11 +672,13 @@ def handle(parsed):
             f"tts_backend: {speech_engine.get_backend()}",
             f"voice_quality_mode: {speech_engine.get_quality_mode()}",
             f"audio_ux_profile: {audio_ux['profile']}",
-            f"stt_backend: {stt_runtime.get_runtime_stt_backend()}",
-            f"stt_profile: {stt_profile['profile']}",
-            f"stt_profile_persisted: {stt_profile['persisted_profile']}",
-            f"stt_beam_size: {stt_profile['stt']['beam_size']}",
-            f"mic_energy_threshold: {stt_profile['mic']['energy_threshold']:.4f}",
+            f"stt_backend: {stt_backend_info.get('backend') or stt_runtime.get_runtime_stt_backend()}",
+            f"stt_language_detector_model: {stt_backend_info.get('language_detector_model') or 'not_set'}",
+            f"stt_elevenlabs_enabled: {stt_backend_info.get('elevenlabs_enabled')}",
+            f"stt_elevenlabs_key_configured: {stt_backend_info.get('elevenlabs_key_configured')}",
+            f"stt_elevenlabs_model: {stt_backend_info.get('elevenlabs_stt_model') or 'not_set'}",
+            f"stt_local_model: {stt_backend_info.get('whisper_model')}",
+            f"mic_energy_threshold: {audio_ux['mic']['energy_threshold']:.4f}",
             f"wake_word_threshold: {float(audio_ux['wake_word']['threshold']):.2f}",
             f"wake_word_gain: {float(audio_ux['wake_word']['audio_gain']):.2f}",
             f"wake_mode: {audio_ux['wake_phrase']['mode']}",
@@ -877,37 +861,20 @@ def handle(parsed):
             {"voice_quality_mode": active_mode},
         )
 
-    if action == "stt_profile_status":
-        message, snapshot = _format_stt_profile_status()
-        return True, message, snapshot
+    if action in {"stt_backend_local", "stt_backend_hybrid", "stt_backend_set"}:
+        if action == "stt_backend_local":
+            requested_backend = "faster_whisper"
+        elif action == "stt_backend_hybrid":
+            requested_backend = "hybrid_elevenlabs"
+        else:
+            requested_backend = args.get("backend", "")
 
-    if action == "stt_profile_set":
-        profile_name = args.get("profile", "")
-        ok, message, snapshot = _apply_stt_profile(profile_name)
-        log_action(
-            "stt_profile_set",
-            "success" if ok else "failed",
-            details={"requested": profile_name, "active": snapshot.get("profile") if snapshot else None},
-            error=None if ok else message,
-        )
-        return ok, message, snapshot
-
-    if action == "stt_backend_status":
-        message, snapshot = _format_stt_backend_status()
-        return True, message, snapshot
-
-    if action == "stt_backend_set":
-        requested_backend = args.get("backend", "")
         backend = _normalize_stt_backend_name(requested_backend)
         if not backend:
-            return False, "Unsupported STT backend. Use: egyptalk_transformers or faster_whisper.", {}
-
-        backend_info = stt_runtime.get_runtime_stt_backend_info()
-        if backend == "egyptalk_transformers" and not bool(backend_info.get("egyptalk_enabled")):
             return (
                 False,
-                "Egyptian dialect backend is disabled. Set JARVIS_STT_EGYPTALK_ENABLED=true and restart Jarvis.",
-                backend_info,
+                "Unsupported STT backend. Use: hybrid_elevenlabs or faster_whisper.",
+                {},
             )
 
         active_backend = stt_runtime.set_runtime_stt_backend(backend)
@@ -918,7 +885,7 @@ def handle(parsed):
             details={"requested": requested_backend, "active": active_backend},
         )
 
-        return True, f"Requested STT backend: {active_backend}\n{message}", snapshot
+        return True, f"STT backend switched to: {active_backend}\n{message}", snapshot
 
     if action == "interrupt":
         if not speech_engine.is_speaking():

@@ -1,6 +1,7 @@
 import os
 import re
 import time
+from collections import OrderedDict
 
 from core.command_classifier import classify_with_nlu
 from core.command_parser import ParsedCommand, parse_command
@@ -23,6 +24,11 @@ from core.config import (
     FOLLOWUP_REFERENCE_MAX_AGE_SECONDS,
     FOLLOWUP_REFERENCE_MIN_CONFIDENCE,
     LLM_APPEND_SOURCE_CITATIONS,
+    LLM_LIGHTWEIGHT_NUM_CTX,
+    LLM_RESPONSE_CACHE_ENABLED,
+    LLM_RESPONSE_CACHE_MAX_QUERY_WORDS,
+    LLM_RESPONSE_CACHE_MAX_SIZE,
+    LLM_RESPONSE_CACHE_TTL_SECONDS,
     LLM_REALTIME_REWRITE_ENABLED,
     NLU_LLM_QUERY_EXTRACTION_ENABLED,
     NLU_PARSER_FASTPATH_CONFIDENCE_FLOOR,
@@ -52,8 +58,8 @@ from core.metrics import metrics
 from core.persona import persona_manager
 from core.response_templates import anti_repetition_prefixes, detect_language_hint, normalize_language, render_template
 from core.session_memory import session_memory
-from llm.ollama_client import ask_llm
-from llm.prompt_builder import build_prompt_package
+from llm.ollama_client import ask_llm, ask_llm_streaming
+from llm.prompt_builder import build_prompt_package, build_lightweight_prompt
 try:
     from nlp.intent_classifier import classify_intent as _classify_keyword_intent
 except Exception:
@@ -75,6 +81,13 @@ from os_control.system_ops import execute_system_command_result, request_system_
 
 
 _JOB_QUEUE_EXECUTOR_READY = False
+_LLM_RESPONSE_CACHE = OrderedDict()
+_LLM_RESPONSE_CACHE_STATS = {
+    "hits": 0,
+    "misses": 0,
+    "stores": 0,
+    "evictions": 0,
+}
 
 
 def _nlu_threshold_for_intent(intent: str):
@@ -164,6 +177,49 @@ _KEYWORD_NLP_SYSTEM_ACTION_INTENT_MAP = {
     "bluetooth_off": "bluetooth_off",
     "screenshot": "screenshot",
 }
+_KEYWORD_NLP_SCREENSHOT_EXPLICIT_MARKERS = {
+    "screenshot",
+    "screen shot",
+    "screen",
+    "سكرين",
+    "سكرينشوت",
+    "سكرين شوت",
+    "شاشه",
+    "شاشة",
+    "الشاشه",
+    "الشاشة",
+    "لقطه شاشه",
+    "لقطة شاشة",
+    "صوره شاشة",
+    "صورة شاشة",
+    "صوره للشاشه",
+    "صورة للشاشة",
+}
+_KEYWORD_NLP_INFORMATIONAL_QUERY_MARKERS = {
+    "weather",
+    "forecast",
+    "temperature",
+    "news",
+    "headline",
+    "price",
+    "prices",
+    "gold price",
+    "gold prices",
+    "سعر",
+    "اسعار",
+    "أسعار",
+    "ذهب",
+    "دهب",
+    "النهارده",
+    "النهاردة",
+    "today",
+    "في مصر",
+    "in egypt",
+    "اخبار",
+    "أخبار",
+    "الجو",
+    "طقس",
+}
 
 
 def _extract_keyword_nlp_search_query(source_text):
@@ -177,6 +233,35 @@ def _extract_keyword_nlp_search_query(source_text):
     return value
 
 
+def _has_keyword_nlp_screenshot_marker(source_text, matched_keywords):
+    normalized_text = " ".join(str(source_text or "").lower().split()).strip()
+    if not normalized_text:
+        return False
+
+    if any(marker in normalized_text for marker in _KEYWORD_NLP_SCREENSHOT_EXPLICIT_MARKERS):
+        return True
+
+    for keyword in matched_keywords:
+        normalized_keyword = " ".join(str(keyword or "").lower().split()).strip()
+        if not normalized_keyword:
+            continue
+        if any(marker in normalized_keyword for marker in _KEYWORD_NLP_SCREENSHOT_EXPLICIT_MARKERS):
+            return True
+    return False
+
+
+def _looks_keyword_nlp_informational_query(source_text):
+    normalized_text = " ".join(str(source_text or "").lower().split()).strip()
+    if not normalized_text:
+        return False
+
+    if any(marker in normalized_text for marker in _WEATHER_QUERY_MARKERS):
+        return True
+    if any(marker in normalized_text for marker in _NEWS_QUERY_MARKERS):
+        return True
+    return any(marker in normalized_text for marker in _KEYWORD_NLP_INFORMATIONAL_QUERY_MARKERS)
+
+
 def _map_keyword_nlp_intent_to_command(source_text, nlp_result):
     intent_name = str((nlp_result or {}).get("intent") or "").strip().lower()
     if intent_name in {"", "unknown"}:
@@ -187,6 +272,11 @@ def _map_keyword_nlp_intent_to_command(source_text, nlp_result):
     except (TypeError, ValueError):
         confidence = 0.0
     if confidence < _KEYWORD_NLP_MIN_CONFIDENCE:
+        return None
+
+    matched_keywords = list((nlp_result or {}).get("matched_keywords") or [])
+
+    if intent_name == "screenshot" and not _has_keyword_nlp_screenshot_marker(source_text, matched_keywords):
         return None
 
     normalized = " ".join(str(source_text or "").lower().split()).strip()
@@ -210,6 +300,8 @@ def _map_keyword_nlp_intent_to_command(source_text, nlp_result):
 
     action_key = _KEYWORD_NLP_SYSTEM_ACTION_INTENT_MAP.get(intent_name)
     if action_key:
+        if _looks_keyword_nlp_informational_query(source_text):
+            return None
         return ParsedCommand(
             intent="OS_SYSTEM_COMMAND",
             raw=source_text,
@@ -817,6 +909,73 @@ def _normalize_compact(text):
     return " ".join(str(text or "").lower().split()).strip()
 
 
+def _llm_cache_key(prompt: str, language: str):
+    return (_normalize_compact(language or "en"), _normalize_compact(prompt or ""))
+
+
+def _cache_get_llm_response(prompt: str, language: str):
+    if not LLM_RESPONSE_CACHE_ENABLED:
+        return None
+
+    now = time.time()
+    key = _llm_cache_key(prompt, language)
+    entry = _LLM_RESPONSE_CACHE.get(key)
+    if not entry:
+        _LLM_RESPONSE_CACHE_STATS["misses"] += 1
+        return None
+
+    cached_at = float(entry.get("cached_at") or 0.0)
+    if cached_at <= 0 or (now - cached_at) > max(1, int(LLM_RESPONSE_CACHE_TTL_SECONDS or 600)):
+        _LLM_RESPONSE_CACHE.pop(key, None)
+        _LLM_RESPONSE_CACHE_STATS["misses"] += 1
+        _LLM_RESPONSE_CACHE_STATS["evictions"] += 1
+        return None
+
+    _LLM_RESPONSE_CACHE.move_to_end(key)
+    _LLM_RESPONSE_CACHE_STATS["hits"] += 1
+    return str(entry.get("value") or "").strip()
+
+
+def _cache_put_llm_response(prompt: str, language: str, response: str):
+    if not LLM_RESPONSE_CACHE_ENABLED:
+        return
+
+    value = str(response or "").strip()
+    if not value:
+        return
+
+    key = _llm_cache_key(prompt, language)
+    _LLM_RESPONSE_CACHE[key] = {
+        "cached_at": time.time(),
+        "value": value,
+    }
+    _LLM_RESPONSE_CACHE.move_to_end(key)
+    _LLM_RESPONSE_CACHE_STATS["stores"] += 1
+
+    max_size = max(16, int(LLM_RESPONSE_CACHE_MAX_SIZE or 256))
+    while len(_LLM_RESPONSE_CACHE) > max_size:
+        _LLM_RESPONSE_CACHE.popitem(last=False)
+        _LLM_RESPONSE_CACHE_STATS["evictions"] += 1
+
+
+def clear_llm_response_cache():
+    _LLM_RESPONSE_CACHE.clear()
+    _LLM_RESPONSE_CACHE_STATS.update({"hits": 0, "misses": 0, "stores": 0, "evictions": 0})
+
+
+def get_llm_response_cache_stats():
+    return {
+        "enabled": bool(LLM_RESPONSE_CACHE_ENABLED),
+        "size": len(_LLM_RESPONSE_CACHE),
+        "hits": int(_LLM_RESPONSE_CACHE_STATS["hits"]),
+        "misses": int(_LLM_RESPONSE_CACHE_STATS["misses"]),
+        "stores": int(_LLM_RESPONSE_CACHE_STATS["stores"]),
+        "evictions": int(_LLM_RESPONSE_CACHE_STATS["evictions"]),
+        "ttl_seconds": int(LLM_RESPONSE_CACHE_TTL_SECONDS or 600),
+        "max_size": int(LLM_RESPONSE_CACHE_MAX_SIZE or 256),
+    }
+
+
 def _normalize_quality_text(text):
     raw = str(text or "").strip().lower()
     if not raw:
@@ -864,6 +1023,9 @@ _LOW_VALUE_LLM_REPLY_MARKERS = {
     "مش اقدر اديك معلومات الطقس دلوقتي",
     "اتأكد من خدمة الطقس",
     "شوف خدمة طقس",
+    "سابحث عن احدث تحديثات الرصد الجوي",
+    "يمكنك متابعة المحادثة",
+    "بمجرد وجودها",
     "اسف",
     "آسف",
 }
@@ -988,10 +1150,10 @@ def _fallback_assist_first_response(original_text, language):
     if _looks_weather_or_clothing_query(original_text):
         if target_language == "ar":
             return (
-                "لا املك بيانات طقس لحظية الان. "
-                "قاعدة سريعة: في الحر اختار ملابس خفيفة مع ماء، "
-                "في الجو المعتدل استخدم طبقات خفيفة مع جاكيت خفيف، "
-                "وفي البرد او الرياح ارتد معطف دافئ وحذاء مغلق."
+                "مش معايا بيانات طقس لحظية دلوقتي. "
+                "قاعدة سريعة: في الحر البس لبس خفيف واشرب مية، "
+                "في الجو المعتدل البس طبقات خفيفة مع جاكيت خفيف، "
+                "وفي البرد او الرياح البس معطف دافي وحذاء مقفول."
             )
         return (
             "I do not have live weather data right now. "
@@ -1003,9 +1165,9 @@ def _fallback_assist_first_response(original_text, language):
     if _looks_news_query(original_text):
         if target_language == "ar":
             return (
-                "لا املك بث اخبار لحظي داخل هذه الجلسة. "
-                "لكن اقدر اساعدك فورا: ارسل الموضوع والمنطقة والفترة الزمنية، "
-                "وساعطيك ملخصا واضحا مع نقاط تحقق سريعة للمصادر."
+                "مش معايا بث اخبار لحظي جوه الجلسة دي. "
+                "بس اقدر اساعدك فوراً: ابعت الموضوع والمنطقة والفترة الزمنية، "
+                "وهديك ملخص واضح مع نقاط تحقق سريعة للمصادر."
             )
         return (
             "I do not have live news feed access in this session. "
@@ -1017,7 +1179,7 @@ def _fallback_assist_first_response(original_text, language):
         return (
             "اقدر اساعدك بشكل مباشر. "
             "اكتب هدفك في سطر واحد مع اي قيود مهمة، "
-            "وساعطيك خطوات عملية قصيرة وواضحة."
+            "وهديك خطوات عملية قصيرة وواضحة."
         )
     return (
         "I can help directly. "
@@ -1199,7 +1361,28 @@ def _record_response_quality(response_text, language, user_text):
     )
 
 
-def _repair_low_value_llm_response(response_text, parsed, language, original_text):
+def _apply_egyptian_dialect_style(response_text, parsed, language):
+    text = str(response_text or "").strip()
+    if not text:
+        return text
+    if normalize_language(language) != "ar":
+        return text
+    if not parsed or str(parsed.intent or "").strip().upper() != "LLM_QUERY":
+        return text
+
+    try:
+        from audio.tts import _rewrite_to_egyptian_colloquial
+
+        rewritten = str(_rewrite_to_egyptian_colloquial(text) or "").strip()
+        if rewritten:
+            return rewritten
+    except Exception:
+        pass
+
+    return text
+
+
+def _repair_low_value_llm_response(response_text, parsed, language, original_text, *, allow_llm_rewrite=True):
     text = str(response_text or "").strip()
     if not text:
         return text
@@ -1237,14 +1420,15 @@ def _repair_low_value_llm_response(response_text, parsed, language, original_tex
             f"Weak draft:\n{text}"
         )
 
-    improved = (ask_llm(rewrite_prompt) or "").strip()
-    if improved and not _looks_low_value_llm_reply(improved):
-        log_structured(
-            "route_llm_quality_repair",
-            language=target_language,
-            response_preview=_truncate_text(improved),
-        )
-        return improved
+    if allow_llm_rewrite:
+        improved = (ask_llm(rewrite_prompt) or "").strip()
+        if improved and not _looks_low_value_llm_reply(improved):
+            log_structured(
+                "route_llm_quality_repair",
+                language=target_language,
+                response_preview=_truncate_text(improved),
+            )
+            return improved
 
     # Hard assist-first rule: for normal safe user requests, never leave a generic
     # dead-end refusal as the final answer.
@@ -1301,10 +1485,17 @@ def _enforce_llm_response_language(response_text, parsed, language, original_tex
 
 def _finalize_success_response(response_text, parsed, language, original_text, tone_meta, *, realtime=False):
     text = str(response_text or "").strip()
-    apply_rewrites = bool(LLM_REALTIME_REWRITE_ENABLED) or not bool(realtime)
-    if apply_rewrites:
-        text = _repair_low_value_llm_response(text, parsed, language, original_text)
+    allow_llm_rewrite = bool(LLM_REALTIME_REWRITE_ENABLED) or not bool(realtime)
+    text = _repair_low_value_llm_response(
+        text,
+        parsed,
+        language,
+        original_text,
+        allow_llm_rewrite=allow_llm_rewrite,
+    )
+    if allow_llm_rewrite:
         text = _enforce_llm_response_language(text, parsed, language, original_text)
+    text = _apply_egyptian_dialect_style(text, parsed, language)
     text = _apply_persona_length_target(text, parsed)
     text = _apply_output_mode(text, parsed, language)
     text = _apply_tone_adaptation(text, language, tone_meta, parsed=parsed)
@@ -2021,7 +2212,7 @@ def _execute_job_command(command_text):
     return success, message
 
 
-def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True):
+def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True, on_sentence=None):
     logger.info("Command parsed: %s (%s)", parsed.intent, parsed.action or "no-action")
     language = session_memory.get_preferred_language()
 
@@ -2163,11 +2354,81 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True)
     if not allow_llm:
         return False, "LLM fallback is disabled for this execution path.", {}
 
-    # LLM fallback
-    package = build_prompt_package(parsed.raw, response_language=language)
-    response = (ask_llm(package["prompt"]) or "").strip()
-    if LLM_APPEND_SOURCE_CITATIONS and package["kb_sources"]:
-        response += _format_source_citations(package["kb_sources"])
+    # LLM fallback — use lightweight prompt for short, simple queries
+    query_words = len((parsed.raw or "").split())
+    has_memory_context = False
+    has_recent_context_fn = getattr(type(session_memory), "has_recent_context", None)
+    if callable(has_recent_context_fn):
+        has_memory_context = bool(session_memory.has_recent_context(language=language, intents={"LLM_QUERY"}))
+    else:
+        has_memory_context = bool(
+            session_memory.build_context(max_chars=1, language=language, intents={"LLM_QUERY"})
+        )
+    use_lightweight = query_words <= 8 and not has_memory_context
+    if use_lightweight:
+        package = build_lightweight_prompt(parsed.raw, response_language=language)
+    else:
+        package = build_prompt_package(parsed.raw, response_language=language)
+
+    cache_eligible = (
+        bool(LLM_RESPONSE_CACHE_ENABLED)
+        and bool(use_lightweight)
+        and int(query_words) <= max(1, int(LLM_RESPONSE_CACHE_MAX_QUERY_WORDS or 8))
+        and not bool(package.get("kb_context_used"))
+        and not bool(package.get("memory_used"))
+    )
+
+    cache_hit = False
+    response = ""
+    stream_callback = on_sentence
+    if stream_callback and parsed.intent == "LLM_QUERY":
+        stream_quality_repaired = False
+
+        def _stream_callback(sentence):
+            nonlocal stream_quality_repaired
+            shaped = _apply_egyptian_dialect_style(sentence, parsed, language)
+            if (
+                not stream_quality_repaired
+                and _looks_low_value_llm_reply(shaped)
+                and _is_assist_first_safe_request(parsed.raw)
+            ):
+                fallback = _fallback_assist_first_response(parsed.raw, language)
+                fallback = _apply_egyptian_dialect_style(fallback, parsed, language)
+                if fallback:
+                    shaped = fallback
+                    stream_quality_repaired = True
+            elif stream_quality_repaired and _looks_low_value_llm_reply(shaped):
+                return
+
+            stream_callback(shaped)
+
+    else:
+        _stream_callback = stream_callback
+
+    if cache_eligible:
+        response = str(_cache_get_llm_response(package["prompt"], language) or "").strip()
+        cache_hit = bool(response)
+        if cache_hit and _stream_callback:
+            try:
+                _stream_callback(response)
+            except Exception:
+                pass
+
+    llm_num_ctx = int(LLM_LIGHTWEIGHT_NUM_CTX) if use_lightweight else None
+    if not cache_hit:
+        response = (
+            ask_llm_streaming(
+                package["prompt"],
+                on_sentence=_stream_callback,
+                num_ctx=llm_num_ctx,
+            )
+            or ""
+        ).strip()
+        if LLM_APPEND_SOURCE_CITATIONS and package["kb_sources"]:
+            response += _format_source_citations(package["kb_sources"])
+        if cache_eligible and response:
+            _cache_put_llm_response(package["prompt"], language, response)
+
     return (
         True,
         response,
@@ -2176,6 +2437,9 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True)
             "kb_augmented": package["kb_context_used"],
             "kb_sources": len(package["kb_sources"]),
             "memory_used": package["memory_used"],
+            "llm_lightweight": use_lightweight,
+            "llm_cache_eligible": cache_eligible,
+            "llm_cache_hit": cache_hit,
         },
     )
 
@@ -2277,15 +2541,24 @@ def _execute_followup_multi_actions(actions):
     return any_success, joined
 
 
-def route_command(text, detected_language=None, realtime=False):
+def route_command(
+    text,
+    detected_language=None,
+    realtime=False,
+    on_sentence=None,
+    precomputed_language_result=None,
+    precomputed_parser_candidate=None,
+):
     original_text = text or ""
     start = time.perf_counter()
     forced_language = _normalize_supported_language_tag(detected_language)
 
-    language_result = detect_supported_language(
-        original_text,
-        previous_language=forced_language or session_memory.get_preferred_language(),
-    )
+    language_result = precomputed_language_result
+    if language_result is None:
+        language_result = detect_supported_language(
+            original_text,
+            previous_language=forced_language or session_memory.get_preferred_language(),
+        )
     if forced_language:
         language_result = language_result.__class__(
             supported=True,
@@ -2570,7 +2843,7 @@ def route_command(text, detected_language=None, realtime=False):
         return str(followup_meta.get("followup_message") or "")
 
     parsed = forced_parsed
-    parser_candidate = forced_parsed or parse_command(effective_text)
+    parser_candidate = forced_parsed or precomputed_parser_candidate or parse_command(effective_text)
     parser_candidate.raw = original_text
     parser_fastpath_assessment = None
     nlu_meta = {
@@ -2806,7 +3079,7 @@ def route_command(text, detected_language=None, realtime=False):
         meta["entity_scores"] = dict(assessment.entity_scores)
 
     try:
-        success, response, dispatch_meta = _dispatch(parsed)
+        success, response, dispatch_meta = _dispatch(parsed, on_sentence=on_sentence)
         if dispatch_meta:
             meta.update(dispatch_meta)
             if dispatch_meta.get("clarification_payload"):
@@ -2820,7 +3093,7 @@ def route_command(text, detected_language=None, realtime=False):
                         action=preferred_option.get("action", ""),
                         args=dict(preferred_option.get("args") or {}),
                     )
-                    success, response, preferred_meta = _dispatch(preferred_parsed)
+                    success, response, preferred_meta = _dispatch(preferred_parsed, on_sentence=on_sentence)
                     parsed = preferred_parsed
                     meta["clarification_resolved"] = True
                     meta["clarification_preference_used"] = True

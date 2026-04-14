@@ -202,6 +202,37 @@ def _resource_snapshot():
     }
 
 
+def _llm_cache_snapshot():
+    payload = {}
+    available = False
+    try:
+        from core.command_router import get_llm_response_cache_stats
+
+        payload = dict(get_llm_response_cache_stats() or {})
+        available = True
+    except Exception:
+        payload = {}
+
+    hits = max(0, int(payload.get("hits") or 0))
+    misses = max(0, int(payload.get("misses") or 0))
+    lookups = hits + misses
+    hit_rate = (hits / float(lookups)) if lookups else 0.0
+
+    return {
+        "available": bool(available),
+        "enabled": bool(payload.get("enabled", False)),
+        "size": max(0, int(payload.get("size") or 0)),
+        "hits": hits,
+        "misses": misses,
+        "lookups": lookups,
+        "hit_rate": hit_rate,
+        "stores": max(0, int(payload.get("stores") or 0)),
+        "evictions": max(0, int(payload.get("evictions") or 0)),
+        "ttl_seconds": max(0, int(payload.get("ttl_seconds") or 0)),
+        "max_size": max(0, int(payload.get("max_size") or 0)),
+    }
+
+
 class Metrics:
     def __init__(self):
         self.start_times = {}
@@ -484,6 +515,22 @@ class Metrics:
         diagnostics = {key: _bucket_summary(value) for key, value in diagnostic_data.items()}
         rollback = commands.get("OS_ROLLBACK", {"count": 0, "success_rate": 0.0})
         resources = _resource_snapshot()
+        llm_cache = _llm_cache_snapshot()
+
+        tts_prewarm_bucket = stage_data.get("tts_prewarm")
+        tts_prewarm_count = int((tts_prewarm_bucket or {}).get("count") or 0)
+        tts_prewarm_success_count = int((tts_prewarm_bucket or {}).get("success_count") or 0)
+        tts_prewarm_hit_rate = (
+            tts_prewarm_success_count / float(tts_prewarm_count)
+            if tts_prewarm_count
+            else 0.0
+        )
+        tts_prewarm_latency = _bucket_summary(tts_prewarm_bucket) if tts_prewarm_bucket else {
+            "count": 0,
+            "success_rate": 0.0,
+            "p50_ms": 0.0,
+            "p95_ms": 0.0,
+        }
 
         requested = int(clarification_counts.get("requested") or 0)
         resolved = int(clarification_counts.get("resolved") or 0)
@@ -579,6 +626,14 @@ class Metrics:
                 "top_ambiguous_tokens": top_ambiguous_tokens,
             },
             "response_quality": response_quality,
+            "llm_cache": llm_cache,
+            "tts_prewarm": {
+                "count": tts_prewarm_count,
+                "warm_hits": tts_prewarm_success_count,
+                "hit_rate": tts_prewarm_hit_rate,
+                "p50_ms": float(tts_prewarm_latency.get("p50_ms") or 0.0),
+                "p95_ms": float(tts_prewarm_latency.get("p95_ms") or 0.0),
+            },
             "resources": resources,
         }
 
@@ -763,6 +818,28 @@ class Metrics:
                         f"coherence={float(row.get('coherence') or 0.0):.2f}"
                     )
                 )
+
+        lines.append("")
+        cache = dict(snap.get("llm_cache") or {})
+        prewarm = dict(snap.get("tts_prewarm") or {})
+        lines.append("Latency Cache + Prewarm Metrics:")
+        lines.append(
+            (
+                f"- llm_cache: enabled={cache.get('enabled', False)}, available={cache.get('available', False)}, "
+                f"size={int(cache.get('size') or 0)}/{int(cache.get('max_size') or 0)}, "
+                f"lookups={int(cache.get('lookups') or 0)}, hits={int(cache.get('hits') or 0)}, "
+                f"misses={int(cache.get('misses') or 0)}, hit_rate={float(cache.get('hit_rate') or 0.0):.2%}"
+            )
+        )
+        lines.append(
+            (
+                f"- tts_prewarm: attempts={int(prewarm.get('count') or 0)}, "
+                f"warm_hits={int(prewarm.get('warm_hits') or 0)}, "
+                f"hit_rate={float(prewarm.get('hit_rate') or 0.0):.2%}, "
+                f"p50={float(prewarm.get('p50_ms') or 0.0):.1f}ms, "
+                f"p95={float(prewarm.get('p95_ms') or 0.0):.1f}ms"
+            )
+        )
 
         lines.append("")
         resources = snap["resources"]
