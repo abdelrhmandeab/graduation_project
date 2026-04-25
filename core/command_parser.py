@@ -596,6 +596,119 @@ _KEYWORD_TABLE = [
     ({"job worker start"}, "JOB_QUEUE_COMMAND", "worker_start"),
     ({"job worker stop"}, "JOB_QUEUE_COMMAND", "worker_stop"),
     ({"job worker status"}, "JOB_QUEUE_COMMAND", "worker_status"),
+    # Timer
+    (
+        {
+            "cancel timer",
+            "stop timer",
+            "cancel alarm",
+            "stop alarm",
+            "الغي التايمر",
+            "وقف التايمر",
+        },
+        "OS_TIMER",
+        "cancel",
+    ),
+    (
+        {
+            "list timers",
+            "show timers",
+            "active timers",
+            "list alarms",
+            "show alarms",
+            "active alarms",
+            "التايمرات",
+            "وريني التاي��رات",
+        },
+        "OS_TIMER",
+        "list",
+    ),
+    # Clipboard
+    (
+        {
+            "read clipboard",
+            "show clipboard",
+            "what's in my clipboard",
+            "whats in my clipboard",
+            "paste clipboard",
+            "اقرا الكليب بورد",
+            "وريني الكليب بورد",
+            "الل�� في الكليب بورد",
+        },
+        "OS_CLIPBOARD",
+        "read",
+    ),
+    (
+        {
+            "clear clipboard",
+            "empty clipboard",
+            "امسح الك��يب بورد",
+            "فضي ا��كليب بورد",
+        },
+        "OS_CLIPBOARD",
+        "clear",
+    ),
+    # Battery / System info
+    (
+        {
+            "battery status",
+            "battery level",
+            "how much battery",
+            "battery percentage",
+            "البطارية كام",
+            "نسبة البطارية",
+            "حالة البطارية",
+            "الشحن كام",
+        },
+        "OS_SYSINFO",
+        "battery",
+    ),
+    (
+        {
+            "system info",
+            "system status",
+            "cpu usage",
+            "ram usage",
+            "disk usage",
+            "معلومات النظام",
+            "حالة النظام",
+            "استهلاك المع��لج",
+            "الرام قد ايه",
+            "استهلاك الرام",
+        },
+        "OS_SYSINFO",
+        "system",
+    ),
+    # Email
+    (
+        {
+            "compose email",
+            "new email",
+            "draft email",
+            "open email",
+            "افتح ايميل جديد",
+            "ايميل جديد",
+        },
+        "OS_EMAIL",
+        "draft",
+    ),
+    # Settings (top-level — specific pages are handled by regex fallback below)
+    (
+        {
+            "open settings",
+            "open windows settings",
+            "settings",
+            "windows settings",
+            "افتح الاعدادات",
+            "افتح الإعدادات",
+            "الاعدادات",
+            "الإعدادات",
+            "ودّيني للاعدادات",
+            "روح على الاعدادات",
+        },
+        "OS_SETTINGS",
+        "open",
+    ),
     # Rollback
     (
         {
@@ -1113,6 +1226,161 @@ _REGEX_TABLE = [
         "OS_FILE_NAVIGATION",
         "rename_item",
         lambda m: {"source": m.group(1).strip(), "new_name": m.group(2).strip()},
+    ),
+    # Timer — "set timer 5 minutes", "timer 10 seconds", "حط تايمر 5 دقايق"
+    (
+        re.compile(
+            r"^(?:set\s+(?:a\s+)?timer|timer|set\s+(?:an?\s+)?alarm)\s+(?:for\s+)?(\S+)\s+(seconds?|secs?|minutes?|mins?|hours?|hrs?|ثانية|ثواني|دقيقة|دقائق|دقايق|ساعة|ساعات)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_TIMER",
+        "set",
+        lambda m: {"seconds": _duration_to_seconds(m.group(1), m.group(2)), "label": "Timer"},
+    ),
+    (
+        re.compile(
+            r"^(?:حط|ظبط|ظبّط|اعمل|اعمللي)\s+(?:تايمر|منبه|alarm|timer)\s+(\S+)\s+(ثانية|ثواني|دقيقة|دقائق|دقايق|ساعة|ساعات|seconds?|secs?|minutes?|mins?)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_TIMER",
+        "set",
+        lambda m: {"seconds": _duration_to_seconds(m.group(1), m.group(2)), "label": "Timer"},
+    ),
+    (
+        re.compile(
+            r"^(?:صحيني|فكرني|نبهني)\s+(?:بعد\s+)?(\S+)\s+(ثانية|ثواني|دقيقة|دقائق|دقايق|ساعة|ساعات)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_TIMER",
+        "set",
+        lambda m: {"seconds": _duration_to_seconds(m.group(1), m.group(2)), "label": "Reminder"},
+    ),
+    (
+        re.compile(
+            r"^(?:set\s+(?:an?\s+)?alarm|alarm)\s+(?:for\s+|at\s+)?((?:\d{1,2}(?::\d{2})?\s*(?:am|pm)?)|(?:\d{1,2}\s*(?:am|pm)))$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_TIMER",
+        "set_alarm",
+        lambda m: {"alarm_time": m.group(1).strip(), "label": "Alarm"},
+    ),
+    (
+        re.compile(
+            r"^(?:صحيني|نبهني|حط(?:لي)?\s+منبه|اعمل(?:لي)?\s+منبه)\s+(?:الساعة\s+|الساعه\s+)?(.+)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_TIMER",
+        "set_alarm",
+        lambda m: {"alarm_time": m.group(1).strip(), "label": "Alarm"},
+    ),
+    # Clipboard — "copy this: {text}", "انسخ: {text}"
+    (
+        re.compile(
+            r"^(?:copy(?:\s+this)?|انسخ|انسخلي)\s*[:：]\s*(.+)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_CLIPBOARD",
+        "write",
+        lambda m: {"text": m.group(1).strip()},
+    ),
+    # Battery / sysinfo — regex variants
+    (
+        re.compile(
+            r"^(?:how\s+much\s+battery(?:\s+(?:do\s+i\s+have|left|remaining))?|what(?:'s| is)\s+(?:my\s+)?battery)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_SYSINFO",
+        "battery",
+        lambda _m: {},
+    ),
+    # Email — "draft email to X about Y", "ابعت ايميل ل X عن Y"
+    (
+        re.compile(
+            r"^(?:draft|compose|send|write|new)\s+(?:an?\s+)?email\s+(?:to\s+)?(\S+@\S+)(?:\s+(?:about|subject|re)\s+(.+))?$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_EMAIL",
+        "draft",
+        lambda m: {"to": m.group(1).strip(), "subject": (m.group(2) or "").strip()},
+    ),
+    (
+        re.compile(
+            r"^(?:ابعت|اكتب|افتح)\s+(?:ايميل|إيميل)\s+(?:ل\s*)?(\S+@\S+)?(?:\s+(?:عن|بخصوص)\s+(.+))?$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_EMAIL",
+        "draft",
+        lambda m: {"to": (m.group(1) or "").strip(), "subject": (m.group(2) or "").strip()},
+    ),
+    # Calendar — "create event meeting at 3pm", "اعمل حدث اجتماع"
+    (
+        re.compile(
+            r"^(?:create|add|schedule|new)\s+(?:a\s+)?(?:calendar\s+)?event\s+(.+?)(?:\s+(?:at|on|for)\s+(.+?))?(?:\s+(?:for|duration)\s+(\d+)\s*(?:minutes?|mins?|hours?|hrs?))?$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_CALENDAR",
+        "create",
+        lambda m: {
+            "subject": m.group(1).strip(),
+            "start_time": (m.group(2) or "").strip(),
+            "duration_minutes": int(m.group(3)) if m.group(3) else 60,
+        },
+    ),
+    (
+        re.compile(
+            r"^(?:اعمل|اعمللي|ضيف|حط)\s+(?:حدث|ايفنت|موعد|اجتماع)\s+(.+?)(?:\s+(?:الساعة|في)\s+(.+?))?$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_CALENDAR",
+        "create",
+        lambda m: {
+            "subject": m.group(1).strip(),
+            "start_time": (m.group(2) or "").strip(),
+            "duration_minutes": 60,
+        },
+    ),
+    # Settings — specific page: "open display settings", "open wifi settings",
+    # "settings for sound", "افتح اعدادات الشاشة", "روح على اعدادات الواي فاي"
+    (
+        re.compile(
+            r"^(?:open|launch|show|go\s+to|take\s+me\s+to)\s+(?:the\s+)?(.+?)\s+settings$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_SETTINGS",
+        "open",
+        lambda m: {"page": m.group(1).strip()},
+    ),
+    (
+        re.compile(
+            r"^(?:open|launch|show)\s+(?:windows\s+)?settings\s+(?:for|to)\s+(.+)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_SETTINGS",
+        "open",
+        lambda m: {"page": m.group(1).strip()},
+    ),
+    (
+        re.compile(
+            r"^(?:افتح|افتحلي|روح\s+على|ودّيني\s+(?:على|ل))\s+(?:اعدادات|إعدادات|صفحة\s+اعدادات|صفحة\s+إعدادات)\s+(.+)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_SETTINGS",
+        "open",
+        lambda m: {"page": m.group(1).strip()},
     ),
     # Open app explicit
     (

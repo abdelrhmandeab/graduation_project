@@ -519,6 +519,47 @@ def get_file_metadata_result(path):
         )
 
 
+def search_windows_index(query, max_results=10):
+    """Search using Windows Search Index via ADODB (built into Windows).
+
+    Returns a list of file paths, or empty list on failure.
+    Falls back gracefully if win32com is not installed or index is unavailable.
+    """
+    if not query:
+        return []
+    try:
+        import win32com.client
+
+        conn = win32com.client.Dispatch("ADODB.Connection")
+        conn.Open(
+            "Provider=Search.CollatorDSO;"
+            "Extended Properties='Application=Windows';"
+        )
+        # Escape single quotes in query to prevent injection
+        safe_query = str(query).replace("'", "''")
+        sql = (
+            f"SELECT TOP {int(max_results)} System.ItemPathDisplay "
+            f"FROM SystemIndex "
+            f"WHERE System.FileName LIKE '%{safe_query}%'"
+        )
+        rs = conn.Execute(sql)[0]
+        results = []
+        while not rs.EOF:
+            path = rs.Fields("System.ItemPathDisplay").Value
+            if path:
+                results.append(path)
+            rs.MoveNext()
+        conn.Close()
+        logger.info("Windows Search Index returned %d results for '%s'", len(results), query)
+        return results
+    except ImportError:
+        logger.debug("pywin32 not installed — Windows Search Index unavailable")
+        return []
+    except Exception as exc:
+        logger.debug("Windows Search Index query failed: %s", exc)
+        return []
+
+
 def find_files(filename, search_path=None):
     if not policy_engine.is_command_allowed("file_search"):
         return []
@@ -532,6 +573,40 @@ def find_files(filename, search_path=None):
         return []
 
     try:
+        # Fast path: query Windows Search Index (if available) and filter results
+        # to the allowed root/policy scope. Falls back to directory walk below.
+        indexed_results = search_windows_index(filename, max_results=max(MAX_FILE_RESULTS * 4, 20))
+        if indexed_results:
+            root_abs = os.path.abspath(root)
+            filtered = []
+            for candidate in indexed_results:
+                try:
+                    candidate_abs = os.path.abspath(candidate)
+                except Exception:
+                    continue
+
+                if not _is_subpath(candidate_abs, root_abs):
+                    continue
+                path_ok, _ = _check_path_policy(candidate_abs, write=False)
+                if not path_ok:
+                    continue
+                filtered.append(candidate_abs)
+                if len(filtered) >= MAX_FILE_RESULTS:
+                    break
+
+            if filtered:
+                log_action(
+                    "find_files",
+                    "success",
+                    details={
+                        "query": filename,
+                        "root": root,
+                        "count": len(filtered),
+                        "method": "windows_index",
+                    },
+                )
+                return filtered
+
         needle = filename.lower()
         matches = []
         for current_root, _, files in os.walk(root):
@@ -546,10 +621,24 @@ def find_files(filename, search_path=None):
                         log_action(
                             "find_files",
                             "success",
-                            details={"query": filename, "root": root, "count": len(matches)},
+                            details={
+                                "query": filename,
+                                "root": root,
+                                "count": len(matches),
+                                "method": "directory_walk",
+                            },
                         )
                         return matches
-        log_action("find_files", "success", details={"query": filename, "root": root, "count": len(matches)})
+        log_action(
+            "find_files",
+            "success",
+            details={
+                "query": filename,
+                "root": root,
+                "count": len(matches),
+                "method": "directory_walk",
+            },
+        )
         return matches
     except Exception as exc:
         log_action("find_files", "failed", details={"query": filename, "root": root}, error=exc)

@@ -15,21 +15,53 @@ from core.metrics import metrics
 
 _OLLAMA_BASE_URL = str(LLM_OLLAMA_BASE_URL or "http://localhost:11434").rstrip("/")
 _GENERATE_ENDPOINT = f"{_OLLAMA_BASE_URL}/api/generate"
-_PINNED_MODEL = "qwen2.5:3b"
+
+# Resolved at startup by set_runtime_model(); falls back to config value.
+_runtime_model = None
+_runtime_num_ctx = None
+_runtime_lightweight_num_ctx = None
 
 # Sentence boundary characters for streaming sentence detection
 _SENTENCE_END_RE = re.compile(r"(?<=[.!?؟\n])\s+|(?<=[.!?؟])$")
 
 
+def set_runtime_model(model_name, num_ctx=None, lightweight_num_ctx=None):
+    """Called once at startup after hardware detection to lock in runtime LLM settings."""
+    global _runtime_model, _runtime_num_ctx, _runtime_lightweight_num_ctx
+    _runtime_model = str(model_name or "").strip() or None
+    if num_ctx is not None:
+        _runtime_num_ctx = int(num_ctx)
+    if lightweight_num_ctx is not None:
+        _runtime_lightweight_num_ctx = int(lightweight_num_ctx)
+    logger.info(
+        "Runtime LLM model set to '%s' (num_ctx=%s, lightweight_num_ctx=%s)",
+        _runtime_model,
+        _runtime_num_ctx,
+        _runtime_lightweight_num_ctx,
+    )
+
+
+def get_runtime_num_ctx(default=None):
+    """Return runtime-selected num_ctx if available, else fallback default."""
+    value = _runtime_num_ctx if _runtime_num_ctx is not None else default
+    if value is None:
+        value = LLM_OLLAMA_NUM_CTX
+    return int(value)
+
+
+def get_runtime_lightweight_num_ctx(default=None):
+    """Return runtime-selected lightweight num_ctx if available, else fallback default."""
+    value = _runtime_lightweight_num_ctx if _runtime_lightweight_num_ctx is not None else default
+    if value is None:
+        value = LLM_OLLAMA_NUM_CTX
+    return int(value)
+
+
 def _resolve_model_name():
+    if _runtime_model:
+        return _runtime_model
     configured = str(LLM_MODEL or "").strip()
-    if configured and configured.lower() != _PINNED_MODEL:
-        logger.warning(
-            "Configured LLM model '%s' ignored; runtime is pinned to '%s'.",
-            configured,
-            _PINNED_MODEL,
-        )
-    return _PINNED_MODEL
+    return configured or "qwen3:4b"
 
 
 def _flush_sentence_buffer(buf, on_sentence):
@@ -62,6 +94,8 @@ def ask_llm_streaming(prompt, on_sentence=None, num_ctx=None):
     model_name = _resolve_model_name()
     accumulated = []
     sentence_buf = ""
+    hard_timeout_seconds = max(5.0, float(LLM_TIMEOUT_SECONDS or 30.0))
+    hard_timeout_hit = False
 
     try:
         with httpx.stream(
@@ -71,7 +105,7 @@ def ask_llm_streaming(prompt, on_sentence=None, num_ctx=None):
                 "model": model_name,
                 "prompt": prompt,
                 "stream": True,
-                "options": {"num_ctx": int(num_ctx or LLM_OLLAMA_NUM_CTX)},
+                "options": {"num_ctx": int(num_ctx or _runtime_num_ctx or LLM_OLLAMA_NUM_CTX)},
             },
             timeout=LLM_TIMEOUT_SECONDS,
         ) as stream_response:
@@ -90,6 +124,16 @@ def ask_llm_streaming(prompt, on_sentence=None, num_ctx=None):
                 return "I could not run the local model."
 
             for raw_line in stream_response.iter_lines():
+                elapsed = time.perf_counter() - started
+                if elapsed >= hard_timeout_seconds:
+                    hard_timeout_hit = True
+                    logger.error(
+                        "LLM streaming hard-timeout after %.2fs (model=%s)",
+                        elapsed,
+                        model_name,
+                    )
+                    break
+
                 line = (raw_line or "").strip()
                 if not line:
                     continue
@@ -104,6 +148,17 @@ def ask_llm_streaming(prompt, on_sentence=None, num_ctx=None):
                     sentence_buf = _flush_sentence_buffer(sentence_buf, on_sentence)
                 if chunk.get("done"):
                     break
+
+        if hard_timeout_hit:
+            remainder = sentence_buf.strip()
+            if remainder:
+                on_sentence(remainder)
+
+            partial = "".join(accumulated).strip()
+            if partial:
+                success = True
+                return partial
+            return "The local model timed out. Try a shorter query."
 
         # Flush any remaining sentence fragment
         remainder = sentence_buf.strip()
@@ -154,7 +209,7 @@ def ask_llm(prompt, num_ctx=None):
                     "prompt": prompt,
                     "stream": False,
                     "options": {
-                        "num_ctx": int(num_ctx or LLM_OLLAMA_NUM_CTX),
+                        "num_ctx": int(num_ctx or _runtime_num_ctx or LLM_OLLAMA_NUM_CTX),
                     },
                 },
                 timeout=LLM_TIMEOUT_SECONDS,

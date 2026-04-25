@@ -1,31 +1,53 @@
 # Jarvis — Core Runtime Dependencies
 # Install with: pip install -r requirements.txt
+#
+# This file is the BALANCED tier: everything needed for Jarvis to run with
+# all primary features (voice, LLM, web search, desktop commands, semantic NLU).
+# For a leaner install, see requirements-minimal.txt.
+# For everything including optional Outlook integrations, see requirements-full.txt.
 
 # Environment & config
 python-dotenv==1.2.2
 
-# Audio pipeline
+# Audio pipeline (REQUIRED)
 numpy==2.4.2
 sounddevice==0.5.5
 
-# Speech-to-text (cloud-first)
-# Local fallback backend
+# Speech-to-text — local fallback backend (REQUIRED)
 faster-whisper==1.2.1
 
-# Wake word detection
+# Wake word detection (REQUIRED)
 openwakeword==0.6.0
 
-# Text-to-speech
-# Neural TTS (edge-tts is the active TTS engine)
+# Text-to-speech — neural TTS (REQUIRED)
 edge-tts>=6.1.12
 # Edge stream decoder for older edge-tts versions that emit MP3 chunks
 soundfile>=0.12.1
 
-# System monitoring
+# System monitoring (REQUIRED — battery/cpu/ram + hardware tier detection)
 psutil==7.2.2
 
-# HTTP (used by ollama client & general networking)
+# HTTP (REQUIRED — Ollama client + general networking)
 httpx==0.28.1
 
-# NLP fuzzy matching for noisy STT intent parsing
+# NLP fuzzy matching for noisy STT intent parsing (REQUIRED)
 rapidfuzz==3.14.3
+
+# --- Recommended (project still runs without these, with reduced features) ---
+
+# Clipboard access (pure Python, all platforms)
+pyperclip>=1.9.0
+
+# Python-first brightness control (DDC/CI + WMI fallback)
+screen-brightness-control>=0.23.0
+
+# Semantic intent routing (multilingual embeddings for paraphrase-tolerant NLU)
+# Pin below v5 to avoid torchcodec runtime issues on some Windows/Python combos.
+sentence-transformers>=3.0.0,<5.0.0
+
+# Web search (free, no API key — used for live data in LLM prompts)
+duckduckgo-search>=7.0.0
+ddgs>=9.0.0
+
+# Windows COM integrations (Outlook draft/calendar + Search Index acceleration)
+pywin32>=306; platform_system == "Windows"

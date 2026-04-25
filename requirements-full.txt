@@ -1,0 +1,61 @@
+# Jarvis — Full Dependencies (everything)
+# Install with: pip install -r requirements-full.txt
+#
+# This file includes EVERYTHING: core, recommended, and all optional integrations.
+# Use this for the most feature-complete install.
+
+# --- Core (always required) ---
+
+# Environment & config
+python-dotenv==1.2.2
+
+# Audio pipeline
+numpy==2.4.2
+sounddevice==0.5.5
+
+# Speech-to-text — local fallback backend
+faster-whisper==1.2.1
+
+# Wake word detection
+openwakeword==0.6.0
+
+# Text-to-speech — neural TTS
+edge-tts>=6.1.12
+soundfile>=0.12.1
+
+# System monitoring (battery/cpu/ram + hardware tier detection)
+psutil==7.2.2
+
+# HTTP (Ollama client + general networking)
+httpx==0.28.1
+
+# NLP fuzzy matching for noisy STT intent parsing
+rapidfuzz==3.14.3
+
+# --- Recommended (graceful fallback if missing) ---
+
+# Clipboard access (pure Python, all platforms)
+pyperclip>=1.9.0
+
+# Python-first brightness control (DDC/CI + WMI fallback)
+screen-brightness-control>=0.23.0
+
+# Semantic intent routing (multilingual embeddings for paraphrase-tolerant NLU)
+# Pin below v5 to avoid torchcodec runtime issues on some Windows/Python combos.
+sentence-transformers>=3.0.0,<5.0.0
+
+# Web search (free, no API key — used for live data in LLM prompts)
+duckduckgo-search>=7.0.0
+ddgs>=9.0.0
+
+# --- Optional / Windows-specific ---
+
+# Windows COM integrations (Outlook draft/calendar + Windows Search Index)
+pywin32>=306; platform_system == "Windows"
+
+# Knowledge base FAISS vector index (optional — falls back to in-memory cosine search)
+# Uncomment if you want fast KB lookups on large knowledge corpora.
+# faiss-cpu>=1.8.0
+
+# PDF reading for KB ingestion (optional)
+# pypdf>=4.0.0

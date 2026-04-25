@@ -20,6 +20,47 @@ from os_control.policy import policy_engine
 from os_control.powershell_bridge import run_template
 from os_control.risk_policy import risk_tier_for_system
 
+try:
+    import screen_brightness_control as _sbc
+
+    _SBC_AVAILABLE = True
+except ImportError:
+    _sbc = None
+    _SBC_AVAILABLE = False
+
+
+def _python_brightness_set(level):
+    """Try setting brightness via screen-brightness-control. Returns True on success."""
+    if not _SBC_AVAILABLE:
+        return False
+    try:
+        _sbc.set_brightness(int(level))
+        return True
+    except Exception as exc:
+        logger.debug("screen-brightness-control set failed: %s", exc)
+        return False
+
+
+def _python_brightness_get():
+    """Try getting brightness via screen-brightness-control. Returns int or None."""
+    if not _SBC_AVAILABLE:
+        return None
+    try:
+        values = _sbc.get_brightness()
+        return values[0] if values else None
+    except Exception:
+        return None
+
+
+def _python_brightness_adjust(delta):
+    """Adjust brightness by delta percent. Returns True on success."""
+    current = _python_brightness_get()
+    if current is None:
+        return False
+    new_level = max(0, min(100, current + delta))
+    return _python_brightness_set(new_level)
+
+
 SYSTEM_COMMANDS = {
     "shutdown": {
         "template": "shutdown",
@@ -917,6 +958,24 @@ def execute_system_command_result(action_key, command_args=None):
             details={"action": action_key, "reason": "destructive_disabled"},
         )
         return failure_result(msg, error_code="destructive_disabled", debug_info={"action": action_key})
+
+    # Python-first brightness control (falls through to PowerShell if unavailable)
+    if action_key in {"brightness_up", "brightness_down", "brightness_set"} and _SBC_AVAILABLE:
+        py_ok = False
+        if action_key == "brightness_set":
+            level = normalized_args.get("brightness_level", 50)
+            py_ok = _python_brightness_set(level)
+            msg = f"Brightness set to {level}%."
+        elif action_key == "brightness_up":
+            py_ok = _python_brightness_adjust(10)
+            msg = "Brightness increased."
+        elif action_key == "brightness_down":
+            py_ok = _python_brightness_adjust(-10)
+            msg = "Brightness decreased."
+        if py_ok:
+            log_action("system_command", "success", details={"action": action_key, "method": "python_sbc"})
+            return success_result(msg, debug_info={"action": action_key, "method": "python_sbc"})
+        logger.debug("Python brightness control failed, falling through to PowerShell")
 
     ok, error, output, attempts = _run_system_template_with_safe_retry(
         cfg["template"],

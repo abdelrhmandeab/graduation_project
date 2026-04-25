@@ -33,15 +33,20 @@ from core.config import (
     DOCTOR_INCLUDE_MODEL_LOAD_CHECKS,
     DOCTOR_SCHEDULE_INTERVAL_SECONDS,
     DOCTOR_STARTUP_ENABLED,
+    LLM_AUTO_SELECT_MODEL,
+    LLM_MODEL,
     LLM_OLLAMA_AUTOSTART,
     LLM_OLLAMA_AUTOSTART_TIMEOUT_SECONDS,
     LLM_OLLAMA_BASE_URL,
     LLM_OLLAMA_EXECUTABLE,
+    LLM_LIGHTWEIGHT_NUM_CTX,
+    LLM_OLLAMA_NUM_CTX,
     MAX_RECORD_DURATION,
     REALTIME_BACKPRESSURE_POLL_SECONDS,
     REALTIME_DROP_WHEN_BUSY,
     REALTIME_MAX_PENDING_UTTERANCES,
     SPEECH_GUARD_SKIP_NON_RESPONSIVE_PROFILES,
+    SEMANTIC_ROUTER_ENABLED,
     STARTUP_PARSER_NLP_PREWARM_ENABLED,
     TTS_PREWARM_ENABLED,
 )
@@ -476,11 +481,27 @@ def _preload_stt_model():
 
 
 
+def _is_llm_prewarm_failure(response_text):
+    text = " ".join(str(response_text or "").strip().lower().split())
+    if not text:
+        return True
+
+    failure_markers = (
+        "timed out",
+        "cannot connect to ollama",
+        "could not run the local model",
+        "internal error",
+    )
+    return any(marker in text for marker in failure_markers)
+
+
 def _prewarm_llm():
     """Send a minimal prompt to Ollama so the model is loaded into memory before the user speaks."""
     try:
         from llm.ollama_client import ask_llm
-        ask_llm("Hi", num_ctx=64)
+        warmup_response = ask_llm("Hi", num_ctx=64)
+        if _is_llm_prewarm_failure(warmup_response):
+            raise RuntimeError(warmup_response)
         logger.info("LLM prewarmed successfully.")
     except Exception as exc:
         logger.warning("LLM prewarm failed (will load on first query): %s", exc)
@@ -599,8 +620,167 @@ def _prewarm_parser_nlp():
         logger.info("Parser prewarmed successfully (keyword NLU unavailable).")
 
 
+def _prewarm_semantic_router():
+    """Load the semantic router embedding model so first classification is instant."""
+    started = time.perf_counter()
+    try:
+        from nlp.semantic_router import prewarm as sr_prewarm
+        ok = sr_prewarm()
+        metrics.record_stage("semantic_router_prewarm", time.perf_counter() - started, success=ok)
+        if ok:
+            logger.info("Semantic router prewarmed successfully.")
+        else:
+            logger.info("Semantic router prewarm skipped (unavailable).")
+    except Exception as exc:
+        metrics.record_stage("semantic_router_prewarm", time.perf_counter() - started, success=False)
+        logger.warning("Semantic router prewarm failed (will try on first command): %s", exc)
+
+
+def _detect_and_set_runtime_model():
+    """Detect hardware, select model, ensure it's available in Ollama, and set runtime model."""
+    from llm.ollama_client import set_runtime_model
+    from core.hardware_detect import DEFAULT_MODEL as HARDWARE_DEFAULT_MODEL, recommend_model_tier
+
+    ollama_url = str(LLM_OLLAMA_BASE_URL or "http://localhost:11434").rstrip("/")
+    configured_model = str(LLM_MODEL or "").strip()
+    default_model = str(HARDWARE_DEFAULT_MODEL or "qwen3:4b").strip() or "qwen3:4b"
+
+    tier = None
+    selection_reason = "configured"
+    model_name = configured_model or default_model
+    num_ctx = int(LLM_OLLAMA_NUM_CTX)
+    lightweight_num_ctx = int(LLM_LIGHTWEIGHT_NUM_CTX)
+
+    # Treat any non-default configured value as explicit manual override.
+    explicit_override = bool(configured_model and configured_model.lower() != default_model.lower())
+    if explicit_override:
+        selection_reason = "manual_override"
+    elif bool(LLM_AUTO_SELECT_MODEL):
+        selection_reason = "hardware_auto_select"
+        tier = recommend_model_tier(ollama_url)
+        model_name = str(tier.get("model") or default_model).strip() or default_model
+        num_ctx = int(tier.get("num_ctx") or LLM_OLLAMA_NUM_CTX)
+        lightweight_num_ctx = int(tier.get("lightweight_num_ctx") or LLM_LIGHTWEIGHT_NUM_CTX)
+    else:
+        selection_reason = "auto_select_disabled"
+
+    if selection_reason == "hardware_auto_select" and isinstance(tier, dict):
+        logger.info(
+            "Hardware auto-select: tier=%s model=%s num_ctx=%d lightweight_num_ctx=%d (RAM=%.1fGB, GPU=%s)",
+            str(tier.get("tier") or "unknown"),
+            model_name,
+            num_ctx,
+            lightweight_num_ctx,
+            float(tier.get("ram_gb") or 0.0),
+            "yes" if bool(tier.get("gpu")) else "no",
+        )
+    else:
+        logger.info(
+            "Using model '%s' (reason=%s, num_ctx=%d, lightweight_num_ctx=%d)",
+            model_name,
+            selection_reason,
+            num_ctx,
+            lightweight_num_ctx,
+        )
+
+    set_runtime_model(
+        model_name,
+        num_ctx=num_ctx,
+        lightweight_num_ctx=lightweight_num_ctx,
+    )
+    _ensure_model_available(model_name, ollama_url)
+
+
+def _ensure_model_available(model_name, ollama_url):
+    """Check if model exists in Ollama. If not, pull it (blocking)."""
+    try:
+        r = httpx.get(f"{ollama_url}/api/tags", timeout=5.0)
+        if r.status_code == 200:
+            models = [m.get("name", "") for m in r.json().get("models", [])]
+            # Check if model is already available (exact or prefix match)
+            if any(model_name in m for m in models):
+                logger.info("Model '%s' is available in Ollama.", model_name)
+                return
+        logger.info("Model '%s' not found locally, pulling...", model_name)
+        _pull_model(model_name)
+    except Exception as exc:
+        logger.warning("Could not verify model availability: %s", exc)
+
+
+def _pull_model(model_name):
+    """Pull a model from Ollama registry with streaming progress logs.
+
+    Blocks until complete or timeout. Logs at most one progress line per ~5 seconds
+    to keep the user informed without spamming the log.
+    """
+    url = f"{str(LLM_OLLAMA_BASE_URL or 'http://localhost:11434').rstrip('/')}/api/pull"
+    last_status = ""
+    last_log_at = 0.0
+    progress_interval = 5.0  # seconds between progress logs
+
+    try:
+        with httpx.stream(
+            "POST",
+            url,
+            json={"name": model_name, "stream": True},
+            timeout=httpx.Timeout(connect=10.0, read=900.0, write=10.0, pool=10.0),
+        ) as response:
+            if response.status_code != 200:
+                logger.warning(
+                    "Model pull returned status %d for '%s'.",
+                    response.status_code, model_name,
+                )
+                return False
+
+            for line in response.iter_lines():
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except Exception:
+                    continue
+
+                status = str(payload.get("status") or "").strip()
+                if not status:
+                    continue
+
+                now = time.time()
+                total = payload.get("total")
+                completed = payload.get("completed")
+
+                # Always log status transitions (e.g. "pulling manifest" → "downloading")
+                status_changed = status != last_status
+                throttle_elapsed = (now - last_log_at) >= progress_interval
+
+                if status_changed or throttle_elapsed:
+                    if total and completed:
+                        try:
+                            pct = (float(completed) / float(total)) * 100.0
+                            mb_done = float(completed) / (1024 ** 2)
+                            mb_total = float(total) / (1024 ** 2)
+                            logger.info(
+                                "Pulling '%s': %s — %.1f%% (%.1f / %.1f MB)",
+                                model_name, status, pct, mb_done, mb_total,
+                            )
+                        except (TypeError, ValueError):
+                            logger.info("Pulling '%s': %s", model_name, status)
+                    else:
+                        logger.info("Pulling '%s': %s", model_name, status)
+                    last_status = status
+                    last_log_at = now
+
+                if status.lower() == "success":
+                    logger.info("Model '%s' pulled successfully.", model_name)
+                    return True
+        return True
+    except Exception as exc:
+        logger.warning("Failed to pull model '%s': %s", model_name, exc)
+        return False
+
+
 def _run_startup_prewarm_blocking():
     _ensure_ollama_running()
+    _detect_and_set_runtime_model()
 
     tasks = [
         ("wake_word", _preload_wake_word_runtime),
@@ -609,6 +789,8 @@ def _run_startup_prewarm_blocking():
     ]
     if STARTUP_PARSER_NLP_PREWARM_ENABLED:
         tasks.append(("parser_nlp", _prewarm_parser_nlp))
+    if SEMANTIC_ROUTER_ENABLED:
+        tasks.append(("semantic_router", _prewarm_semantic_router))
     if TTS_PREWARM_ENABLED:
         tasks.append(("tts", _prewarm_tts))
 

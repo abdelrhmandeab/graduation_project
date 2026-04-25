@@ -3,7 +3,6 @@ import re
 import time
 from collections import OrderedDict
 
-from core.command_classifier import classify_with_nlu
 from core.command_parser import ParsedCommand, parse_command
 from core.config import (
     CLARIFICATION_CORRECTION_WINDOW_SECONDS,
@@ -29,13 +28,16 @@ from core.config import (
     LLM_RESPONSE_CACHE_MAX_QUERY_WORDS,
     LLM_RESPONSE_CACHE_MAX_SIZE,
     LLM_RESPONSE_CACHE_TTL_SECONDS,
-    LLM_REALTIME_REWRITE_ENABLED,
     NLU_LLM_QUERY_EXTRACTION_ENABLED,
     NLU_PARSER_FASTPATH_CONFIDENCE_FLOOR,
     NLU_PARSER_FASTPATH_ENABLED,
     NLU_INTENT_CONFIDENCE_THRESHOLD,
     NLU_INTENT_ROUTING_ENABLED,
     NLU_INTENT_THRESHOLD_BY_FAMILY,
+    SEMANTIC_ROUTER_ENABLED,
+    SEMANTIC_ROUTER_CONFIDENCE_THRESHOLD,
+    WEB_SEARCH_ENABLED,
+    WEB_SEARCH_MAX_RESULTS,
     PERSONA_LENGTH_TARGET_ENABLED,
     PERSONA_RESPONSE_MAX_WORDS,
     RESPONSE_MODE_FEATURE_ENABLED,
@@ -58,12 +60,16 @@ from core.metrics import metrics
 from core.persona import persona_manager
 from core.response_templates import anti_repetition_prefixes, detect_language_hint, normalize_language, render_template
 from core.session_memory import session_memory
-from llm.ollama_client import ask_llm, ask_llm_streaming
-from llm.prompt_builder import build_prompt_package, build_lightweight_prompt
+from llm.ollama_client import ask_llm_streaming, get_runtime_lightweight_num_ctx
+from llm.prompt_builder import build_prompt_package, build_lightweight_prompt, build_tool_augmented_prompt
 try:
     from nlp.intent_classifier import classify_intent as _classify_keyword_intent
 except Exception:
     _classify_keyword_intent = None
+try:
+    from nlp.semantic_router import classify_semantic as _classify_semantic
+except Exception:
+    _classify_semantic = None
 from os_control.action_log import log_action, read_recent_actions
 from os_control.adapter_result import to_router_tuple
 from os_control.app_ops import execute_confirmed_app_operation, open_app_result, request_close_app_result, resolve_app_request
@@ -78,6 +84,12 @@ from os_control.job_queue import job_queue_service
 from os_control.policy import policy_engine
 from os_control.search_index import search_index_service
 from os_control.system_ops import execute_system_command_result, request_system_command_result
+from os_control.timer_ops import cancel_timer, list_timers, set_alarm_at, set_timer
+from os_control.clipboard_ops import clear_clipboard, read_clipboard, write_clipboard
+from os_control.sysinfo_ops import get_battery_status, get_system_info
+from os_control.email_ops import draft_email
+from os_control.calendar_ops import create_calendar_event
+from os_control.settings_ops import open_settings_page
 
 
 _JOB_QUEUE_EXECUTOR_READY = False
@@ -149,6 +161,74 @@ def _should_skip_nlu_llm_query(parser_candidate):
     return intent == "LLM_QUERY" and not NLU_LLM_QUERY_EXTRACTION_ENABLED
 
 
+def _try_semantic_routing(source_text, parser_candidate):
+    """Tier 2: Semantic embedding similarity for paraphrase-tolerant intent matching.
+
+    Only runs when:
+    - SEMANTIC_ROUTER_ENABLED is True
+    - parser_candidate is LLM_QUERY (regex didn't match)
+    - _classify_semantic is available (sentence-transformers installed)
+
+    Returns (ParsedCommand, meta_dict) or (None, meta_dict).
+    """
+    meta = {
+        "semantic_used": False,
+        "semantic_accepted": False,
+        "semantic_intent": "",
+        "semantic_confidence": 0.0,
+    }
+
+    intent = str(getattr(parser_candidate, "intent", "") or "").strip().upper()
+    if intent != "LLM_QUERY":
+        return None, meta
+    if not SEMANTIC_ROUTER_ENABLED or _classify_semantic is None:
+        return None, meta
+
+    meta["semantic_used"] = True
+    try:
+        result = _classify_semantic(source_text)
+    except Exception as exc:
+        logger.warning("Semantic routing failed: %s", exc)
+        return None, meta
+
+    if result is None:
+        return None, meta
+
+    semantic_intent, confidence = result
+    meta["semantic_intent"] = semantic_intent
+    meta["semantic_confidence"] = float(confidence)
+
+    threshold = max(
+        float(SEMANTIC_ROUTER_CONFIDENCE_THRESHOLD),
+        float(_nlu_threshold_for_intent(semantic_intent)),
+    )
+    if confidence < threshold or semantic_intent == "LLM_QUERY":
+        return None, meta
+
+    # Re-parse through the regex parser with the semantic intent as a hint.
+    # This lets the regex parser extract structured args (app_name, action_key, etc.)
+    # while the semantic router provides the intent classification.
+    reparsed = parse_command(source_text)
+    reparsed_intent = str(getattr(reparsed, "intent", "") or "").strip().upper()
+
+    # If the regex parser already found a non-LLM intent, prefer its structured result
+    if reparsed_intent != "LLM_QUERY" and reparsed_intent == semantic_intent:
+        meta["semantic_accepted"] = True
+        return reparsed, meta
+
+    # Build a ParsedCommand from the semantic intent with args from parser
+    normalized = " ".join(str(source_text or "").lower().split()).strip()
+    parsed = ParsedCommand(
+        intent=semantic_intent,
+        raw=source_text,
+        normalized=normalized,
+        action=reparsed.action if reparsed_intent == semantic_intent else "",
+        args=dict(reparsed.args or {}) if reparsed_intent == semantic_intent else {},
+    )
+    meta["semantic_accepted"] = True
+    return parsed, meta
+
+
 _KEYWORD_NLP_MIN_CONFIDENCE = 0.45
 _KEYWORD_NLP_SEARCH_PREFIX_RE = re.compile(
     r"^(?:search|find|look\s+up|google|دور|دوّر|دورلي|دوّرلي|ابحث)(?:\s+(?:for|about|on|in|عن|على|في))?\s+",
@@ -161,6 +241,10 @@ _KEYWORD_NLP_SEARCH_WEB_PREFIX_RE = re.compile(
 _KEYWORD_NLP_URL_INTENT_MAP = {
     "open_youtube": "https://www.youtube.com",
     "open_google": "https://www.google.com",
+}
+_KEYWORD_NLP_URL_INTENT_REQUIRED_MARKERS = {
+    "open_google": {"google", "جوجل"},
+    "open_youtube": {"youtube", "you tube", "yt", "يوتيوب", "يوتوب"},
 }
 _KEYWORD_NLP_APP_OPEN_INTENT_MAP = {
     "play_music": "spotify",
@@ -282,6 +366,23 @@ def _map_keyword_nlp_intent_to_command(source_text, nlp_result):
     normalized = " ".join(str(source_text or "").lower().split()).strip()
     target_url = _KEYWORD_NLP_URL_INTENT_MAP.get(intent_name)
     if target_url:
+        required_markers = set(_KEYWORD_NLP_URL_INTENT_REQUIRED_MARKERS.get(intent_name) or set())
+        if required_markers:
+            matched_compact = " ".join(
+                " ".join(str(keyword or "").lower().split())
+                for keyword in matched_keywords
+            )
+            has_required_marker = any(
+                marker in normalized or marker in matched_compact
+                for marker in required_markers
+            )
+            if not has_required_marker:
+                return None
+
+        # Guard against fuzzy false-positives (for example weather/news questions
+        # being misread as open_google) and let LLM/search routing handle them.
+        if _looks_keyword_nlp_informational_query(source_text):
+            return None
         return ParsedCommand(
             intent="OS_SYSTEM_COMMAND",
             raw=source_text,
@@ -1086,6 +1187,27 @@ _NEWS_QUERY_MARKERS = {
     "عاجل",
 }
 
+_SEARCH_QUERY_MARKERS = {
+    # English price/money markers
+    "price of", "cost of", "how much", "stock", "exchange rate",
+    "tell me the price", "what's the price", "tell me about",
+    # Arabic price markers — singular AND plural forms (substring match needs both)
+    "سعر", "اسعار", "أسعار", "تكلفة", "كام سعر", "بكام", "كام",
+    "سوق", "بورصة",
+    # Commodity / currency keywords that almost always need live data
+    "ذهب", "دهب", "فضة", "عملة", "دولار", "يورو", "بيتكوين",
+    "gold", "silver", "bitcoin", "crypto",
+    # English question stems
+    "what is", "who is", "when did", "where is",
+    # Arabic question stems
+    "ايه هو", "ايه هي", "مين هو", "مين هي", "امتى", "فين",
+    "قولي", "ابعتلي", "اعرفني", "احكيلي",
+    # Recency / "now" markers — strong signal for live-data queries
+    "latest", "recent", "new", "current", "today", "now", "currently",
+    "آخر", "أحدث", "جديد", "حالي",
+    "النهارده", "النهاردة", "اليوم", "دلوقتي",
+}
+
 _ASSIST_FIRST_REWRITE_BLOCK_MARKERS = {
     "hack",
     "exploit",
@@ -1143,6 +1265,48 @@ def _is_assist_first_safe_request(text):
     if not normalized:
         return False
     return not any(marker in normalized for marker in _ASSIST_FIRST_REWRITE_BLOCK_MARKERS)
+
+
+def _looks_search_worthy_query(text):
+    """Check if a query would benefit from web search context."""
+    normalized = _normalize_quality_text(text)
+    if not normalized:
+        return False
+    return any(marker in normalized for marker in _SEARCH_QUERY_MARKERS)
+
+
+def _fetch_live_tool_context(query_text):
+    """Try to fetch live data for the query. Returns context string or empty."""
+    from tools.weather import get_weather
+
+    # Weather queries get dedicated weather API
+    if _looks_weather_or_clothing_query(query_text):
+        weather_data = get_weather()
+        if weather_data:
+            return weather_data
+
+    # News and general search-worthy queries get web search
+    if _looks_news_query(query_text) or _looks_search_worthy_query(query_text):
+        if WEB_SEARCH_ENABLED:
+            from tools.web_search import search_web
+            search_data = search_web(query_text, max_results=WEB_SEARCH_MAX_RESULTS)
+            if search_data:
+                return search_data
+
+    return ""
+
+
+def _direct_live_data_answer(query_text, tool_context, language):
+    context = str(tool_context or "").strip()
+    if not context:
+        return ""
+
+    if _looks_weather_or_clothing_query(query_text):
+        if normalize_language(language) == "ar":
+            return f"حالة الطقس الحالية: {context}"
+        return context
+
+    return ""
 
 
 def _fallback_assist_first_response(original_text, language):
@@ -1383,6 +1547,12 @@ def _apply_egyptian_dialect_style(response_text, parsed, language):
 
 
 def _repair_low_value_llm_response(response_text, parsed, language, original_text, *, allow_llm_rewrite=True):
+    """Replace low-value LLM responses with a direct assist-first fallback.
+
+    No longer calls the LLM for rewrites — the improved model + slim prompt
+    should produce good output directly.  Only the static fallback is used
+    for genuinely empty or generic refusal responses.
+    """
     text = str(response_text or "").strip()
     if not text:
         return text
@@ -1394,41 +1564,6 @@ def _repair_low_value_llm_response(response_text, parsed, language, original_tex
         return text
 
     target_language = normalize_language(language)
-    target_label = "Arabic" if target_language == "ar" else "English"
-
-    if _looks_weather_or_clothing_query(original_text):
-        rewrite_prompt = (
-            f"Rewrite the weak draft into a useful {target_label} response for a weather/clothing question.\n"
-            "- Give a direct answer first.\n"
-            "- If you do not have live weather data, say that briefly in one line only.\n"
-            "- Then provide practical clothing guidance for hot/mild/cold conditions.\n"
-            "- Keep it concise, concrete, and natural.\n"
-            "- Do not end with a refusal-style sentence.\n"
-            "- Return only the final answer.\n\n"
-            f"User request: {_truncate_text(original_text, max_chars=300)}\n"
-            f"Weak draft:\n{text}"
-        )
-    else:
-        rewrite_prompt = (
-            f"Rewrite the weak draft into a useful {target_label} answer.\n"
-            "- Answer directly with concrete information.\n"
-            "- If live data is unavailable, mention that briefly and give practical guidance.\n"
-            "- Keep the same topic and intent.\n"
-            "- Do not use generic refusal language unless the request is unsafe.\n"
-            "- Return only the final answer.\n\n"
-            f"User request: {_truncate_text(original_text, max_chars=300)}\n"
-            f"Weak draft:\n{text}"
-        )
-
-    if allow_llm_rewrite:
-        improved = (ask_llm(rewrite_prompt) or "").strip()
-        if improved and not _looks_low_value_llm_reply(improved):
-            log_structured(
-                "route_llm_quality_repair",
-                language=target_language,
-                response_preview=_truncate_text(improved),
-            )
-            return improved
 
     # Hard assist-first rule: for normal safe user requests, never leave a generic
     # dead-end refusal as the final answer.
@@ -1444,63 +1579,24 @@ def _repair_low_value_llm_response(response_text, parsed, language, original_tex
     return text
 
 
-def _enforce_llm_response_language(response_text, parsed, language, original_text):
-    text = str(response_text or "").strip()
-    if not text:
-        return text
-    if not parsed or str(parsed.intent or "").strip().upper() != "LLM_QUERY":
-        return text
-
-    target_language = normalize_language(language)
-    detected_language = detect_language_hint(text, fallback=target_language)
-    if detected_language == target_language:
-        return text
-
-    target_label = "Arabic" if target_language == "ar" else "English"
-    rewrite_prompt = (
-        f"Rewrite the assistant answer below into {target_label} only.\n"
-        "- Keep the exact meaning.\n"
-        "- Do not add or remove facts.\n"
-        "- Keep similar length and tone.\n"
-        "- Return only the rewritten answer.\n\n"
-        f"User request: {_truncate_text(original_text, max_chars=260)}\n"
-        f"Assistant answer:\n{text}"
-    )
-    rewritten = (ask_llm(rewrite_prompt) or "").strip()
-    if not rewritten:
-        return text
-
-    rewritten_language = detect_language_hint(rewritten, fallback=target_language)
-    if rewritten_language != target_language:
-        return text
-
-    log_structured(
-        "route_llm_language_rewrite",
-        language=target_language,
-        previous_language=detected_language,
-        response_preview=_truncate_text(rewritten),
-    )
-    return rewritten
-
-
 def _finalize_success_response(response_text, parsed, language, original_text, tone_meta, *, realtime=False):
+    """Minimal text-level post-processing — no LLM calls, no aggressive shaping.
+
+    With a slim prompt + few-shot examples the model produces good output directly,
+    so we only do the two transformations that materially help voice UX:
+      1. Static assist-first fallback for genuinely empty/refusal replies.
+      2. Egyptian dialect TTS rewrite (text-level, needed for natural Arabic speech).
+      3. Length cap (prevents rambling over the persona word target).
+
+    Removed (per Phase 1.4): output_mode (over-truncates), tone_adaptation
+    (unnatural prefixes), codeswitch_continuity (random language nudges),
+    anti_repetition (sometimes mangles correct text).
+    """
+    _ = tone_meta, realtime
     text = str(response_text or "").strip()
-    allow_llm_rewrite = bool(LLM_REALTIME_REWRITE_ENABLED) or not bool(realtime)
-    text = _repair_low_value_llm_response(
-        text,
-        parsed,
-        language,
-        original_text,
-        allow_llm_rewrite=allow_llm_rewrite,
-    )
-    if allow_llm_rewrite:
-        text = _enforce_llm_response_language(text, parsed, language, original_text)
+    text = _repair_low_value_llm_response(text, parsed, language, original_text)
     text = _apply_egyptian_dialect_style(text, parsed, language)
     text = _apply_persona_length_target(text, parsed)
-    text = _apply_output_mode(text, parsed, language)
-    text = _apply_tone_adaptation(text, language, tone_meta, parsed=parsed)
-    text = _apply_codeswitch_continuity(text, language, parsed=parsed)
-    text = _apply_anti_repetition(text, language)
     _record_response_quality(text, language, original_text)
     return text
 
@@ -2306,6 +2402,62 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
         action_key = parsed.args.get("action_key")
         return to_router_tuple(request_system_command_result(action_key, command_args=dict(parsed.args or {})))
 
+    if parsed.intent == "OS_TIMER":
+        if parsed.action == "set":
+            seconds = parsed.args.get("seconds")
+            if seconds is None:
+                return False, "Could not parse timer duration.", {}
+            label = parsed.args.get("label", "Timer")
+            return True, set_timer(seconds, label=label), {}
+        if parsed.action == "set_alarm":
+            alarm_time = str(parsed.args.get("alarm_time") or "").strip()
+            if not alarm_time:
+                return False, "Could not parse alarm time.", {}
+            label = parsed.args.get("label", "Alarm")
+            return True, set_alarm_at(alarm_time, label=label), {}
+        if parsed.action == "cancel":
+            return True, cancel_timer(), {}
+        if parsed.action == "list":
+            return True, list_timers(), {}
+        return False, "Unknown timer action.", {}
+
+    if parsed.intent == "OS_CLIPBOARD":
+        if parsed.action == "read":
+            return True, read_clipboard(), {}
+        if parsed.action == "write":
+            text = parsed.args.get("text", "")
+            if not text:
+                return False, "No text to copy.", {}
+            return True, write_clipboard(text), {}
+        if parsed.action == "clear":
+            return True, clear_clipboard(), {}
+        return False, "Unknown clipboard action.", {}
+
+    if parsed.intent == "OS_SYSINFO":
+        if parsed.action == "battery":
+            return True, get_battery_status(), {}
+        if parsed.action == "system":
+            return True, get_system_info(), {}
+        return True, get_system_info(), {}
+
+    if parsed.intent == "OS_EMAIL":
+        to = parsed.args.get("to", "")
+        subject = parsed.args.get("subject", "")
+        body = parsed.args.get("body", "")
+        return True, draft_email(to=to, subject=subject, body=body), {}
+
+    if parsed.intent == "OS_CALENDAR":
+        subject = parsed.args.get("subject", "New Event")
+        start_time = parsed.args.get("start_time", "")
+        duration = parsed.args.get("duration_minutes", 60)
+        if not start_time:
+            return False, "Please specify a time for the event.", {}
+        return True, create_calendar_event(subject, start_time, duration_minutes=duration), {}
+
+    if parsed.intent == "OS_SETTINGS":
+        page = parsed.args.get("page") or parsed.raw or ""
+        return True, open_settings_page(page), {}
+
     if parsed.intent == "METRICS_REPORT":
         return True, metrics.format_report(), {}
 
@@ -2354,25 +2506,58 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
     if not allow_llm:
         return False, "LLM fallback is disabled for this execution path.", {}
 
-    # LLM fallback — use lightweight prompt for short, simple queries
+    # LLM fallback — try live tool context first, then regular prompt
     query_words = len((parsed.raw or "").split())
-    has_memory_context = False
-    has_recent_context_fn = getattr(type(session_memory), "has_recent_context", None)
-    if callable(has_recent_context_fn):
-        has_memory_context = bool(session_memory.has_recent_context(language=language, intents={"LLM_QUERY"}))
-    else:
-        has_memory_context = bool(
-            session_memory.build_context(max_chars=1, language=language, intents={"LLM_QUERY"})
+
+    # Phase 2: fetch live data for weather/news/search queries
+    tool_context = ""
+    try:
+        tool_context = _fetch_live_tool_context(parsed.raw)
+    except Exception as exc:
+        logger.warning("Live tool context fetch failed: %s", exc)
+
+    tool_augmented = bool(tool_context)
+
+    direct_live_answer = _direct_live_data_answer(parsed.raw, tool_context, language)
+    if direct_live_answer:
+        return (
+            True,
+            direct_live_answer,
+            {
+                "persona": persona_manager.get_profile(),
+                "kb_augmented": False,
+                "kb_sources": 0,
+                "memory_used": False,
+                "tool_augmented": tool_augmented,
+                "llm_lightweight": False,
+                "llm_cache_eligible": False,
+                "llm_cache_hit": False,
+                "llm_bypassed_with_live_data": True,
+            },
         )
-    use_lightweight = query_words <= 8 and not has_memory_context
-    if use_lightweight:
-        package = build_lightweight_prompt(parsed.raw, response_language=language)
+
+    if tool_augmented:
+        package = build_tool_augmented_prompt(parsed.raw, tool_context, response_language=language)
+        use_lightweight = False
     else:
-        package = build_prompt_package(parsed.raw, response_language=language)
+        has_memory_context = False
+        has_recent_context_fn = getattr(type(session_memory), "has_recent_context", None)
+        if callable(has_recent_context_fn):
+            has_memory_context = bool(session_memory.has_recent_context(language=language, intents={"LLM_QUERY"}))
+        else:
+            has_memory_context = bool(
+                session_memory.build_context(max_chars=1, language=language, intents={"LLM_QUERY"})
+            )
+        use_lightweight = query_words <= 8 and not has_memory_context
+        if use_lightweight:
+            package = build_lightweight_prompt(parsed.raw, response_language=language)
+        else:
+            package = build_prompt_package(parsed.raw, response_language=language)
 
     cache_eligible = (
         bool(LLM_RESPONSE_CACHE_ENABLED)
         and bool(use_lightweight)
+        and not tool_augmented
         and int(query_words) <= max(1, int(LLM_RESPONSE_CACHE_MAX_QUERY_WORDS or 8))
         and not bool(package.get("kb_context_used"))
         and not bool(package.get("memory_used"))
@@ -2382,24 +2567,12 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
     response = ""
     stream_callback = on_sentence
     if stream_callback and parsed.intent == "LLM_QUERY":
-        stream_quality_repaired = False
-
+        # Phase 1.5 fix: only apply text-level Egyptian-dialect shaping per sentence.
+        # Mid-stream "quality repair" was replacing already-spoken sentences with a
+        # completely different fallback — incoherent on TTS. Quality is now gated
+        # on the FULL response in _finalize_success_response after streaming ends.
         def _stream_callback(sentence):
-            nonlocal stream_quality_repaired
             shaped = _apply_egyptian_dialect_style(sentence, parsed, language)
-            if (
-                not stream_quality_repaired
-                and _looks_low_value_llm_reply(shaped)
-                and _is_assist_first_safe_request(parsed.raw)
-            ):
-                fallback = _fallback_assist_first_response(parsed.raw, language)
-                fallback = _apply_egyptian_dialect_style(fallback, parsed, language)
-                if fallback:
-                    shaped = fallback
-                    stream_quality_repaired = True
-            elif stream_quality_repaired and _looks_low_value_llm_reply(shaped):
-                return
-
             stream_callback(shaped)
 
     else:
@@ -2414,7 +2587,11 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
             except Exception:
                 pass
 
-    llm_num_ctx = int(LLM_LIGHTWEIGHT_NUM_CTX) if use_lightweight else None
+    llm_num_ctx = (
+        int(get_runtime_lightweight_num_ctx(default=LLM_LIGHTWEIGHT_NUM_CTX))
+        if use_lightweight
+        else None
+    )
     if not cache_hit:
         response = (
             ask_llm_streaming(
@@ -2437,6 +2614,7 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
             "kb_augmented": package["kb_context_used"],
             "kb_sources": len(package["kb_sources"]),
             "memory_used": package["memory_used"],
+            "tool_augmented": tool_augmented,
             "llm_lightweight": use_lightweight,
             "llm_cache_eligible": cache_eligible,
             "llm_cache_hit": cache_hit,
@@ -2847,13 +3025,12 @@ def route_command(
     parser_candidate.raw = original_text
     parser_fastpath_assessment = None
     nlu_meta = {
-        "nlu_used": False,
-        "nlu_accepted": False,
-        "nlu_confidence": 0.0,
-        "nlu_threshold": float(NLU_INTENT_CONFIDENCE_THRESHOLD),
-        "nlu_cache_hit": False,
         "nlu_fastpath": False,
         "nlu_skipped_for_llm_query": False,
+        "semantic_used": False,
+        "semantic_accepted": False,
+        "semantic_intent": "",
+        "semantic_confidence": 0.0,
         "nlp_used": False,
         "nlp_accepted": False,
         "nlp_intent": "",
@@ -2862,6 +3039,7 @@ def route_command(
     }
 
     if parsed is None and NLU_INTENT_ROUTING_ENABLED:
+        # Tier 1 fast-path: high-confidence regex parser match
         parser_fastpath_assessment = _select_parser_fastpath_assessment(
             original_text,
             parser_candidate,
@@ -2870,31 +3048,19 @@ def route_command(
         if parser_fastpath_assessment is not None:
             parsed = parser_candidate
             nlu_meta["nlu_fastpath"] = True
-        elif _should_skip_nlu_llm_query(parser_candidate):
-            nlu_meta["nlu_skipped_for_llm_query"] = True
-        else:
-            nlu_result = classify_with_nlu(effective_text, language=language_result.language)
-            nlu_intent = str(nlu_result.get("intent") or "")
-            nlu_threshold = _nlu_threshold_for_intent(nlu_intent)
-            nlu_meta["nlu_used"] = bool(nlu_result.get("ok"))
-            nlu_meta["nlu_confidence"] = float(nlu_result.get("confidence") or 0.0)
-            nlu_meta["nlu_threshold"] = float(nlu_threshold)
-            nlu_meta["nlu_cache_hit"] = bool(nlu_result.get("cache_hit"))
-            if (
-                nlu_result.get("ok")
-                and nlu_intent != "LLM_QUERY"
-                and float(nlu_result.get("confidence") or 0.0) >= float(nlu_threshold)
-            ):
-                parsed = ParsedCommand(
-                    intent=nlu_intent or "LLM_QUERY",
-                    raw=original_text,
-                    normalized=" ".join(effective_text.lower().split()).strip(),
-                    action=str(nlu_result.get("action") or ""),
-                    args=dict(nlu_result.get("args") or {}),
-                )
-                nlu_meta["nlu_accepted"] = True
 
     if parsed is None:
+        # Tier 2: Semantic router — embedding similarity (~5ms)
+        semantic_parsed, semantic_meta = _try_semantic_routing(
+            original_text,
+            parser_candidate,
+        )
+        nlu_meta.update(semantic_meta)
+        if semantic_parsed is not None:
+            parsed = semantic_parsed
+
+    if parsed is None:
+        # Tier 3: Keyword NLP — fuzzy keyword matching
         keyword_nlp_parsed, keyword_nlp_meta = _try_keyword_nlp_routing(
             original_text,
             parser_candidate,
@@ -2904,6 +3070,7 @@ def route_command(
             parsed = keyword_nlp_parsed
 
     if parsed is None:
+        # Tier 4: Fall through to parser candidate (LLM_QUERY → LLM fallback)
         parsed = parser_candidate
 
     assessment = (

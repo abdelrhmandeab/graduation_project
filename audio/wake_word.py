@@ -4,6 +4,7 @@ import time
 import unicodedata
 import urllib.request
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
@@ -554,96 +555,127 @@ def listen_for_wake_word():
     ar_ring = deque(maxlen=ar_chunks + 1)
     last_ar_check_ts = 0.0
     ar_layer_warning_emitted = False
+    ar_slow_inference_warning_emitted = False
+    ar_max_inference_seconds = max(1.0, float(ar_chunk_seconds) * 2.5)
+    ar_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="jarvis-wake-ar") if arabic_layer_enabled else None
+    ar_future = None
+    ar_future_started_ts = 0.0
     _ar_consecutive_hits = 0
     _ar_last_hit_ts = 0.0
 
     last_debug_ts = 0.0
-    with sd.InputStream(
-        samplerate=SAMPLE_RATE,
-        channels=1,
-        dtype=np.int16,
-        device=input_device,
-        blocksize=WAKE_WORD_CHUNK_SIZE,
-    ) as stream:
-        while True:
-            audio_chunk, _ = stream.read(WAKE_WORD_CHUNK_SIZE)
-            audio_chunk = np.asarray(audio_chunk).reshape(-1).astype(np.int16, copy=False)
-            if wake_audio_gain and wake_audio_gain != 1.0:
-                boosted = audio_chunk.astype(np.float32) * wake_audio_gain
-                audio_chunk = np.clip(boosted, -32768, 32767).astype(np.int16, copy=False)
+    try:
+        with sd.InputStream(
+            samplerate=SAMPLE_RATE,
+            channels=1,
+            dtype=np.int16,
+            device=input_device,
+            blocksize=WAKE_WORD_CHUNK_SIZE,
+        ) as stream:
+            while True:
+                audio_chunk, _ = stream.read(WAKE_WORD_CHUNK_SIZE)
+                audio_chunk = np.asarray(audio_chunk).reshape(-1).astype(np.int16, copy=False)
+                if wake_audio_gain and wake_audio_gain != 1.0:
+                    boosted = audio_chunk.astype(np.float32) * wake_audio_gain
+                    audio_chunk = np.clip(boosted, -32768, 32767).astype(np.int16, copy=False)
 
-            if english_layer_enabled:
-                prediction = model.predict(audio_chunk)
-                score = prediction.get(WAKE_WORD)
-                if score is None and prediction:
-                    score = max(prediction.values())
+                if english_layer_enabled:
+                    prediction = model.predict(audio_chunk)
+                    score = prediction.get(WAKE_WORD)
+                    if score is None and prediction:
+                        score = max(prediction.values())
 
-                if WAKE_WORD_SCORE_DEBUG and score is not None:
+                    if WAKE_WORD_SCORE_DEBUG and score is not None:
+                        now = time.perf_counter()
+                        if now - last_debug_ts >= float(WAKE_WORD_SCORE_DEBUG_INTERVAL_SECONDS):
+                            rms = float(np.sqrt(np.mean(np.square(audio_chunk.astype(np.float32) / 32768.0))))
+                            print(
+                                f"[WakeWord] score={float(score):.6f} threshold={wake_threshold:.3f} "
+                                f"rms={rms:.4f}"
+                            )
+                            last_debug_ts = now
+
+                    if score is not None and score > wake_threshold:
+                        now = time.perf_counter()
+                        if now - _last_detection_ts < wake_cooldown:
+                            continue
+                        _last_detection_ts = now
+                        print("[WakeWord] Wake word detected (english).")
+                        return "english"
+
+                if arabic_layer_enabled:
+                    ar_ring.append(audio_chunk.copy())
                     now = time.perf_counter()
-                    if now - last_debug_ts >= float(WAKE_WORD_SCORE_DEBUG_INTERVAL_SECONDS):
-                        rms = float(np.sqrt(np.mean(np.square(audio_chunk.astype(np.float32) / 32768.0))))
-                        print(
-                            f"[WakeWord] score={float(score):.6f} threshold={wake_threshold:.3f} "
-                            f"rms={rms:.4f}"
+
+                    if ar_future is not None and ar_future.done():
+                        try:
+                            transcript = ar_future.result()
+                        except RuntimeError as exc:
+                            if not ar_layer_warning_emitted:
+                                logger.warning("Arabic wake layer unavailable: %s", exc)
+                                ar_layer_warning_emitted = True
+                            if wake_mode == "arabic":
+                                raise RuntimeError("Arabic wake layer is unavailable in arabic-only mode.") from exc
+                            arabic_layer_enabled = False
+                            ar_future = None
+                            continue
+                        except Exception as exc:
+                            logger.warning("Arabic wake STT check failed: %s", exc)
+                            _register_arabic_hit(
+                                hit_detected=False,
+                                now_ts=now,
+                                required_hits=ar_required_hits,
+                                confirm_window_seconds=ar_confirm_window,
+                            )
+                            ar_future = None
+                            continue
+
+                        matched_trigger = _match_arabic_trigger(transcript, arabic_triggers)
+                        triggered = _register_arabic_hit(
+                            hit_detected=bool(matched_trigger),
+                            now_ts=now,
+                            required_hits=ar_required_hits,
+                            confirm_window_seconds=ar_confirm_window,
                         )
-                        last_debug_ts = now
 
-                if score is not None and score > wake_threshold:
-                    now = time.perf_counter()
-                    if now - _last_detection_ts < wake_cooldown:
+                        if WAKE_WORD_SCORE_DEBUG and transcript:
+                            print(
+                                f"[WakeWord][AR] transcript={transcript!r} "
+                                f"trigger={matched_trigger or 'none'}"
+                            )
+
+                        ar_future = None
+                        if matched_trigger and triggered:
+                            if now - _last_detection_ts < wake_cooldown:
+                                continue
+                            _last_detection_ts = now
+                            print(f"[WakeWord] Wake word detected (phrase): {matched_trigger}")
+                            return "phrase"
+
+                    if ar_future is not None:
+                        if (
+                            not ar_slow_inference_warning_emitted
+                            and (now - ar_future_started_ts) >= ar_max_inference_seconds
+                        ):
+                            logger.warning(
+                                "Arabic wake STT is slower than realtime (%.2fs). "
+                                "Set JARVIS_WAKE_WORD_AR_STT_MODEL=tiny for faster wake checks.",
+                                now - ar_future_started_ts,
+                            )
+                            ar_slow_inference_warning_emitted = True
                         continue
-                    _last_detection_ts = now
-                    print("[WakeWord] Wake word detected (english).")
-                    return "english"
 
-            if arabic_layer_enabled:
-                ar_ring.append(audio_chunk.copy())
-                now = time.perf_counter()
-                if now - last_ar_check_ts < float(ar_interval_seconds):
-                    continue
-                last_ar_check_ts = now
-
-                window = np.concatenate(list(ar_ring), axis=0).astype(np.int16, copy=False)
-                if window.shape[0] > ar_samples:
-                    window = window[-ar_samples:]
-
-                try:
-                    transcript = _transcribe_arabic_window(window, ar_model_name)
-                except RuntimeError as exc:
-                    if not ar_layer_warning_emitted:
-                        logger.warning("Arabic wake layer unavailable: %s", exc)
-                        ar_layer_warning_emitted = True
-                    if wake_mode == "arabic":
-                        raise RuntimeError("Arabic wake layer is unavailable in arabic-only mode.") from exc
-                    arabic_layer_enabled = False
-                    continue
-                except Exception as exc:
-                    logger.warning("Arabic wake STT check failed: %s", exc)
-                    _register_arabic_hit(
-                        hit_detected=False,
-                        now_ts=now,
-                        required_hits=ar_required_hits,
-                        confirm_window_seconds=ar_confirm_window,
-                    )
-                    continue
-
-                matched_trigger = _match_arabic_trigger(transcript, arabic_triggers)
-                triggered = _register_arabic_hit(
-                    hit_detected=bool(matched_trigger),
-                    now_ts=now,
-                    required_hits=ar_required_hits,
-                    confirm_window_seconds=ar_confirm_window,
-                )
-
-                if WAKE_WORD_SCORE_DEBUG and transcript:
-                    print(
-                        f"[WakeWord][AR] transcript={transcript!r} "
-                        f"trigger={matched_trigger or 'none'}"
-                    )
-
-                if matched_trigger and triggered:
-                    if now - _last_detection_ts < wake_cooldown:
+                    if now - last_ar_check_ts < float(ar_interval_seconds):
                         continue
-                    _last_detection_ts = now
-                    print(f"[WakeWord] Wake word detected (phrase): {matched_trigger}")
-                    return "phrase"
+                    last_ar_check_ts = now
+
+                    window = np.concatenate(list(ar_ring), axis=0).astype(np.int16, copy=False)
+                    if window.shape[0] > ar_samples:
+                        window = window[-ar_samples:]
+
+                    if ar_executor is not None:
+                        ar_future_started_ts = now
+                        ar_future = ar_executor.submit(_transcribe_arabic_window, window, ar_model_name)
+    finally:
+        if ar_executor is not None:
+            ar_executor.shutdown(wait=False, cancel_futures=True)

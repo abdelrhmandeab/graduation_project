@@ -15,6 +15,8 @@ from core.config import (
     TTS_EDGE_MIXED_SCRIPT_CHUNKING,
     TTS_EDGE_MIXED_SCRIPT_MAX_CHUNKS,
     TTS_EDGE_MIXED_SCRIPT_MAX_TEXT_LENGTH,
+    TTS_EDGE_ARABIC_VOICE,
+    TTS_EDGE_ARABIC_VOICE_FALLBACKS,
     TTS_EDGE_RATE,
     TTS_EDGE_VOICE,
     TTS_ELEVENLABS_ARABIC_ENABLED,
@@ -673,7 +675,10 @@ class SpeechEngine:
                 if arabic_preferred:
                     if self._speak_elevenlabs_arabic(spoken_text):
                         return
-                    logger.warning("ElevenLabs Arabic TTS unavailable; Arabic Edge fallback disabled by policy")
+                    logger.info("ElevenLabs Arabic TTS unavailable; falling back to edge-tts (ar-EG-SalmaNeural)")
+                    if self._speak_edge_tts(spoken_text, preferred_language="ar"):
+                        return
+                    logger.warning("Edge-TTS Arabic synthesis also failed; using console fallback")
                     self._speak_console(spoken_text, prefix="Arabic TTS fallback")
                     return
 
@@ -685,8 +690,9 @@ class SpeechEngine:
 
             if backend == "edge_tts":
                 if arabic_preferred:
-                    logger.warning("Edge-TTS backend is English-only; skipping Arabic utterance")
-                    self._speak_console(spoken_text, prefix="Edge-TTS Arabic-disabled")
+                    if self._speak_edge_tts(spoken_text, preferred_language="ar"):
+                        return
+                    self._speak_console(spoken_text, prefix="Edge-TTS Arabic fallback")
                     return
 
                 if self._speak_edge_tts(spoken_text, preferred_language="en"):
@@ -882,7 +888,21 @@ class SpeechEngine:
         with self._lock:
             unsupported = set(self._edge_tts_unsupported_voices)
 
-        candidates = [configured_voice]
+        # Pick Arabic voices when the text/preferred language calls for Arabic.
+        # This is the offline fallback when ElevenLabs is unavailable.
+        wants_arabic = self._is_arabic_preferred_text(
+            normalized_text, preferred_language=preferred_language,
+        )
+        if wants_arabic:
+            primary_arabic = str(TTS_EDGE_ARABIC_VOICE or "").strip() or "ar-EG-SalmaNeural"
+            arabic_fallbacks = [
+                str(v or "").strip()
+                for v in (TTS_EDGE_ARABIC_VOICE_FALLBACKS or ())
+                if str(v or "").strip()
+            ]
+            candidates = [primary_arabic] + arabic_fallbacks
+        else:
+            candidates = [configured_voice]
 
         deduped = []
         seen = set()
