@@ -161,6 +161,78 @@ def _should_skip_nlu_llm_query(parser_candidate):
     return intent == "LLM_QUERY" and not NLU_LLM_QUERY_EXTRACTION_ENABLED
 
 
+_APP_NAME_LOOKUP_CACHE = None
+
+
+def _build_app_alias_lookup():
+    """Build a sorted (longest-first) list of (alias_lower, canonical_name) from the app catalog."""
+    global _APP_NAME_LOOKUP_CACHE
+    if _APP_NAME_LOOKUP_CACHE is not None:
+        return _APP_NAME_LOOKUP_CACHE
+    try:
+        from os_control.app_ops import _APP_CATALOG
+    except Exception:
+        _APP_NAME_LOOKUP_CACHE = []
+        return _APP_NAME_LOOKUP_CACHE
+    pairs = []
+    for entry in _APP_CATALOG.values():
+        canonical = str(entry.get("canonical_name") or "").strip()
+        if not canonical:
+            continue
+        for alias in entry.get("aliases", []):
+            alias_str = str(alias or "").strip().lower()
+            if alias_str:
+                pairs.append((alias_str, canonical))
+        # Also include the canonical name itself as a self-match
+        pairs.append((canonical.lower(), canonical))
+    # Sort longest-alias first so "google chrome" wins over "chrome"
+    pairs.sort(key=lambda p: -len(p[0]))
+    _APP_NAME_LOOKUP_CACHE = pairs
+    return _APP_NAME_LOOKUP_CACHE
+
+
+def _extract_app_name_from_text(source_text):
+    """Scan `source_text` for any known app alias (longest match wins).
+
+    Returns the canonical app name or empty string. Used when the semantic
+    router classifies an utterance as OS_APP_OPEN/OS_APP_CLOSE but the regex
+    parser couldn't extract a structured app_name (filler words, code-switching).
+    """
+    raw = str(source_text or "").lower()
+    if not raw:
+        return ""
+    # Strip punctuation that breaks word-boundary matches (e.g. "Notepad?",
+    # "Notepad,", "Notepad."). Keep only Latin letters, digits, Arabic letters,
+    # and whitespace.
+    cleaned = re.sub(r"[^\w؀-ۿ\s]", " ", raw, flags=re.UNICODE)
+    cleaned = " ".join(cleaned.split()).strip()
+    if not cleaned:
+        return ""
+    padded = " " + cleaned + " "
+    for alias, canonical in _build_app_alias_lookup():
+        if (" " + alias + " ") in padded:
+            return canonical
+    return ""
+
+
+_PLAY_MUSIC_INTENT_MARKERS = (
+    "play music", "play some music", "start music", "start playing",
+    "resume music", "resume playback", "play song", "play songs",
+    "شغل موسيقى", "شغل الموسيقى", "شغل اغاني", "شغل أغاني", "شغل المزيكا",
+    "شغّل الموسيقى", "شغل اغنية", "شغل أغنية", "تشغيل الموسيقى",
+)
+
+
+def _looks_like_play_music_request(source_text):
+    text = " ".join(str(source_text or "").lower().split()).strip()
+    if not text:
+        return False
+    return any(marker in text for marker in _PLAY_MUSIC_INTENT_MARKERS)
+
+
+_MUSIC_APP_CANONICAL_NAMES = {"Spotify", "VLC", "Windows Media Player", "iTunes", "YouTube Music"}
+
+
 def _try_semantic_routing(source_text, parser_candidate):
     """Tier 2: Semantic embedding similarity for paraphrase-tolerant intent matching.
 
@@ -218,12 +290,23 @@ def _try_semantic_routing(source_text, parser_candidate):
 
     # Build a ParsedCommand from the semantic intent with args from parser
     normalized = " ".join(str(source_text or "").lower().split()).strip()
+    args = dict(reparsed.args or {}) if reparsed_intent == semantic_intent else {}
+    action = reparsed.action if reparsed_intent == semantic_intent else ""
+
+    # When semantic intent is an app open/close but regex couldn't extract a
+    # structured app_name (filler words, code-switching, mid-sentence app name),
+    # scan the source text against the known app catalog.
+    if semantic_intent in {"OS_APP_OPEN", "OS_APP_CLOSE"} and not args.get("app_name"):
+        extracted = _extract_app_name_from_text(source_text)
+        if extracted:
+            args["app_name"] = extracted
+
     parsed = ParsedCommand(
         intent=semantic_intent,
         raw=source_text,
         normalized=normalized,
-        action=reparsed.action if reparsed_intent == semantic_intent else "",
-        args=dict(reparsed.args or {}) if reparsed_intent == semantic_intent else {},
+        action=action,
+        args=args,
     )
     meta["semantic_accepted"] = True
     return parsed, meta
@@ -280,6 +363,53 @@ _KEYWORD_NLP_SCREENSHOT_EXPLICIT_MARKERS = {
     "صورة للشاشة",
 }
 _KEYWORD_NLP_INFORMATIONAL_QUERY_MARKERS = {
+    # Generic question stems — informational queries should NEVER be hijacked
+    # by fuzzy-matched app-open / URL intents.
+    "tell me",
+    "tell me about",
+    "what is",
+    "what's",
+    "what are",
+    "who is",
+    "who's",
+    "who are",
+    "where is",
+    "where are",
+    "when is",
+    "when did",
+    "when was",
+    "why is",
+    "why are",
+    "how is",
+    "how are",
+    "how does",
+    "how do",
+    "explain",
+    "describe",
+    "define",
+    "احكيلي",
+    "اخبرني",
+    "اخبرنى",
+    "أخبرني",
+    "خبرني",
+    "حدثني",
+    "حدّثني",
+    "اشرح",
+    "اشرحلي",
+    "اشرح لي",
+    "ايه هو",
+    "ايه هي",
+    "إيه هو",
+    "إيه هي",
+    "مين هو",
+    "مين هي",
+    "ما هو",
+    "ما هي",
+    "ماذا",
+    "كيف",
+    "ليش",
+    "لماذا",
+    # Weather / news / price markers (existing)
     "weather",
     "forecast",
     "temperature",
@@ -364,24 +494,21 @@ def _map_keyword_nlp_intent_to_command(source_text, nlp_result):
         return None
 
     normalized = " ".join(str(source_text or "").lower().split()).strip()
+
+    # Informational queries ("tell me about X", "what is Y", "احكيلي", etc.) must
+    # never be hijacked by fuzzy-matched app/URL intents — those go to LLM/search.
+    is_informational = _looks_keyword_nlp_informational_query(source_text)
+
     target_url = _KEYWORD_NLP_URL_INTENT_MAP.get(intent_name)
     if target_url:
+        if is_informational:
+            return None
+        # Require the target keyword to appear in the user's actual source text.
+        # The matched_keywords list can contain fuzzy matches (e.g. "you tube"
+        # matched against the word "you" in "Can you tell me..."), so trusting
+        # it as a fallback lets unrelated questions hijack the URL launcher.
         required_markers = set(_KEYWORD_NLP_URL_INTENT_REQUIRED_MARKERS.get(intent_name) or set())
-        if required_markers:
-            matched_compact = " ".join(
-                " ".join(str(keyword or "").lower().split())
-                for keyword in matched_keywords
-            )
-            has_required_marker = any(
-                marker in normalized or marker in matched_compact
-                for marker in required_markers
-            )
-            if not has_required_marker:
-                return None
-
-        # Guard against fuzzy false-positives (for example weather/news questions
-        # being misread as open_google) and let LLM/search routing handle them.
-        if _looks_keyword_nlp_informational_query(source_text):
+        if required_markers and not any(marker in normalized for marker in required_markers):
             return None
         return ParsedCommand(
             intent="OS_SYSTEM_COMMAND",
@@ -392,6 +519,8 @@ def _map_keyword_nlp_intent_to_command(source_text, nlp_result):
 
     app_name = _KEYWORD_NLP_APP_OPEN_INTENT_MAP.get(intent_name)
     if app_name:
+        if is_informational:
+            return None
         return ParsedCommand(
             intent="OS_APP_OPEN",
             raw=source_text,
@@ -2382,7 +2511,36 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
                 resolution.get("candidates") or [],
             )
             return True, prompt, {"clarification_payload": payload}
-        return to_router_tuple(open_app_result(app_name))
+        open_result = open_app_result(app_name)
+        success, message, dispatch_meta = to_router_tuple(open_result)
+
+        # When the user said "play music on Spotify" (or similar) and we just
+        # opened a music app, give the app a moment to focus then send the
+        # global media play/pause key so Spotify actually starts playback.
+        if success and _looks_like_play_music_request(parsed.raw):
+            resolved_canonical = ""
+            try:
+                resolved_canonical = str(resolution.get("canonical_name") or app_name).strip()
+            except Exception:
+                resolved_canonical = app_name
+            if resolved_canonical and any(
+                marker.lower() in resolved_canonical.lower()
+                for marker in _MUSIC_APP_CANONICAL_NAMES
+            ):
+                import time as _time, threading as _threading
+
+                def _send_play_key():
+                    _time.sleep(2.0)  # let Spotify focus before media key fires
+                    try:
+                        request_system_command_result("media_play_pause")
+                    except Exception as exc:
+                        logger.debug("Auto play_music chain failed: %s", exc)
+
+                _threading.Thread(target=_send_play_key, daemon=True).start()
+                if dispatch_meta is None:
+                    dispatch_meta = {}
+                dispatch_meta = {**dispatch_meta, "play_music_chain": True}
+        return success, message, dispatch_meta
 
     if parsed.intent == "OS_APP_CLOSE":
         app_name = parsed.args.get("app_name", "")

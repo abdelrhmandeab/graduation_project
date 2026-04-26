@@ -24,6 +24,52 @@ _runtime_lightweight_num_ctx = None
 # Sentence boundary characters for streaming sentence detection
 _SENTENCE_END_RE = re.compile(r"(?<=[.!?؟\n])\s+|(?<=[.!?؟])$")
 
+# qwen3 family emits <think>...</think> reasoning blocks that burn predict tokens
+# and (depending on Ollama version) leak into the response field. Strip them.
+_THINK_TAG_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
+
+
+def _is_thinking_mode_model(model_name):
+    """Return True for models with internal reasoning that should be suppressed."""
+    name = str(model_name or "").strip().lower()
+    return name.startswith("qwen3:") or name == "qwen3"
+
+
+def _strip_thinking_tags(text):
+    """Remove <think>...</think> blocks (closed) and orphan opening tags from streamed text."""
+    if not text:
+        return text
+    cleaned = _THINK_TAG_RE.sub("", str(text))
+    # Drop everything before an unclosed <think>...EOF (rare partial chunks)
+    if "<think>" in cleaned and "</think>" not in cleaned:
+        cleaned = cleaned.split("<think>", 1)[0]
+    # Drop everything before a stray </think> (model leaked partial reasoning)
+    if "</think>" in cleaned:
+        cleaned = cleaned.split("</think>", 1)[1]
+    return cleaned.strip()
+
+
+def _build_request_payload(model_name, prompt, num_ctx, stream):
+    """Construct an Ollama /api/generate payload, suppressing thinking when needed.
+
+    Adds keep_alive=30m so the model stays resident in RAM between user queries
+    (default Ollama keep_alive is 5m which causes cold-loads after a brief idle).
+    """
+    effective_prompt = str(prompt or "")
+    payload = {
+        "model": model_name,
+        "prompt": effective_prompt,
+        "stream": bool(stream),
+        "keep_alive": "30m",
+        "options": {"num_ctx": int(num_ctx)},
+    }
+    if _is_thinking_mode_model(model_name):
+        # Belt-and-suspenders: top-level think flag (Ollama 0.9+) + prompt suffix
+        payload["think"] = False
+        if "/no_think" not in effective_prompt:
+            payload["prompt"] = effective_prompt.rstrip() + "\n\n/no_think"
+    return payload
+
 
 def set_runtime_model(model_name, num_ctx=None, lightweight_num_ctx=None):
     """Called once at startup after hardware detection to lock in runtime LLM settings."""
@@ -97,16 +143,15 @@ def ask_llm_streaming(prompt, on_sentence=None, num_ctx=None):
     hard_timeout_seconds = max(5.0, float(LLM_TIMEOUT_SECONDS or 30.0))
     hard_timeout_hit = False
 
+    effective_num_ctx = int(num_ctx or _runtime_num_ctx or LLM_OLLAMA_NUM_CTX)
+    payload = _build_request_payload(model_name, prompt, effective_num_ctx, stream=True)
+    suppress_thinking = _is_thinking_mode_model(model_name)
+    inside_think_block = False
     try:
         with httpx.stream(
             "POST",
             _GENERATE_ENDPOINT,
-            json={
-                "model": model_name,
-                "prompt": prompt,
-                "stream": True,
-                "options": {"num_ctx": int(num_ctx or _runtime_num_ctx or LLM_OLLAMA_NUM_CTX)},
-            },
+            json=payload,
             timeout=LLM_TIMEOUT_SECONDS,
         ) as stream_response:
             if stream_response.status_code != 200:
@@ -142,6 +187,29 @@ def ask_llm_streaming(prompt, on_sentence=None, num_ctx=None):
                 except Exception:
                     continue
                 token = chunk.get("response") or ""
+                if token and suppress_thinking:
+                    # Drop tokens that fall inside a <think>...</think> block so
+                    # reasoning never reaches TTS or the user-visible transcript.
+                    while token:
+                        if inside_think_block:
+                            close_idx = token.find("</think>")
+                            if close_idx == -1:
+                                token = ""  # whole chunk is reasoning, skip
+                                break
+                            token = token[close_idx + len("</think>"):]
+                            inside_think_block = False
+                        else:
+                            open_idx = token.find("<think>")
+                            if open_idx == -1:
+                                break
+                            # Emit any content before the opening tag, then enter block
+                            pre = token[:open_idx]
+                            token = token[open_idx + len("<think>"):]
+                            inside_think_block = True
+                            if pre:
+                                accumulated.append(pre)
+                                sentence_buf += pre
+                                sentence_buf = _flush_sentence_buffer(sentence_buf, on_sentence)
                 if token:
                     accumulated.append(token)
                     sentence_buf += token
@@ -201,17 +269,12 @@ def ask_llm(prompt, num_ctx=None):
     success = False
     try:
         model_name = _resolve_model_name()
+        effective_num_ctx = int(num_ctx or _runtime_num_ctx or LLM_OLLAMA_NUM_CTX)
+        payload = _build_request_payload(model_name, prompt, effective_num_ctx, stream=False)
         try:
             response = httpx.post(
                 _GENERATE_ENDPOINT,
-                json={
-                    "model": model_name,
-                    "prompt": prompt,
-                    "stream": False,
-                    "options": {
-                        "num_ctx": int(num_ctx or _runtime_num_ctx or LLM_OLLAMA_NUM_CTX),
-                    },
-                },
+                json=payload,
                 timeout=LLM_TIMEOUT_SECONDS,
             )
         except httpx.TimeoutException:
@@ -233,6 +296,8 @@ def ask_llm(prompt, num_ctx=None):
         if response.status_code == 200:
             data = response.json()
             text = (data.get("response") or "").strip()
+            if _is_thinking_mode_model(model_name):
+                text = _strip_thinking_tags(text)
             if text:
                 success = True
                 return text

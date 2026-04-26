@@ -72,6 +72,21 @@ _LATIN_CHAR_RE = re.compile(r"[A-Za-z]")
 _LAST_STT_LANGUAGE_CONFIDENCE = 0.0
 _OLLAMA_AUTOSTART_PROCESS = None
 
+# Match transcripts that are pure non-speech annotations from ElevenLabs/Whisper
+# (e.g. "[صوت انطلاق سيارة]", "[music]", "[laughter]", "(silence)") — these
+# should never reach the parser/clarification system. Several common forms.
+_STT_ANNOTATION_RE = re.compile(
+    r"^\s*[\[\(\<]\s*[^\]\)\>]{0,80}\s*[\]\)\>]\s*\.?\s*$",
+    re.UNICODE,
+)
+
+
+def _is_stt_annotation_only(text):
+    value = " ".join(str(text or "").split()).strip()
+    if not value:
+        return False
+    return bool(_STT_ANNOTATION_RE.match(value))
+
 
 def _resolve_stt_language_hint(*, wake_source=None):
     _ = wake_source
@@ -361,6 +376,11 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_s
         metrics.record_stage("stt", time.perf_counter() - stt_started, success=bool(text))
         if not text:
             logger.warning("No valid speech detected")
+            return
+        # Skip non-speech annotation-only transcripts (e.g. "[صوت انطلاق سيارة]",
+        # "[music]") before they reach the parser and trigger a clarification.
+        if _is_stt_annotation_only(text):
+            logger.info("Skipping non-speech STT annotation: %s", _safe_log_text(text))
             return
         logger.info("Transcript[%s]: %s", detected_language or "unknown", _safe_log_text(text))
 

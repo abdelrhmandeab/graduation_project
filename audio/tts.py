@@ -1305,11 +1305,8 @@ class SpeechEngine:
         if not normalized_text:
             return False
 
-        arabic_preferred = self._is_arabic_preferred_text(normalized_text, preferred_language=preferred_language)
-        if arabic_preferred:
-            logger.info("Edge-TTS Arabic synthesis skipped (English-only policy)")
-            return False
-
+        # Phase 5.3: Arabic synthesis is supported via ar-EG-SalmaNeural and the
+        # configured fallback voices. The legacy English-only gate has been removed.
         voice_candidates = self._edge_tts_voice_candidates(normalized_text, preferred_language=preferred_language)
         edge_rate = str(TTS_EDGE_RATE or "+0%").strip() or "+0%"
         edge_pitch = ""
