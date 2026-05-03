@@ -20,7 +20,57 @@ def handle(parsed):
             f"storage_dir: {status['storage_dir']}",
             f"source_state_file: {status['source_state_file']}",
         ]
+        auto_sync = status.get("auto_sync") or {}
+        lines.extend(
+            [
+                f"auto_sync_enabled: {auto_sync.get('enabled')}",
+                f"auto_sync_running: {auto_sync.get('running')}",
+                f"auto_sync_interval_seconds: {auto_sync.get('interval_seconds')}",
+                f"auto_sync_roots: {auto_sync.get('roots')}",
+            ]
+        )
         return True, "\n".join(lines), {}
+
+    if action == "autosync_status":
+        status = knowledge_base_service.auto_sync_status()
+        lines = [
+            "Knowledge Base Auto-Sync Status",
+            f"enabled: {status.get('enabled')}",
+            f"running: {status.get('running')}",
+            f"interval_seconds: {status.get('interval_seconds')}",
+            f"roots: {status.get('roots')}",
+            f"last_run_ts: {status.get('last_run_ts')}",
+            f"last_changes: {status.get('last_changes')}",
+            f"last_error: {status.get('last_error') or 'none'}",
+        ]
+        return True, "\n".join(lines), {"kb_auto_sync": status}
+
+    if action == "autosync_on":
+        ok, message = knowledge_base_service.set_auto_sync(True)
+        log_action("kb_autosync_on", "success" if ok else "failed")
+        return ok, message, {}
+
+    if action == "autosync_off":
+        ok, message = knowledge_base_service.set_auto_sync(False)
+        log_action("kb_autosync_off", "success" if ok else "failed")
+        return ok, message, {}
+
+    if action == "autosync_toggle":
+        mode = str(args.get("mode") or "").strip().lower()
+        if mode == "on":
+            ok, message = knowledge_base_service.set_auto_sync(True)
+            log_action("kb_autosync_on", "success" if ok else "failed")
+            return ok, message, {}
+        if mode == "off":
+            ok, message = knowledge_base_service.set_auto_sync(False)
+            log_action("kb_autosync_off", "success" if ok else "failed")
+            return ok, message, {}
+        if mode == "status":
+            status = knowledge_base_service.auto_sync_status()
+            return True, f"KB auto-sync: enabled={status.get('enabled')} running={status.get('running')}", {
+                "kb_auto_sync": status
+            }
+        return False, "Unsupported autosync mode.", {}
 
     if action == "add_file":
         path = args.get("path", "")

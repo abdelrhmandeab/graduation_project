@@ -16,6 +16,14 @@ from os_control.adapter_result import (
     to_legacy_pair,
 )
 from os_control.confirmation import confirmation_manager
+from os_control.native_ops import (
+    adjust_system_volume_percent,
+    capture_primary_screen_screenshot,
+    lock_workstation,
+    set_system_volume_percent,
+    sleep_system,
+    toggle_system_mute,
+)
 from os_control.policy import policy_engine
 from os_control.powershell_bridge import run_template
 from os_control.risk_policy import risk_tier_for_system
@@ -938,6 +946,67 @@ def _run_system_template_with_safe_retry(template_name, destructive, env_overrid
     return False, last_error, "", attempts
 
 
+def _run_native_volume_command(action_key, normalized_args):
+    """Try native Windows volume control before falling back to PowerShell.
+
+    Returns:
+        tuple[bool, str, dict] - (success, message, debug_info)
+    """
+    if action_key == "volume_set":
+        level = int(normalized_args.get("volume_level", 50))
+        ok = set_system_volume_percent(level)
+        if ok:
+            return True, f"Volume set to {level}%.", {"method": "native_volume", "level": level}
+        return False, "", {}
+
+    if action_key == "volume_up":
+        ok, new_level = adjust_system_volume_percent(10)
+        if ok and new_level is not None:
+            return True, f"Volume increased to {new_level}%.", {"method": "native_volume", "level": new_level}
+        return False, "", {}
+
+    if action_key == "volume_down":
+        ok, new_level = adjust_system_volume_percent(-10)
+        if ok and new_level is not None:
+            return True, f"Volume decreased to {new_level}%.", {"method": "native_volume", "level": new_level}
+        return False, "", {}
+
+    if action_key == "volume_mute":
+        ok, new_level = toggle_system_mute()
+        if ok:
+            if new_level == 0:
+                return True, "Volume muted.", {"method": "native_volume", "level": 0}
+            return True, f"Volume restored to {new_level}%.", {"method": "native_volume", "level": new_level}
+        return False, "", {}
+
+    return False, "", {}
+
+
+def _run_native_system_command(action_key):
+    """Try native Windows APIs for simple system actions.
+
+    Returns:
+        tuple[bool, str, dict] - (success, message, debug_info)
+    """
+    if action_key == "lock":
+        if lock_workstation():
+            return True, "Locking this computer.", {"method": "native_lock"}
+        return False, "", {}
+
+    if action_key == "sleep":
+        if sleep_system():
+            return True, "Putting this computer to sleep.", {"method": "native_sleep"}
+        return False, "", {}
+
+    if action_key == "screenshot":
+        path = capture_primary_screen_screenshot()
+        if path:
+            return True, f"Screenshot saved to {path}", {"method": "native_screenshot", "path": path}
+        return False, "", {}
+
+    return False, "", {}
+
+
 def execute_system_command_result(action_key, command_args=None):
     if action_key not in SYSTEM_COMMANDS:
         return failure_result("Unsupported system command.", error_code="unsupported_action")
@@ -958,6 +1027,19 @@ def execute_system_command_result(action_key, command_args=None):
             details={"action": action_key, "reason": "destructive_disabled"},
         )
         return failure_result(msg, error_code="destructive_disabled", debug_info={"action": action_key})
+
+    # Native-first volume/brightness control (falls through to PowerShell if unavailable)
+    if action_key in {"volume_up", "volume_down", "volume_mute", "volume_set"}:
+        native_ok, native_msg, native_debug = _run_native_volume_command(action_key, normalized_args)
+        if native_ok:
+            log_action("system_command", "success", details={"action": action_key, **native_debug})
+            return success_result(native_msg, debug_info={"action": action_key, **native_debug})
+
+    if action_key in {"lock", "sleep", "screenshot"}:
+        native_ok, native_msg, native_debug = _run_native_system_command(action_key)
+        if native_ok:
+            log_action("system_command", "success", details={"action": action_key, **native_debug})
+            return success_result(native_msg, debug_info={"action": action_key, **native_debug})
 
     # Python-first brightness control (falls through to PowerShell if unavailable)
     if action_key in {"brightness_up", "brightness_down", "brightness_set"} and _SBC_AVAILABLE:

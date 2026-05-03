@@ -20,9 +20,13 @@ _GENERATE_ENDPOINT = f"{_OLLAMA_BASE_URL}/api/generate"
 _runtime_model = None
 _runtime_num_ctx = None
 _runtime_lightweight_num_ctx = None
+_runtime_model_tier = None  # Track tier for tiered prompt selection
 
 # Sentence boundary characters for streaming sentence detection
 _SENTENCE_END_RE = re.compile(r"(?<=[.!?؟\n])\s+|(?<=[.!?؟])$")
+_ARABIC_CHAR_RE = re.compile(r"[\u0600-\u06FF]")
+_STREAM_FLUSH_WORDS = 7
+_STREAM_FLUSH_CHARS = 90
 
 # qwen3 family emits <think>...</think> reasoning blocks that burn predict tokens
 # and (depending on Ollama version) leak into the response field. Strip them.
@@ -71,17 +75,27 @@ def _build_request_payload(model_name, prompt, num_ctx, stream):
     return payload
 
 
-def set_runtime_model(model_name, num_ctx=None, lightweight_num_ctx=None):
-    """Called once at startup after hardware detection to lock in runtime LLM settings."""
-    global _runtime_model, _runtime_num_ctx, _runtime_lightweight_num_ctx
+def set_runtime_model(model_name, num_ctx=None, lightweight_num_ctx=None, tier=None):
+    """Called once at startup after hardware detection to lock in runtime LLM settings.
+    
+    Args:
+        model_name: e.g. "qwen3:4b"
+        num_ctx: Context window size
+        lightweight_num_ctx: Lightweight context size
+        tier: Model tier for prompt selection ("minimal", "low", "medium", "high")
+    """
+    global _runtime_model, _runtime_num_ctx, _runtime_lightweight_num_ctx, _runtime_model_tier
     _runtime_model = str(model_name or "").strip() or None
     if num_ctx is not None:
         _runtime_num_ctx = int(num_ctx)
     if lightweight_num_ctx is not None:
         _runtime_lightweight_num_ctx = int(lightweight_num_ctx)
+    if tier is not None:
+        _runtime_model_tier = str(tier).strip().lower()
     logger.info(
-        "Runtime LLM model set to '%s' (num_ctx=%s, lightweight_num_ctx=%s)",
+        "Runtime LLM model set to '%s' (tier=%s, num_ctx=%s, lightweight_num_ctx=%s)",
         _runtime_model,
+        _runtime_model_tier or "auto",
         _runtime_num_ctx,
         _runtime_lightweight_num_ctx,
     )
@@ -103,6 +117,24 @@ def get_runtime_lightweight_num_ctx(default=None):
     return int(value)
 
 
+def get_runtime_model_tier(default="medium"):
+    """Return the runtime-selected model tier for prompt selection.
+    
+    Args:
+        default: Default tier if not set at runtime (default: "medium")
+        
+    Returns:
+        One of "minimal", "low", "medium", "high"
+    """
+    if _runtime_model_tier:
+        return _runtime_model_tier
+    # Infer tier from runtime model name if available
+    if _runtime_model:
+        from llm.prompt_builder import _get_model_tier
+        return _get_model_tier(_runtime_model)
+    return str(default).strip().lower() or "medium"
+
+
 def _resolve_model_name():
     if _runtime_model:
         return _runtime_model
@@ -115,15 +147,39 @@ def _flush_sentence_buffer(buf, on_sentence):
     text = buf.strip()
     if not text:
         return ""
-    parts = _SENTENCE_END_RE.split(text)
-    if len(parts) <= 1:
-        return buf  # no complete sentence yet
-    # Everything except the last fragment is a complete sentence (or empty)
-    for part in parts[:-1]:
-        sentence = part.strip()
-        if sentence:
-            on_sentence(sentence)
-    return parts[-1]  # leftover fragment
+
+    chunks = detect_sentence_boundaries(text, is_arabic=bool(_ARABIC_CHAR_RE.search(text)))
+    if not chunks:
+        return buf
+
+    for chunk in chunks:
+        if chunk:
+            on_sentence(chunk)
+    return ""
+
+
+def detect_sentence_boundaries(text: str, is_arabic: bool) -> list[str]:
+    """Split streamed text into speakable chunks.
+
+    Arabic text often arrives with weak punctuation, so we keep normal sentence
+    splitting for punctuation and add a conservative forced flush when a chunk is
+    clearly long enough to speak naturally but still has no boundary.
+    """
+    value = str(text or "").strip()
+    if not value:
+        return []
+
+    parts = [part.strip() for part in _SENTENCE_END_RE.split(value) if part.strip()]
+    if len(parts) > 1:
+        return parts
+
+    if is_arabic:
+        word_count = len(value.split())
+        char_count = len(value)
+        if word_count >= _STREAM_FLUSH_WORDS or char_count >= _STREAM_FLUSH_CHARS:
+            return [value]
+
+    return []
 
 
 def ask_llm_streaming(prompt, on_sentence=None, num_ctx=None):

@@ -8,6 +8,7 @@ def _format_status():
         "Policy Status",
         f"profile: {snapshot.get('profile')}",
         f"read_only_mode: {snapshot.get('read_only_mode')}",
+        f"dry_run_mode: {snapshot.get('dry_run_mode')}",
         "permissions:",
     ]
     for key in sorted(snapshot.get("permissions", {})):
@@ -36,6 +37,12 @@ def handle(parsed):
         policy_engine.set_read_only_mode(enabled)
         log_action("policy_set_read_only", "success", details={"enabled": enabled})
         return True, f"Policy read-only mode set to: {enabled}", {}
+
+    if parsed.action == "set_dry_run":
+        enabled = bool(parsed.args.get("enabled"))
+        policy_engine.set_dry_run_mode(enabled)
+        log_action("policy_set_dry_run", "success", details={"enabled": enabled})
+        return True, f"Policy dry-run mode set to: {enabled}", {}
 
     if parsed.action == "set_permission":
         permission = parsed.args.get("permission")

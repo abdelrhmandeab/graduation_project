@@ -207,8 +207,8 @@ _TEMPLATES = {
         "ar": "{bridge} تم تفسير الطلب كـ intent={intent} و action={action}.",
     },
     "confirmation_prompt_base": {
-        "en": "Confirmation required (risk: {risk_tier}) for: {description}. Say `confirm {token}`",
-        "ar": "التأكيد مطلوب (مستوى المخاطر: {risk_tier}) للعملية: {description}. قول `confirm {token}`",
+        "en": "Safety check: this action needs confirmation (risk={risk_tier}). Action: {description}. Reply with `confirm {token}`",
+        "ar": "فحص امان: العملية دي محتاجة تأكيد (المخاطر={risk_tier}). العملية: {description}. اكتب `confirm {token}`",
     },
     "confirmation_prompt_second_factor": {
         "en": " and provide PIN/passphrase as second factor.",
@@ -217,6 +217,10 @@ _TEMPLATES = {
     "confirmation_prompt_timeout": {
         "en": " within {timeout_seconds} seconds.",
         "ar": " خلال {timeout_seconds} ثانية.",
+    },
+    "dry_run_action_blocked": {
+        "en": "Dry-run mode is ON. I simulated this action and skipped execution: {description}",
+        "ar": "وضع التجربة شغال. حاكيت العملية ومش نفذتها: {description}",
     },
 }
 

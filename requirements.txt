@@ -49,5 +49,8 @@ sentence-transformers>=3.0.0,<5.0.0
 duckduckgo-search>=7.0.0
 ddgs>=9.0.0
 
+# Filesystem event watching for KB auto-sync (preferred over polling)
+watchdog>=3.0.0
+
 # Windows COM integrations (Outlook draft/calendar + Search Index acceleration)
 pywin32>=306; platform_system == "Windows"

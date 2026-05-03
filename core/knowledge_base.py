@@ -9,6 +9,9 @@ import numpy as np
 
 from core.config import (
     KB_BLOCKED_CONTEXT_PATTERNS,
+    KB_AUTO_SYNC_ENABLED,
+    KB_AUTO_SYNC_INTERVAL_SECONDS,
+    KB_AUTO_SYNC_PATHS,
     KB_CHUNK_OVERLAP,
     KB_CHUNK_SIZE,
     KB_EMBEDDING_DIM,
@@ -38,6 +41,16 @@ try:
     from sentence_transformers import SentenceTransformer  # type: ignore
 except Exception:
     SentenceTransformer = None
+
+try:
+    from watchdog.observers import Observer
+    from watchdog.events import FileSystemEventHandler
+
+    _WATCHDOG_AVAILABLE = True
+except Exception:
+    Observer = None
+    FileSystemEventHandler = object
+    _WATCHDOG_AVAILABLE = False
 
 _TOKEN_RE = re.compile(r"[a-zA-Z0-9_]+")
 _SUSPICIOUS_PREFIX_RE = re.compile(r"^\s*(system|assistant|developer)\s*:\s*", flags=re.IGNORECASE)
@@ -149,6 +162,28 @@ class KnowledgeBaseService:
         self._source_state = {}
         self._vectors_file = os.path.join(KB_STORAGE_DIR, "vectors.npy")
         self._initialized = False
+        self._auto_sync_enabled = bool(KB_AUTO_SYNC_ENABLED)
+        self._auto_sync_interval_seconds = max(1.0, float(KB_AUTO_SYNC_INTERVAL_SECONDS or 4.0))
+        self._auto_sync_roots = [
+            os.path.abspath(os.path.expanduser(path))
+            for path in (KB_AUTO_SYNC_PATHS or [])
+            if str(path or "").strip()
+        ]
+        self._auto_sync_thread = None
+        self._auto_sync_stop_event = threading.Event()
+        self._auto_sync_last_signature = ""
+        self._auto_sync_last_run_ts = 0.0
+        self._auto_sync_last_error = ""
+        self._auto_sync_last_changes = {
+            "indexed_files": 0,
+            "skipped_files": 0,
+            "removed_files": 0,
+        }
+        # Watchdog-related fields (optional, fallback to polling loop)
+        self._watchdog_observer = None
+        self._watchdog_handlers = []
+        self._watchdog_debounce_timer = None
+        self._watchdog_debounce_lock = threading.Lock()
 
     def _ensure_initialized(self):
         if self._initialized:
@@ -159,6 +194,256 @@ class KnowledgeBaseService:
             os.makedirs(KB_STORAGE_DIR, exist_ok=True)
             self._load_from_disk()
             self._initialized = True
+            if self._auto_sync_enabled and self._auto_sync_roots:
+                self.start_auto_sync()
+
+    def _iter_supported_files(self, root_path):
+        for current_root, _, files in os.walk(root_path):
+            for name in files:
+                if not _is_supported_knowledge_file(name):
+                    continue
+                yield os.path.abspath(os.path.join(current_root, name))
+
+    def _path_signature(self, roots):
+        rows = []
+        for root in roots:
+            if not os.path.isdir(root):
+                continue
+            for path in self._iter_supported_files(root):
+                try:
+                    stat = os.stat(path)
+                    rows.append(f"{path}|{int(stat.st_mtime)}|{int(stat.st_size)}")
+                except Exception:
+                    continue
+        payload = "\n".join(sorted(rows))
+        return sha1(payload.encode("utf-8")).hexdigest()
+
+    def _auto_sync_loop(self):
+        logger.info(
+            "KB auto-sync worker started (roots=%s, interval=%.1fs)",
+            self._auto_sync_roots,
+            self._auto_sync_interval_seconds,
+        )
+        while not self._auto_sync_stop_event.is_set():
+            try:
+                roots = list(self._auto_sync_roots)
+                if roots:
+                    signature = self._path_signature(roots)
+                    if signature != self._auto_sync_last_signature:
+                        indexed_total = 0
+                        skipped_total = 0
+                        removed_total = 0
+                        for root in roots:
+                            ok, message, indexed_files, skipped_files, removed_files = self.sync_directory(root)
+                            if not ok:
+                                self._auto_sync_last_error = str(message or "sync_failed")
+                                logger.warning("KB auto-sync failed for %s: %s", root, message)
+                                continue
+                            indexed_total += int(indexed_files or 0)
+                            skipped_total += int(skipped_files or 0)
+                            removed_total += int(removed_files or 0)
+
+                        self._auto_sync_last_signature = signature
+                        self._auto_sync_last_changes = {
+                            "indexed_files": indexed_total,
+                            "skipped_files": skipped_total,
+                            "removed_files": removed_total,
+                        }
+                        self._auto_sync_last_run_ts = time.time()
+            except Exception as exc:
+                self._auto_sync_last_error = str(exc)
+                logger.warning("KB auto-sync loop failed: %s", exc)
+
+            self._auto_sync_stop_event.wait(self._auto_sync_interval_seconds)
+
+        logger.info("KB auto-sync worker stopped")
+
+    # --- Watchdog support (preferred when available) ---------------------
+    def _schedule_watch_sync(self, delay_seconds=0.25):
+        # Debounce rapid filesystem events and run a single directory sync.
+        with self._watchdog_debounce_lock:
+            if self._watchdog_debounce_timer:
+                try:
+                    self._watchdog_debounce_timer.cancel()
+                except Exception:
+                    pass
+            self._watchdog_debounce_timer = threading.Timer(delay_seconds, self._run_watch_sync)
+            self._watchdog_debounce_timer.daemon = True
+            self._watchdog_debounce_timer.start()
+
+    def _run_watch_sync(self):
+        try:
+            roots = list(self._auto_sync_roots)
+            if not roots:
+                return
+            signature = self._path_signature(roots)
+            if signature == self._auto_sync_last_signature:
+                return
+            indexed_total = 0
+            skipped_total = 0
+            removed_total = 0
+            for root in roots:
+                try:
+                    ok, message, indexed_files, skipped_files, removed_files = self.sync_directory(root)
+                except Exception as exc:
+                    logger.warning("KB watchdog sync failed for %s: %s", root, exc)
+                    continue
+                if not ok:
+                    self._auto_sync_last_error = str(message or "sync_failed")
+                    logger.warning("KB watchdog sync failed for %s: %s", root, message)
+                    continue
+                indexed_total += int(indexed_files or 0)
+                skipped_total += int(skipped_files or 0)
+                removed_total += int(removed_files or 0)
+
+            self._auto_sync_last_signature = signature
+            self._auto_sync_last_changes = {
+                "indexed_files": indexed_total,
+                "skipped_files": skipped_total,
+                "removed_files": removed_total,
+            }
+            self._auto_sync_last_run_ts = time.time()
+        except Exception as exc:
+            self._auto_sync_last_error = str(exc)
+            logger.warning("KB watchdog run sync failed: %s", exc)
+
+    class _KBWatchHandler(FileSystemEventHandler):
+        def __init__(self, service):
+            super().__init__()
+            self._service = service
+
+        def on_any_event(self, event):
+            try:
+                self._service._schedule_watch_sync()
+            except Exception:
+                pass
+
+    def _start_watchdog(self):
+        if not _WATCHDOG_AVAILABLE:
+            return False, "watchdog not available"
+        with self._lock:
+            if self._watchdog_observer is not None:
+                return True, "KB watchdog already running"
+            if not self._auto_sync_roots:
+                return False, "KB auto-sync requires at least one existing directory"
+            observer = Observer()
+            handlers = []
+            for root in self._auto_sync_roots:
+                try:
+                    handler = KnowledgeBaseService._KBWatchHandler(self)
+                    observer.schedule(handler, path=root, recursive=True)
+                    handlers.append(handler)
+                except Exception as exc:
+                    logger.warning("Failed scheduling watchdog for %s: %s", root, exc)
+            observer.daemon = True
+            observer.start()
+            self._watchdog_observer = observer
+            self._watchdog_handlers = handlers
+        return True, "KB watchdog started"
+
+    def _stop_watchdog(self):
+        with self._lock:
+            observer = self._watchdog_observer
+            self._watchdog_observer = None
+            self._watchdog_handlers = []
+        if observer is not None:
+            try:
+                observer.stop()
+                observer.join(timeout=1.0)
+            except Exception:
+                pass
+        with self._watchdog_debounce_lock:
+            if self._watchdog_debounce_timer:
+                try:
+                    self._watchdog_debounce_timer.cancel()
+                except Exception:
+                    pass
+                self._watchdog_debounce_timer = None
+        return True, "KB watchdog stopped"
+
+    def set_auto_sync(self, enabled, roots=None, interval_seconds=None):
+        self._ensure_initialized()
+        with self._lock:
+            self._auto_sync_enabled = bool(enabled)
+            if roots is not None:
+                cleaned = []
+                for item in roots:
+                    path = os.path.abspath(os.path.expanduser(str(item or "").strip()))
+                    if path and os.path.isdir(path):
+                        cleaned.append(path)
+                self._auto_sync_roots = cleaned
+            if interval_seconds is not None:
+                self._auto_sync_interval_seconds = max(1.0, float(interval_seconds or 1.0))
+
+        if self._auto_sync_enabled and self._auto_sync_roots:
+            self.start_auto_sync()
+        else:
+            self.stop_auto_sync()
+
+        return True, (
+            f"KB auto-sync enabled={self._auto_sync_enabled}, "
+            f"roots={len(self._auto_sync_roots)}, interval={self._auto_sync_interval_seconds:.1f}s"
+        )
+
+    def start_auto_sync(self):
+        self._ensure_initialized()
+        with self._lock:
+            # Prefer watchdog-based event sync when available; otherwise fall back to polling thread.
+            if _WATCHDOG_AVAILABLE:
+                ok, msg = self._start_watchdog()
+                if ok:
+                    return True, msg
+                # If watchdog failed to start, fall through to polling fallback.
+
+            if self._auto_sync_thread is not None and self._auto_sync_thread.is_alive():
+                return True, "KB auto-sync already running"
+            if not self._auto_sync_roots:
+                return False, "KB auto-sync requires at least one existing directory"
+            self._auto_sync_stop_event.clear()
+            self._auto_sync_thread = threading.Thread(
+                target=self._auto_sync_loop,
+                name="jarvis-kb-auto-sync",
+                daemon=True,
+            )
+            self._auto_sync_thread.start()
+        return True, "KB auto-sync started"
+
+    def stop_auto_sync(self):
+        with self._lock:
+            thread = self._auto_sync_thread
+            self._auto_sync_thread = None
+        self._auto_sync_stop_event.set()
+        # Stop watchdog if active
+        if _WATCHDOG_AVAILABLE:
+            try:
+                self._stop_watchdog()
+            except Exception:
+                pass
+
+        if thread and thread.is_alive():
+            thread.join(timeout=1.0)
+        return True, "KB auto-sync stopped"
+
+    def auto_sync_status(self):
+        with self._lock:
+            running = bool(self._auto_sync_thread is not None and self._auto_sync_thread.is_alive())
+            roots = list(self._auto_sync_roots)
+            interval = float(self._auto_sync_interval_seconds)
+            enabled = bool(self._auto_sync_enabled)
+            last_signature = self._auto_sync_last_signature
+            last_run_ts = float(self._auto_sync_last_run_ts or 0.0)
+            last_error = str(self._auto_sync_last_error or "")
+            last_changes = dict(self._auto_sync_last_changes or {})
+        return {
+            "enabled": enabled,
+            "running": running,
+            "roots": roots,
+            "interval_seconds": interval,
+            "last_signature": last_signature,
+            "last_run_ts": last_run_ts,
+            "last_error": last_error,
+            "last_changes": last_changes,
+        }
 
     def _load_json_file(self, path, default_value):
         if not os.path.isfile(path):
@@ -582,6 +867,7 @@ class KnowledgeBaseService:
             "file_count": file_count,
             "storage_dir": os.path.abspath(KB_STORAGE_DIR),
             "source_state_file": os.path.abspath(KB_SOURCE_STATE_FILE),
+            "auto_sync": self.auto_sync_status(),
         }
 
     def quality_report(self, probe_count=20, top_k=3):

@@ -60,8 +60,9 @@ from core.metrics import metrics
 from core.persona import persona_manager
 from core.response_templates import anti_repetition_prefixes, detect_language_hint, normalize_language, render_template
 from core.session_memory import session_memory
-from llm.ollama_client import ask_llm_streaming, get_runtime_lightweight_num_ctx
+from llm.ollama_client import ask_llm_streaming, get_runtime_lightweight_num_ctx, get_runtime_model_tier
 from llm.prompt_builder import build_prompt_package, build_lightweight_prompt, build_tool_augmented_prompt
+from tools.live_data import gather_live_data
 try:
     from nlp.intent_classifier import classify_intent as _classify_keyword_intent
 except Exception:
@@ -100,6 +101,28 @@ _LLM_RESPONSE_CACHE_STATS = {
     "stores": 0,
     "evictions": 0,
 }
+
+_DRY_RUN_MUTATING_INTENTS = {
+    "OS_FILE_NAVIGATION",
+    "OS_APP_OPEN",
+    "OS_APP_CLOSE",
+    "OS_SYSTEM_COMMAND",
+    "OS_EMAIL",
+    "OS_CALENDAR",
+    "OS_SETTINGS",
+    "BATCH_COMMAND",
+    "JOB_QUEUE_COMMAND",
+}
+
+
+def _is_mutating_dry_run_candidate(parsed):
+    intent = str(getattr(parsed, "intent", "") or "").strip().upper()
+    action = str(getattr(parsed, "action", "") or "").strip().lower()
+    if intent not in _DRY_RUN_MUTATING_INTENTS:
+        return False
+    if intent == "OS_FILE_NAVIGATION" and action in {"pwd", "ls", "cd", "open_item"}:
+        return False
+    return True
 
 
 def _nlu_threshold_for_intent(intent: str):
@@ -1405,22 +1428,21 @@ def _looks_search_worthy_query(text):
 
 
 def _fetch_live_tool_context(query_text):
-    """Try to fetch live data for the query. Returns context string or empty."""
+    """Try to fetch live data (weather + web search) for the query.
+    
+    Returns context string or empty. Uses Phase 2 live data pipeline.
+    """
+    # Phase 2.1: Unified live data gathering (weather + web search)
+    live_context = gather_live_data(query_text, parallel=True)
+    if live_context:
+        return live_context
+    
+    # Fallback: legacy direct weather fetch for immediate responses
     from tools.weather import get_weather
-
-    # Weather queries get dedicated weather API
     if _looks_weather_or_clothing_query(query_text):
         weather_data = get_weather()
         if weather_data:
             return weather_data
-
-    # News and general search-worthy queries get web search
-    if _looks_news_query(query_text) or _looks_search_worthy_query(query_text):
-        if WEB_SEARCH_ENABLED:
-            from tools.web_search import search_web
-            search_data = search_web(query_text, max_results=WEB_SEARCH_MAX_RESULTS)
-            if search_data:
-                return search_data
 
     return ""
 
@@ -1711,15 +1733,31 @@ def _repair_low_value_llm_response(response_text, parsed, language, original_tex
 def _finalize_success_response(response_text, parsed, language, original_text, tone_meta, *, realtime=False):
     """Minimal text-level post-processing — no LLM calls, no aggressive shaping.
 
+    PHASE 1.2 POST-PROCESSING CLEANUP: Slim pipeline for fast, consistent responses.
+    
     With a slim prompt + few-shot examples the model produces good output directly,
-    so we only do the two transformations that materially help voice UX:
-      1. Static assist-first fallback for genuinely empty/refusal replies.
+    so we only do three transformations that materially help voice UX:
+      1. Static assist-first fallback for genuinely empty/refusal replies (no LLM).
       2. Egyptian dialect TTS rewrite (text-level, needed for natural Arabic speech).
       3. Length cap (prevents rambling over the persona word target).
 
-    Removed (per Phase 1.4): output_mode (over-truncates), tone_adaptation
-    (unnatural prefixes), codeswitch_continuity (random language nudges),
-    anti_repetition (sometimes mangles correct text).
+    Removed (per Phase 1.2): 
+      - output_mode (over-truncates)
+      - tone_adaptation (unnatural prefixes)
+      - codeswitch_continuity (random language nudges)
+      - anti_repetition (sometimes mangles correct text)
+      - All LLM-based post-processing transforms
+    
+    Args:
+        response_text: LLM response to finalize
+        parsed: Parsed command structure
+        language: Response language (e.g. "en", "ar")
+        original_text: Original user query
+        tone_meta: Tone metadata (unused in minimal pipeline)
+        realtime: Whether response is being streamed (unused in minimal pipeline)
+        
+    Returns:
+        Post-processed response text
     """
     _ = tone_meta, realtime
     text = str(response_text or "").strip()
@@ -1728,6 +1766,31 @@ def _finalize_success_response(response_text, parsed, language, original_text, t
     text = _apply_persona_length_target(text, parsed)
     _record_response_quality(text, language, original_text)
     return text
+
+
+def post_process_response(response_text, context=None):
+    """PUBLIC: Consolidated response post-processing function.
+    
+    Entry point for response finalization. Use this for clarity when post-processing
+    is needed outside the main routing pipeline.
+    
+    Args:
+        response_text: Raw LLM response text
+        context: Dict with keys: parsed, language, original_text, tone_meta, realtime
+        
+    Returns:
+        Post-processed response text
+    """
+    if context is None:
+        context = {}
+    
+    parsed = context.get("parsed")
+    language = context.get("language", "en")
+    original_text = context.get("original_text", response_text)
+    tone_meta = context.get("tone_meta")
+    realtime = context.get("realtime", False)
+    
+    return _finalize_success_response(response_text, parsed, language, original_text, tone_meta, realtime=realtime)
 
 
 def _reference_confidence(timestamp, slot_type="generic"):
@@ -2455,6 +2518,15 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
     if permission_key and not policy_engine.is_command_allowed(permission_key):
         return False, f"Command blocked by policy: {permission_key}", {}
 
+    if policy_engine.is_dry_run_mode() and _is_mutating_dry_run_candidate(parsed):
+        action_name = str(parsed.action or parsed.intent or "action").strip()
+        description = f"intent={parsed.intent}, action={action_name}"
+        return (
+            True,
+            render_template("dry_run_action_blocked", language, description=description),
+            {"dry_run": True, "intent": parsed.intent, "action": action_name},
+        )
+
     if parsed.intent == "OS_CONFIRMATION":
         token = parsed.args.get("token")
         second_factor = parsed.args.get("second_factor")
@@ -2695,7 +2767,7 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
         )
 
     if tool_augmented:
-        package = build_tool_augmented_prompt(parsed.raw, tool_context, response_language=language)
+        package = build_tool_augmented_prompt(parsed.raw, tool_context, response_language=language, tier=get_runtime_model_tier())
         use_lightweight = False
     else:
         has_memory_context = False
@@ -2708,9 +2780,9 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
             )
         use_lightweight = query_words <= 8 and not has_memory_context
         if use_lightweight:
-            package = build_lightweight_prompt(parsed.raw, response_language=language)
+            package = build_lightweight_prompt(parsed.raw, response_language=language, tier=get_runtime_model_tier())
         else:
-            package = build_prompt_package(parsed.raw, response_language=language)
+            package = build_prompt_package(parsed.raw, response_language=language, tier=get_runtime_model_tier())
 
     cache_eligible = (
         bool(LLM_RESPONSE_CACHE_ENABLED)

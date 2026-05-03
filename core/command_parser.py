@@ -237,6 +237,46 @@ def _normalize_for_match(text: str) -> str:
     return _COLLAPSE_WS_RE.sub(" ", cleaned).strip()
 
 
+def _normalize_audio_profile(mode_str: str) -> str:
+    """Normalize audio profile mode names to canonical form."""
+    m = _normalize_for_match(mode_str)
+    if m in {"fast", "low latency", "low_latency", "responsive"}:
+        return "responsive"
+    if m in {"balanced", "normal"}:
+        return "balanced"
+    if m in {"robust", "stable", "reliable", "noisy"}:
+        return "robust"
+    return m.replace(" ", "_")
+
+
+def _normalize_browser_action(action_hint: str) -> str:
+    """Normalize browser control action to canonical form."""
+    m = _normalize_for_match(action_hint)
+    if m in {"new", "new tab", "open tab", "create tab", "تاب جديد", "تاب"}:
+        return "new_tab"
+    if m in {"close", "close tab", "remove tab", "delete tab", "اقفل التاب", "سكر التاب"}:
+        return "close_tab"
+    if m in {"back", "go back", "previous", "ارجع", "ارجع للخلف"}:
+        return "back"
+    if m in {"forward", "go forward", "next", "روح لقدام", "قدام"}:
+        return "forward"
+    return m
+
+
+def _normalize_window_action(action_hint: str) -> str:
+    """Normalize window control action to canonical form."""
+    m = _normalize_for_match(action_hint)
+    if m in {"maximize", "max", "fullscreen", "كبّر", "أكبر"}:
+        return "maximize"
+    if m in {"minimize", "min", "shrink", "صغّر"}:
+        return "minimize"
+    if m in {"snap left", "snap to left", "half left", "left half", "خش للشمال"}:
+        return "snap_left"
+    if m in {"snap right", "snap to right", "half right", "right half", "خش لليمين"}:
+        return "snap_right"
+    return m
+
+
 def _strip_spoken_prefixes(normalized_text: str) -> str:
     candidate = (normalized_text or "").strip()
     patterns = (
@@ -458,6 +498,16 @@ def _canonical_window_query(value: str):
     return value.strip()
 
 
+def _strip_file_target_fillers(value: str):
+    candidate = _normalize_for_match(value)
+    if not candidate:
+        return ""
+    candidate = re.sub(r"^(?:the\s+)?(?:file|folder)\s+", "", candidate, flags=re.IGNORECASE)
+    candidate = re.sub(r"^(?:\u0627\u0644)?(?:\u0645\u0644\u0641|\u0627\u0644\u0645\u062c\u0644\u062f|\u0645\u062c\u0644\u062f)\s+", "", candidate, flags=re.IGNORECASE)
+    candidate = re.sub(r"^(?:\u062c\u062f\u064a\u062f\s+\u0628\u0627\u0633\u0645\s+|\u0628\u0627\u0633\u0645\s+)", "", candidate, flags=re.IGNORECASE)
+    return candidate.strip()
+
+
 def _normalize_language_value(value: str):
     token = _normalize_for_match(value)
     if token in {"ar", "arabic", "عربي", "مصري", "المصري"}:
@@ -467,11 +517,20 @@ def _normalize_language_value(value: str):
     return token
 
 
+def _contains_any_phrase(text: str, phrases):
+    lowered = (text or "").lower()
+    return any(phrase in lowered for phrase in phrases)
+
+
 # ---------------------------------------------------------------------------
-# Table-driven keyword matching
+# Table-driven keyword matching — Phase 1.6 inventory
 # ---------------------------------------------------------------------------
-# Each entry: (set_of_keywords, intent, action)
-# Matched against `normalized`.
+# Each entry: (set_of_keywords, intent, action[, args]).
+# Matched against `normalized` (lowercased, whitespace-collapsed).
+#
+# This table is for EXACT phrases that must always resolve deterministically
+# (admin commands, runtime toggles, status queries). Conversational paraphrases
+# like "can you open chrome please" go through the semantic router instead.
 
 _KEYWORD_TABLE = [
     # Observability
@@ -560,6 +619,9 @@ _KEYWORD_TABLE = [
     ({"speech off", "disable speech", "اطفي الصوت", "اقفل الصوت", "اسكت"}, "VOICE_COMMAND", "speech_off"),
     # Knowledge base
     ({"kb status", "knowledge status", "knowledge base status"}, "KNOWLEDGE_BASE_COMMAND", "status"),
+    ({"kb autosync status", "kb auto sync status", "knowledge autosync status"}, "KNOWLEDGE_BASE_COMMAND", "autosync_status"),
+    ({"kb autosync on", "kb auto sync on", "knowledge autosync on"}, "KNOWLEDGE_BASE_COMMAND", "autosync_on"),
+    ({"kb autosync off", "kb auto sync off", "knowledge autosync off"}, "KNOWLEDGE_BASE_COMMAND", "autosync_off"),
     ({"kb quality", "knowledge quality", "kb quality report"}, "KNOWLEDGE_BASE_COMMAND", "quality"),
     ({"kb clear", "knowledge clear"}, "KNOWLEDGE_BASE_COMMAND", "clear"),
     ({"kb retrieval on", "knowledge retrieval on"}, "KNOWLEDGE_BASE_COMMAND", "retrieval_on"),
@@ -583,6 +645,8 @@ _KEYWORD_TABLE = [
     ({"audit reseal", "reseal audit", "repair audit chain"}, "AUDIT_RESEAL", ""),
     # Policy
     ({"policy status"}, "POLICY_COMMAND", "status"),
+    ({"policy dry run on", "policy dry-run on", "policy dryrun on"}, "POLICY_COMMAND", "set_dry_run", {"enabled": True}),
+    ({"policy dry run off", "policy dry-run off", "policy dryrun off"}, "POLICY_COMMAND", "set_dry_run", {"enabled": False}),
     # Batch
     ({"batch plan", "batch start", "batch begin"}, "BATCH_COMMAND", "plan"),
     ({"batch preview", "batch show"}, "BATCH_COMMAND", "preview"),
@@ -757,12 +821,20 @@ def _try_keyword_table(normalized, raw):
 
 
 # ---------------------------------------------------------------------------
-# Table-driven regex matching
+# Table-driven regex matching — Phase 1.6 inventory
 # ---------------------------------------------------------------------------
-# Each entry: (compiled_regex, use_raw, intent, action, args_builder)
-# If use_raw is True, the regex is matched against `raw` (case-insensitive).
-# Otherwise it's matched against `normalized`.
-# args_builder is a callable: (match) -> dict
+# Each entry: (compiled_regex, use_raw, intent, action, args_builder).
+#
+# Every pattern below is *structural*: it exists to extract a typed argument
+# (a hex token, a numeric value, an alarm time, a file path, an email address,
+# a settings page name, etc.) that the semantic router and keyword fuzzy tier
+# cannot recover from paraphrase similarity alone. Pure paraphrase routes —
+# "open chrome", "pause music", "go back", "minimize this window" — were
+# removed in favor of the semantic router's ``_ROUTE_DEFINITIONS`` to keep
+# this list small and maintainable.
+#
+# If you find yourself adding a regex that has NO capture groups and only
+# matches a fixed phrase, prefer adding it to ``_KEYWORD_TABLE`` instead.
 
 _REGEX_TABLE = [
     # Persona
@@ -834,29 +906,31 @@ _REGEX_TABLE = [
         "voice_quality_set",
         lambda m: {"mode": m.group(1)},
     ),
+    # CONSOLIDATED: audio_ux_profile (unified English/Arabic + mode/latency synonyms)
     (
         re.compile(
-            r"^(?:set\s+)?(?:audio|voice)\s+(?:ux\s+)?profile(?:\s+to)?\s+(balanced|responsive|robust|fast|low\s*latency|low_latency|stable|reliable|noisy)$",
+            r"^(?:set\s+)?(?:(?:audio|voice|latency|performance|speed)\s+)?(?:ux\s+)?(?:profile|mode)(?:\s+to)?\s+(balanced|responsive|robust|fast|low\s*latency|low_latency|stable|reliable|noisy|normal)$",
             re.IGNORECASE,
         ),
         True,
         "VOICE_COMMAND",
         "audio_ux_profile_set",
-        lambda m: {"profile": m.group(1).replace(" ", "_")},
+        lambda m: {"profile": _normalize_audio_profile(m.group(1))},
     ),
     (
         re.compile(
-            r"^(?:set\s+)?(?:latency|performance|speed)\s+mode(?:\s+to)?\s+(fast|balanced|normal|stable|robust|reliable|low\s*latency)$",
+            r"^(?:ظبط|ظبّط|غير|غيّر|عدل|عدّل|خلي|خلّي)\s+(?:ملف|وضع|نمط)?\s*(?:تجربة\s+)?(?:الصوت|النطق|الاستجابة|السرعة|الكمون)(?:\s+ل)?\s+(متوازن|سريع(?:\s*الاستجابة)?|قوي|ثابت|طبيعي)$",
             re.IGNORECASE,
         ),
         True,
         "VOICE_COMMAND",
         "audio_ux_profile_set",
-        lambda m: {"profile": m.group(1).replace(" ", "_")},
+        lambda m: {"profile": _normalize_audio_profile(m.group(1))},
     ),
+    # CONSOLIDATED: latency_status (all synonyms unified)
     (
         re.compile(
-            r"^(?:latency|pipeline\s+latency|phase\s+latency|runtime\s+latency|performance)\s+status$",
+            r"^(?:latency|pipeline\s+latency|phase\s+latency|runtime\s+latency|performance|response\s+time)\s+(?:status|state|report)?$",
             re.IGNORECASE,
         ),
         True,
@@ -866,27 +940,7 @@ _REGEX_TABLE = [
     ),
     (
         re.compile(
-            r"^(?:ظبط|ظبّط|غير|غيّر|عدل|عدّل|خلي|خلّي)\s+(?:ملف|وضع)?\s*(?:تجربة\s+)?(?:الصوت|النطق|الاستجابة)(?:\s+ل)?\s+(متوازن|سريع(?:\s*الاستجابة)?|قوي|ثابت)$",
-            re.IGNORECASE,
-        ),
-        True,
-        "VOICE_COMMAND",
-        "audio_ux_profile_set",
-        lambda m: {"profile": m.group(1).replace(" ", "_")},
-    ),
-    (
-        re.compile(
-            r"^(?:ظبط|ظبّط|غير|غيّر|عدل|عدّل|خلي|خلّي)\s+(?:وضع|نمط)?\s*(?:السرعة|الكمون|الاستجابة)(?:\s+ل)?\s+(سريع|متوازن|طبيعي|ثابت)$",
-            re.IGNORECASE,
-        ),
-        True,
-        "VOICE_COMMAND",
-        "audio_ux_profile_set",
-        lambda m: {"profile": m.group(1).replace(" ", "_")},
-    ),
-    (
-        re.compile(
-            r"^(?:(?:الكمون|الاستجابة|التاخير|التأخير)\s+عامل(?:ة)?\s+ايه|(?:الكمون|الاستجابة|التاخير|التأخير)\s+اخباره\s+ايه)\s*$",
+            r"^(?:الكمون|الاستجابة|التاخير|التأخير|الكمون)\s+(?:عامل|عاملة|اخبار|اخباره)\s+(?:ايه|ه|هو)$",
             re.IGNORECASE,
         ),
         True,
@@ -1034,6 +1088,49 @@ _REGEX_TABLE = [
         "search",
         lambda m: {"query": m.group(1).strip()},
     ),
+    (
+        re.compile(r"^(?:kb|knowledge)\s+(?:auto\s*sync|autosync)\s+(on|off|status)$", re.IGNORECASE),
+        False,
+        "KNOWLEDGE_BASE_COMMAND",
+        "autosync_toggle",
+        lambda m: {"mode": m.group(1).strip().lower()},
+    ),
+    # System commands: explicit catch-alls for common paraphrases missed by fuzzy aliasing
+    (
+        re.compile(
+            r"^(?:lock(?:\s+the)?\s+(?:screen|computer|pc|workstation)|\u0642\u0641\u0644\s+(?:\u0627\u0644\u0634\u0627\u0634\u0629|\u0627\u0644\u062c\u0647\u0627\u0632)|\u0627\u0642\u0641\u0644\s+\u0627\u0644\u0634\u0627\u0634\u0629)$",
+            re.IGNORECASE,
+        ),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda _m: {"action_key": "lock"},
+    ),
+    (
+        re.compile(
+            r"^(?:put(?:\s+the)?\s+(?:computer|pc)\s+to\s+sleep|sleep\s+(?:pc|computer)|sleep\s+this\s+computer|\u0646\u0627\u0645\s+\u0627\u0644\u0643\u0645\u0628\u064a\u0648\u062a\u0631|\u0646\u0627\u0645\s+\u0627\u0644\u062c\u0647\u0627\u0632)$",
+            re.IGNORECASE,
+        ),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda _m: {"action_key": "sleep"},
+    ),
+    # Arabic colloquial volume down mapping and colloquial screenshot phrasing
+    (
+        re.compile(r"^(?:وطي\s+الصوت|اخفض\s+الصوت|خف\u0651\u0636\s+الصوت|خفف\s+الصوت)$", re.IGNORECASE),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda _m: {"action_key": "volume_down"},
+    ),
+    (
+        re.compile(r"^(?:خد\s+سكرين\s+شوت|خد\s+سكرينشوت|خذ\s+سكرينشوت|خذ\s+سكرين\s+شوت)$", re.IGNORECASE),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda _m: {"action_key": "screenshot"},
+    ),
     # Audit
     (
         re.compile(r"^show audit log(?:\s+(\d+))?$"),
@@ -1055,6 +1152,13 @@ _REGEX_TABLE = [
         False,
         "POLICY_COMMAND",
         "set_read_only",
+        lambda m: {"enabled": m.group(1) == "on"},
+    ),
+    (
+        re.compile(r"^policy (?:dry run|dry-run|dryrun)\s+(on|off)$"),
+        False,
+        "POLICY_COMMAND",
+        "set_dry_run",
         lambda m: {"enabled": m.group(1) == "on"},
     ),
     (
@@ -1150,7 +1254,7 @@ _REGEX_TABLE = [
         True,
         "OS_FILE_SEARCH",
         "",
-        lambda m: {"filename": m.group(1).strip(), "search_path": (m.group(2) or "").strip() or None},
+        lambda m: {"filename": _strip_file_target_fillers(m.group(1)), "search_path": (m.group(2) or "").strip() or None},
     ),
     # File nav - regex-based
     (
@@ -1188,24 +1292,24 @@ _REGEX_TABLE = [
         True,
         "OS_FILE_NAVIGATION",
         "create_directory",
-        lambda m: {"path": m.group(1).strip()},
+        lambda m: {"path": _strip_file_target_fillers(m.group(1))},
     ),
     (
         re.compile(
-            r"^(?:delete permanently|permanent delete|force delete|امسح نهائي|شيل نهائي)\s+(.+)$",
+            r"^(?:(?:delete|remove)\s+(?:permanently|forever)\s+(.+)|(?:permanent\s+delete|force\s+delete)\s+(.+)|(?:amسح|شيل)\s+(.+?)\s+(?:نهائيا|نهائي|permanently|forever)|(?:delete|remove)\s+(.+?)\s+(?:permanently|forever|نهائيا|نهائي))$",
             re.IGNORECASE,
         ),
         True,
         "OS_FILE_NAVIGATION",
         "delete_item_permanent",
-        lambda m: {"path": m.group(1).strip()},
+        lambda m: {"path": _strip_file_target_fillers((m.group(1) or m.group(2) or m.group(3) or m.group(4) or "").strip())},
     ),
     (
         re.compile(r"^(?:delete|remove|امسح|شيل)\s+(.+)$", re.IGNORECASE),
         True,
         "OS_FILE_NAVIGATION",
         "delete_item",
-        lambda m: {"path": m.group(1).strip()},
+        lambda m: {"path": _strip_file_target_fillers(m.group(1))},
     ),
     (
         re.compile(
@@ -1215,7 +1319,7 @@ _REGEX_TABLE = [
         True,
         "OS_FILE_NAVIGATION",
         "move_item",
-        lambda m: {"source": m.group(1).strip(), "destination": m.group(2).strip()},
+        lambda m: {"source": _strip_file_target_fillers(m.group(1)), "destination": _strip_file_target_fillers(m.group(2))},
     ),
     (
         re.compile(
@@ -1225,7 +1329,7 @@ _REGEX_TABLE = [
         True,
         "OS_FILE_NAVIGATION",
         "rename_item",
-        lambda m: {"source": m.group(1).strip(), "new_name": m.group(2).strip()},
+        lambda m: {"source": _strip_file_target_fillers(m.group(1)), "new_name": _strip_file_target_fillers(m.group(2))},
     ),
     # Timer — "set timer 5 minutes", "timer 10 seconds", "حط تايمر 5 دقايق"
     (
@@ -1289,17 +1393,9 @@ _REGEX_TABLE = [
         "write",
         lambda m: {"text": m.group(1).strip()},
     ),
-    # Battery / sysinfo — regex variants
-    (
-        re.compile(
-            r"^(?:how\s+much\s+battery(?:\s+(?:do\s+i\s+have|left|remaining))?|what(?:'s| is)\s+(?:my\s+)?battery)$",
-            re.IGNORECASE,
-        ),
-        True,
-        "OS_SYSINFO",
-        "battery",
-        lambda _m: {},
-    ),
+    # Battery / sysinfo — Phase 1.6: regex variants removed. The keyword table
+    # already covers the exact-match phrases ("battery status", "البطارية كام")
+    # and the semantic router handles paraphrases like "what's my battery".
     # Email — "draft email to X about Y", "ابعت ايميل ل X عن Y"
     (
         re.compile(
@@ -1583,35 +1679,29 @@ def _clean_browser_search_query(value):
 
 def _try_natural_file_search(raw, normalized):
     lowered = _normalize_for_match(raw)
-    web_markers = (
-        "online",
-        "web",
-        "internet",
-        "on google",
-        "search web",
-        "search online",
-        "google",
-        "الويب",
-        "النت",
-        "جوجل",
-        "اونلاين",
-        "أونلاين",
-        "بالنت",
-    )
-    if any(marker in lowered for marker in web_markers):
+    if _contains_any_phrase(
+        lowered,
+        (
+            "online",
+            "web",
+            "internet",
+            "on google",
+            "search web",
+            "search online",
+            "google",
+            "الويب",
+            "النت",
+            "جوجل",
+            "اونلاين",
+            "أونلاين",
+            "بالنت",
+        ),
+    ):
         return None
 
     patterns = (
         re.compile(
-            r"^(?:find|search|look\s+for|locate)\s+(?:for\s+)?(?:file\s+)?(.+?)(?:\s+(?:in|on|inside)\s+(.+))?$",
-            re.IGNORECASE,
-        ),
-        re.compile(
-            (
-                r"^(?:(?:i\s+)?(?:want|need)\s+(?:to\s+)?)"
-                r"(?:find|search|look\s+for|locate)\s+(?:for\s+)?(?:file\s+)?"
-                r"(.+?)(?:\s+(?:in|on|inside)\s+(.+))?$"
-            ),
+            r"^(?:(?:i\s+)?(?:want|need)\s+(?:to\s+)?)?(?:find|search|look\s+for|locate)\s+(?:for\s+)?(?:file\s+)?(.+?)(?:\s+(?:in|on|inside)\s+(.+))?$",
             re.IGNORECASE,
         ),
         re.compile(
@@ -1629,7 +1719,8 @@ def _try_natural_file_search(raw, normalized):
         if not match:
             continue
 
-        filename = _collapse_repeated_phrase(match.group(1) or "")
+        filename = _strip_file_target_fillers(match.group(1) or "")
+        filename = _collapse_repeated_phrase(filename)
         filename = filename.strip().strip('"').strip("'")
         if not filename:
             return None
@@ -1726,33 +1817,24 @@ def _try_natural_schedule_command(raw, normalized):
 
 
 def _try_natural_browser_command(raw, normalized):
-    lowered = _normalize_for_match(raw)
+    """Phase 1.6 — only structural patterns remain.
 
-    if re.search(r"\b(new tab|open tab)\b", lowered) or "تاب جديد" in lowered:
-        return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "browser_new_tab"})
-    if re.search(r"\b(close tab)\b", lowered) or "اقفل التاب" in lowered or "سكر التاب" in lowered:
-        return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "browser_close_tab"})
-    if re.search(r"\b(go back|browser back)\b", lowered) or "ارجع للخلف" in lowered:
-        return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "browser_back"})
-    if re.search(r"\b(go forward|browser forward)\b", lowered) or "روح لقدام" in lowered:
-        return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "browser_forward"})
+    Tab open/close + back/forward used to be matched here with keyword loops,
+    but those forms are now resolved by the semantic router (Tier 2) which
+    already covers ``OS_SYSTEM_COMMAND`` for browser navigation. We keep the
+    two patterns that *extract* an argument the router cannot infer: the
+    explicit search query and the destination URL.
+    """
 
-    search_patterns = (
-        re.compile(
-            r"(?:^|\b)(?:search(?:\s+(?:the\s+)?)?(?:(?:web|online|internet)\s*(?:for|about)?|(?:for|about))|google|look\s+up)\s+(.+)$",
-            re.IGNORECASE,
-        ),
-        re.compile(
-            r"(?:^|\b)(?:دور(?:\s+على)?(?:\s+(?:النت|اونلاين|أونلاين))?|دوّر(?:\s+على)?(?:\s+(?:النت|اونلاين|أونلاين))?)\s+(.+)$",
-            re.IGNORECASE,
-        ),
+    # STRUCTURAL: extract a free-form search query.
+    search_pattern = re.compile(
+        r"(?:^|\b)(?:search(?:\s+(?:the\s+)?)?(?:(?:web|online|internet)\s*(?:for|about)?|(?:for|about))|google|look\s+up|دور(?:\s+على)?(?:\s+(?:النت|اونلاين|أونلاين))?|دوّر(?:\s+على)?(?:\s+(?:النت|اونلاين|أونلاين))?)\s+(.+)$",
+        re.IGNORECASE,
     )
-    for pattern in search_patterns:
-        match = pattern.search(raw)
-        if match and match.group(1).strip():
-            query = _clean_browser_search_query(match.group(1))
-            if not query:
-                continue
+    match = search_pattern.search(raw)
+    if match and match.group(1).strip():
+        query = _clean_browser_search_query(match.group(1))
+        if query:
             return ParsedCommand(
                 "OS_SYSTEM_COMMAND",
                 raw,
@@ -1760,14 +1842,13 @@ def _try_natural_browser_command(raw, normalized):
                 args={"action_key": "browser_search_web", "search_query": query},
             )
 
-    open_patterns = (
-        re.compile(r"^(?:open|visit|go to|browse to)\s+(?:website|site|url\s+)?(.+)$", re.IGNORECASE),
-        re.compile(r"^(?:افتح|افتحلي|روح على|خش على|ادخل على)\s+(?:موقع\s+)?(.+)$", re.IGNORECASE),
+    # STRUCTURAL: extract a URL argument from "open ${URL}" / "visit ${URL}".
+    open_pattern = re.compile(
+        r"^(?:open|visit|go to|browse to|افتح|افتحلي|روح على|خش على|ادخل على)\s+(?:website|site|url\s+|موقع\s+)?(.+)$",
+        re.IGNORECASE,
     )
-    for pattern in open_patterns:
-        match = pattern.match(raw)
-        if not match:
-            continue
+    match = open_pattern.match(raw)
+    if match:
         url = _normalize_url_target(match.group(1))
         if url:
             return ParsedCommand(
@@ -1780,28 +1861,20 @@ def _try_natural_browser_command(raw, normalized):
 
 
 def _try_natural_window_command(raw, normalized):
-    lowered = _normalize_for_match(raw)
-    if re.search(r"\b(maximize)\b", lowered) and "window" in lowered:
-        return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "window_maximize"})
-    if re.search(r"\b(minimize)\b", lowered) and "window" in lowered:
-        return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "window_minimize"})
-    if "snap" in lowered and "left" in lowered:
-        return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "window_snap_left"})
-    if "snap" in lowered and "right" in lowered:
-        return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "window_snap_right"})
-    if re.search(r"\b(next window|switch window)\b", lowered) or "الشباك اللي بعده" in lowered:
-        return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "window_next"})
-    if re.search(r"\b(close (?:active|this) window)\b", lowered) or "اقفل الشباك" in lowered:
-        return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "window_close_active"})
+    """Phase 1.6 — only the focus-window pattern remains.
 
-    focus_patterns = (
-        re.compile(r"^(?:focus|switch to|bring)\s+(?:the\s+)?(?:window\s+)?(.+)$", re.IGNORECASE),
-        re.compile(r"^(?:ركز على|روح على|خش على|ادخل على)\s+(?:شباك\s+)?(.+)$", re.IGNORECASE),
+    Maximize/minimize/snap/close-active/next-window were keyword loops that
+    fully overlap with the semantic router's ``OS_SYSTEM_COMMAND`` coverage,
+    so we delegate them. The focus pattern stays here because it has to
+    extract a window-title argument (``focus chrome`` → window_query=chrome)
+    that the semantic router cannot infer on its own.
+    """
+    focus_pattern = re.compile(
+        r"^(?:focus|switch to|bring|ركز على|روح على|خش على|ادخل على)\s+(?:the\s+|window\s+|شباك\s+)?(.+)$",
+        re.IGNORECASE,
     )
-    for pattern in focus_patterns:
-        match = pattern.match(raw)
-        if not match:
-            continue
+    match = focus_pattern.match(raw)
+    if match:
         query = _canonical_window_query(match.group(1) or "")
         if query:
             return ParsedCommand(
@@ -1814,19 +1887,23 @@ def _try_natural_window_command(raw, normalized):
 
 
 def _try_natural_media_control_command(raw, normalized):
+    """Phase 1.6 — only the seek-by-N-seconds patterns remain.
+
+    Pause/play/next/previous/stop are now resolved by the semantic router
+    (``OS_SYSTEM_COMMAND`` covers ``pause music``, ``next track`` etc.). We
+    keep the seek patterns because they have to extract a numeric seek_seconds
+    argument that the router can't recover from a paraphrase alone.
+    """
     lowered = _normalize_for_match(raw)
-    media_context = any(token in lowered for token in ("music", "media", "track", "song", "موسيقى", "اغنية"))
+    media_context = any(
+        token in lowered for token in ("music", "media", "track", "song", "موسيقى", "اغنية")
+    )
 
-    if re.search(r"\b(pause|play|resume)\b", lowered) and any(token in lowered for token in ("music", "media", "track", "song")):
-        return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "media_play_pause"})
-    if any(token in lowered for token in ("next track", "next song", "skip track", "skip song", "الاغنية اللي بعد كده", "الأغنية اللي بعد كده")):
-        return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "media_next_track"})
-    if any(token in lowered for token in ("previous track", "prev track", "previous song", "الاغنية اللي قبلها", "الأغنية اللي قبلها")):
-        return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "media_previous_track"})
-    if any(token in lowered for token in ("stop music", "stop media", "وقف المزيكا", "وقف الميديا")):
-        return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "media_stop"})
-
-    forward = re.search(r"(?:seek|skip|forward|قدم)\s+(?:by\s+)?(.+?)?\s*(seconds?|secs?|ثانية|ثواني)?$", raw, flags=re.IGNORECASE)
+    forward = re.search(
+        r"(?:seek|skip|forward|قدم)\s+(?:by\s+)?(.+?)?\s*(seconds?|secs?|ثانية|ثواني)?$",
+        raw,
+        flags=re.IGNORECASE,
+    )
     if forward and media_context and ("forward" in lowered or "seek" in lowered or "قدم" in lowered):
         seconds = _duration_to_seconds(forward.group(1) or 10, forward.group(2) or "seconds") or 10
         return ParsedCommand(
@@ -1836,7 +1913,11 @@ def _try_natural_media_control_command(raw, normalized):
             args={"action_key": "media_seek_forward", "seek_seconds": int(seconds)},
         )
 
-    backward = re.search(r"(?:seek|skip|back|rewind|ارجع)\s+(?:by\s+)?(.+?)?\s*(seconds?|secs?|ثانية|ثواني)?$", raw, flags=re.IGNORECASE)
+    backward = re.search(
+        r"(?:seek|skip|back|rewind|ارجع)\s+(?:by\s+)?(.+?)?\s*(seconds?|secs?|ثانية|ثواني)?$",
+        raw,
+        flags=re.IGNORECASE,
+    )
     if backward and media_context and ("back" in lowered or "rewind" in lowered or "ارجع" in lowered):
         seconds = _duration_to_seconds(backward.group(1) or 10, backward.group(2) or "seconds") or 10
         return ParsedCommand(
@@ -1849,13 +1930,12 @@ def _try_natural_media_control_command(raw, normalized):
 
 
 def _try_natural_file_operation(raw, normalized):
+    # CONSOLIDATED: file operations (create/move/rename/delete) using action-specific patterns
+    
+    # CREATE folder unified
     create_patterns = (
         re.compile(
-            r"^(?:create|make)\s+(?:a\s+)?(?:new\s+)?folder(?:\s+(?:called|named))?\s+(.+?)(?:\s+(?:in|inside|under)\s+(.+))?$",
-            re.IGNORECASE,
-        ),
-        re.compile(
-            r"^(?:اعمل|اعمللي)\s+(?:مجلد\s+)?(?:باسم\s+)?(.+?)(?:\s+(?:في|داخل)\s+(.+))?$",
+            r"^(?:(?:create|make)\s+(?:a\s+)?(?:new\s+)?folder(?:\s+(?:called|named))?|(?:اعمل|اعمللي)\s+(?:مجلد\s+)?(?:باسم\s+)?)\s+(.+?)(?:\s+(?:in|inside|under|في|داخل)\s+(.+))?$",
             re.IGNORECASE,
         ),
     )
@@ -1863,58 +1943,57 @@ def _try_natural_file_operation(raw, normalized):
         match = pattern.match(raw)
         if not match:
             continue
-        name = str(match.group(1) or "").strip()
+        name = _strip_file_target_fillers(match.group(1) or "")
         parent = _normalize_search_path_hint(match.group(2) or "")
         if not name:
             continue
         path = os.path.join(parent, name) if parent else name
         return ParsedCommand("OS_FILE_NAVIGATION", raw, normalized, action="create_directory", args={"path": path})
 
-    move_patterns = (
+    # UNIFIED MOVE & RENAME (both require source + target, distinguish by verb)
+    move_rename_patterns = (
         re.compile(
-            r"^(?:move|put)\s+(?:the\s+)?(?:file|folder)?\s*(.+?)\s+(?:to|into|inside|under)\s+(.+)$",
+            r"^(?:(?:move|put)\s+(?:the\s+)?(?:file|folder)?|(?:حرك|ودي|ودّي)\s+(?:الملف|المجلد)?)\s*(.+?)\s+(?:to|into|inside|under|على)\s+(.+)$",
             re.IGNORECASE,
         ),
-        re.compile(
-            r"^(?:حرك|ودي|ودّي)\s+(?:الملف|المجلد)?\s*(.+?)\s+(?:على)\s+(.+)$",
-            re.IGNORECASE,
-        ),
+        re.compile(r"^(?:(?:rename|change name of)|(?:سمي|سميلي|سمّي|سمّيلي))\s+(.+?)\s+(?:to|as|ل)\s+(.+)$", re.IGNORECASE),
     )
-    for pattern in move_patterns:
+    
+    for i, pattern in enumerate(move_rename_patterns):
         match = pattern.match(raw)
-        if match and match.group(1).strip() and match.group(2).strip():
-            return ParsedCommand(
-                "OS_FILE_NAVIGATION",
-                raw,
-                normalized,
-                action="move_item",
-                args={"source": match.group(1).strip(), "destination": match.group(2).strip()},
-            )
+        if not match or not match.group(1).strip() or not match.group(2).strip():
+            continue
+        
+        # Determine action: rename vs move
+        action = "rename_item" if i == 1 else "move_item"
+        if action == "move_item":
+            args_dict = {
+                "source": _strip_file_target_fillers(match.group(1) or ""),
+                "destination": _strip_file_target_fillers(match.group(2) or ""),
+            }
+        else:
+            args_dict = {
+                "source": _strip_file_target_fillers(match.group(1) or ""),
+                "new_name": _strip_file_target_fillers(match.group(2) or ""),
+            }
+        
+        return ParsedCommand(
+            "OS_FILE_NAVIGATION",
+            raw,
+            normalized,
+            action=action,
+            args=args_dict,
+        )
 
-    rename_patterns = (
-        re.compile(r"^(?:rename|change name of)\s+(.+?)\s+(?:to|as)\s+(.+)$", re.IGNORECASE),
-        re.compile(r"^(?:سمي|سميلي|سمّي|سمّيلي)\s+(.+?)\s+(?:ل)\s+(.+)$", re.IGNORECASE),
-    )
-    for pattern in rename_patterns:
-        match = pattern.match(raw)
-        if match and match.group(1).strip() and match.group(2).strip():
-            return ParsedCommand(
-                "OS_FILE_NAVIGATION",
-                raw,
-                normalized,
-                action="rename_item",
-                args={"source": match.group(1).strip(), "new_name": match.group(2).strip()},
-            )
-
+    # UNIFIED DELETE (with optional permanent flag)
     delete_patterns = (
-        re.compile(r"^(?:delete|remove)\s+(?:the\s+)?(?:file|folder)?\s*(.+?)(?:\s+(permanently|forever))?$", re.IGNORECASE),
-        re.compile(r"^(?:امسح|شيل)\s+(?:الملف|المجلد)?\s*(.+?)(?:\s+(نهائيا|نهائي))?$", re.IGNORECASE),
+        re.compile(r"^(?:(?:delete|remove)\s+(?:the\s+)?(?:file|folder)?|(?:امسح|شيل)\s+(?:الملف|المجلد)?)\s*(.+?)(?:\s+(permanently|forever|نهائيا|نهائي))?$", re.IGNORECASE),
     )
     for pattern in delete_patterns:
         match = pattern.match(raw)
         if not match:
             continue
-        target = str(match.group(1) or "").strip()
+        target = _strip_file_target_fillers(match.group(1) or "")
         if not target:
             continue
         permanent = bool(match.group(2))

@@ -14,12 +14,17 @@ from core.config import (
     FOLLOWUP_PENDING_CONFIRMATION_HALF_LIFE_SECONDS,
     FOLLOWUP_PENDING_CONFIRMATION_MAX_AGE_SECONDS,
     FOLLOWUP_REFERENCE_MIN_CONFIDENCE,
+    MEMORY_BACKEND,
+    MEMORY_DB_FILE,
     MEMORY_ENABLED,
     MEMORY_FILE,
+    MEMORY_LANGUAGE_HISTORY_PERSIST_LIMIT,
     MEMORY_MAX_CONTEXT_CHARS,
     MEMORY_MAX_TURNS,
+    MEMORY_PERSIST_LANGUAGE_HISTORY,
 )
 from core.logger import logger
+from core.memory_store import SQLiteMemoryStore
 
 _SOURCES_MARKER = "\nSources:"
 _LOW_VALUE_ASSISTANT_PATTERNS = (
@@ -161,6 +166,19 @@ class SessionMemory:
         self._preferred_language = _RUNTIME_DEFAULT_PREFERRED_LANGUAGE
         self._pending_clarification = None
         self._context_slots = self._default_context_slots()
+
+        # Phase 2.8 — primary storage is SQLite. The JSON path is now used only
+        # for legacy import (one-shot) and as a debug-export target.
+        self._backend = "sqlite" if str(MEMORY_BACKEND or "sqlite").lower() == "sqlite" else "json"
+        self._store = None
+        if self._backend == "sqlite":
+            try:
+                self._store = SQLiteMemoryStore(MEMORY_DB_FILE)
+                self._store.import_legacy_json(MEMORY_FILE)
+            except Exception as exc:
+                logger.warning("SQLite memory store unavailable, falling back to JSON: %s", exc)
+                self._backend = "json"
+                self._store = None
         self._load()
 
     def _default_context_slots(self):
@@ -240,13 +258,21 @@ class SessionMemory:
         return payload
 
     def _load(self):
+        # Phase 2.8 — prefer SQLite when available; fall back to legacy JSON.
+        if self._backend == "sqlite" and self._store is not None:
+            try:
+                self._load_from_sqlite()
+                return
+            except Exception as exc:
+                logger.warning("SQLite memory load failed, falling back to JSON: %s", exc)
+                self._backend = "json"
+
         try:
             with open(MEMORY_FILE, "r", encoding="utf-8") as handle:
                 payload = json.load(handle)
 
             if isinstance(payload, list):
                 self._turns = payload
-                # Language is runtime-only and should not be inherited from historical chats.
                 self._preferred_language = _RUNTIME_DEFAULT_PREFERRED_LANGUAGE
                 self._pending_clarification = None
                 self._context_slots = self._default_context_slots()
@@ -254,15 +280,9 @@ class SessionMemory:
 
             if isinstance(payload, dict):
                 turns = payload.get("turns")
-                if isinstance(turns, list):
-                    self._turns = turns
-                else:
-                    self._turns = []
-                # Start each app session with a neutral language state.
+                self._turns = turns if isinstance(turns, list) else []
                 self._preferred_language = _RUNTIME_DEFAULT_PREFERRED_LANGUAGE
-                # Do not carry pending clarification from previous runs.
                 self._pending_clarification = None
-
                 slots = payload.get("context_slots")
                 self._context_slots = self._load_context_slots(slots)
                 return
@@ -277,9 +297,62 @@ class SessionMemory:
             self._pending_clarification = None
             self._context_slots = self._default_context_slots()
 
+    def _load_from_sqlite(self):
+        """Hydrate in-memory state from the SQLite store."""
+        if self._store is None:
+            return
+        self._turns = self._store.recent_turns(int(MEMORY_MAX_TURNS or 1) * 4)
+        slots = self._store.all_slots()
+        # Drop housekeeping markers used by the store itself.
+        slots.pop("__legacy_json_imported__", None)
+        pending_payload = slots.pop("__pending_clarification__", None)
+        # Pending clarifications must never persist across restarts (the user
+        # intent is stale). The store keeps them so the export round-trip is
+        # complete, but the live state always starts clean.
+        self._pending_clarification = None
+        if isinstance(pending_payload, dict):
+            self._store.delete_slot("__pending_clarification__")
+
+        self._context_slots = self._load_context_slots(slots)
+
+        # Phase 2.9 — persist explicit language preference + recent history.
+        if MEMORY_PERSIST_LANGUAGE_HISTORY:
+            saved_pref = slots.get("preferred_language")
+            if isinstance(saved_pref, str):
+                normalized = _normalize_language_tag(saved_pref)
+                if saved_pref.strip().lower() in _SUPPORTED_LANGUAGES:
+                    self._preferred_language = normalized
+                else:
+                    self._preferred_language = _RUNTIME_DEFAULT_PREFERRED_LANGUAGE
+            else:
+                self._preferred_language = _RUNTIME_DEFAULT_PREFERRED_LANGUAGE
+
+            persisted_history = slots.get("language_history_persisted")
+            if isinstance(persisted_history, list):
+                cleaned = [
+                    _normalize_language_tag(item)
+                    for item in persisted_history
+                    if str(item or "").strip().lower() in _SUPPORTED_LANGUAGES
+                ]
+                if cleaned:
+                    cap = max(1, int(MEMORY_LANGUAGE_HISTORY_PERSIST_LIMIT or 3))
+                    self._context_slots["language_history"] = cleaned[-cap:]
+                    self._context_slots["language_history_updated_at"] = float(
+                        slots.get("language_history_persisted_updated_at") or time.time()
+                    )
+        else:
+            self._preferred_language = _RUNTIME_DEFAULT_PREFERRED_LANGUAGE
+
     def _save(self):
+        if self._backend == "sqlite" and self._store is not None:
+            try:
+                self._save_to_sqlite()
+                return
+            except Exception as exc:
+                logger.warning("SQLite memory save failed, falling back to JSON: %s", exc)
+                self._backend = "json"
+
         payload = {
-            # Keep schema backward-compatible without persisting runtime language state.
             "preferred_language": _RUNTIME_DEFAULT_PREFERRED_LANGUAGE,
             "turns": self._turns,
             "pending_clarification": self._pending_clarification,
@@ -291,10 +364,72 @@ class SessionMemory:
         except Exception as exc:
             logger.error("Failed writing memory file: %s", exc)
 
+    def _save_to_sqlite(self):
+        """Mirror the in-memory state into SQLite.
+
+        We replace turns wholesale (cheap — bounded list), and write each
+        context slot as a separate row so individual updates can fall back to
+        targeted SQL writes later if profiling demands it.
+        """
+        if self._store is None:
+            return
+        store = self._store
+        store.replace_turns(self._turns)
+        store.trim_turns(max(1, int(MEMORY_MAX_TURNS) * 4))
+
+        # Slot rows mirror ``_context_slots`` 1:1 — values are JSON-encoded by
+        # the store so dicts/lists roundtrip without any extra logic here.
+        for key, value in self._context_slots.items():
+            try:
+                store.set_slot(key, value)
+            except Exception as exc:
+                logger.debug("Skipping slot persistence for %s: %s", key, exc)
+
+        if isinstance(self._pending_clarification, dict):
+            store.set_slot("__pending_clarification__", self._pending_clarification)
+        else:
+            store.delete_slot("__pending_clarification__")
+
+        # Phase 2.9 — persist explicit language preference + bounded history so
+        # STT language hinting survives restarts.
+        if MEMORY_PERSIST_LANGUAGE_HISTORY:
+            store.set_slot("preferred_language", self._preferred_language)
+            limit = max(1, int(MEMORY_LANGUAGE_HISTORY_PERSIST_LIMIT or 3))
+            history = list(self._context_slots.get("language_history") or [])[-limit:]
+            store.set_slot("language_history_persisted", history)
+            store.set_slot("language_history_persisted_updated_at", time.time())
+
     def set_enabled(self, enabled):
         with self._lock:
             self._enabled = bool(enabled)
         return True, f"Memory {'enabled' if enabled else 'disabled'}."
+
+    def export_to_json(self, path=None):
+        """Phase 2.8 — dump the SQLite store back to JSON for debugging.
+
+        Returns a tuple of ``(ok, message)``. The JSON file is the legacy
+        backend so this lets users inspect the database without running SQL.
+        """
+        if self._backend != "sqlite" or self._store is None:
+            try:
+                with open(MEMORY_FILE, "r", encoding="utf-8") as handle:
+                    payload = handle.read()
+                target = str(path or MEMORY_FILE)
+                if target != MEMORY_FILE:
+                    with open(target, "w", encoding="utf-8") as handle:
+                        handle.write(payload)
+                return True, f"Memory exported to {target}"
+            except Exception as exc:
+                return False, f"Memory export failed: {exc}"
+
+        try:
+            target = self._store.export_to_json(path)
+            return True, f"Memory exported to {target}"
+        except Exception as exc:
+            return False, f"Memory export failed: {exc}"
+
+    def get_backend_name(self):
+        return str(self._backend or "json")
 
     def is_enabled(self):
         with self._lock:
@@ -309,6 +444,47 @@ class SessionMemory:
     def get_preferred_language(self):
         with self._lock:
             return self._preferred_language
+
+    def get_stt_language_hint(self, *, history_window=3, dominance_ratio=0.66):
+        """Phase 2.9 — best-effort language hint for the STT pipeline.
+
+        Combines the explicit user preference with the recent detection history
+        so STT picks the right model fast even after a fresh launch:
+
+        1. If the user explicitly set a non-default preference, honor it.
+        2. Otherwise, look at the last ``history_window`` persisted detections
+           and return the dominant language when it clears ``dominance_ratio``.
+        3. Otherwise return ``None`` (let STT auto-detect).
+
+        Returns one of ``"ar"``, ``"en"``, or ``None``.
+        """
+        with self._lock:
+            preferred = str(self._preferred_language or "").strip().lower()
+            history = list(self._context_slots.get("language_history") or [])
+
+        if preferred in _SUPPORTED_LANGUAGES and preferred != _RUNTIME_DEFAULT_PREFERRED_LANGUAGE:
+            return preferred
+
+        if not history:
+            # No turns yet — fall back to the configured default if explicit.
+            return preferred if preferred in _SUPPORTED_LANGUAGES else None
+
+        window = max(1, int(history_window or 1))
+        recent = [item for item in history[-window:] if item in _SUPPORTED_LANGUAGES]
+        if not recent:
+            return preferred if preferred in _SUPPORTED_LANGUAGES else None
+
+        ar_count = sum(1 for item in recent if item == "ar")
+        en_count = sum(1 for item in recent if item == "en")
+        total = ar_count + en_count
+        if total <= 0:
+            return None
+        ratio_threshold = max(0.51, min(1.0, float(dominance_ratio or 0.66)))
+        if ar_count / total >= ratio_threshold:
+            return "ar"
+        if en_count / total >= ratio_threshold:
+            return "en"
+        return None
 
     def set_pending_clarification(self, clarification_payload, ttl_seconds=_DEFAULT_CLARIFICATION_TTL_SECONDS):
         payload = dict(clarification_payload or {})

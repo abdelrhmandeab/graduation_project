@@ -10,6 +10,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from core.config import (
     ELEVENLABS_API_KEY,
+    LLM_MODEL,
     STT_BACKEND,
     TTS_DEFAULT_BACKEND,
     TTS_ELEVENLABS_ARABIC_ENABLED,
@@ -51,6 +52,68 @@ def _check_module(name):
 def _print_check(name, ok, details):
     state = "OK" if ok else "FAIL"
     print(f"[{state}] {name}: {details}")
+
+
+def _probe_ollama_models():
+    try:
+        import subprocess
+
+        result = subprocess.run(["ollama", "list"], capture_output=True, text=True, timeout=12)
+        if result.returncode != 0:
+            return False, f"ollama list failed: {(result.stderr or '').strip() or 'unknown error'}"
+
+        lines = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+        if len(lines) <= 1:
+            return True, "no local models listed"
+
+        models = []
+        for line in lines[1:]:
+            model_name = line.split()[0].strip() if line.split() else ""
+            if model_name:
+                models.append(model_name)
+
+        configured = str(LLM_MODEL or "").strip()
+        configured_ok = True
+        if configured:
+            configured_ok = any(configured in item for item in models)
+
+        summary = f"models={models[:6]} total={len(models)} configured_present={configured_ok}"
+        return bool(configured_ok), summary
+    except Exception as exc:
+        return False, f"ollama list probe failed: {exc}"
+
+
+def _probe_vram_status():
+    try:
+        import subprocess
+
+        cmd = [
+            "nvidia-smi",
+            "--query-gpu=name,memory.total,memory.free,memory.used",
+            "--format=csv,noheader,nounits",
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+        if result.returncode != 0:
+            return True, "nvidia-smi unavailable (CPU-only or non-NVIDIA)"
+
+        rows = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+        if not rows:
+            return True, "nvidia-smi returned no GPU rows"
+
+        gpu_summaries = []
+        for row in rows[:2]:
+            parts = [part.strip() for part in row.split(",")]
+            if len(parts) < 4:
+                continue
+            name = parts[0]
+            total_mb = parts[1]
+            free_mb = parts[2]
+            used_mb = parts[3]
+            gpu_summaries.append(f"{name}: total={total_mb}MB free={free_mb}MB used={used_mb}MB")
+
+        return True, "; ".join(gpu_summaries) if gpu_summaries else "GPU info parse failed"
+    except Exception as exc:
+        return True, f"VRAM probe skipped: {exc}"
 
 
 def collect_diagnostics(*, include_model_load_checks=False):
@@ -188,6 +251,26 @@ def collect_diagnostics(*, include_model_load_checks=False):
                 "details": str(exc),
             }
         )
+
+    models_ok, models_details = _probe_ollama_models()
+    checks.append(
+        {
+            "name": "ollama_models",
+            "ok": bool(models_ok),
+            "details": models_details,
+            "required": False,
+        }
+    )
+
+    vram_ok, vram_details = _probe_vram_status()
+    checks.append(
+        {
+            "name": "gpu_vram",
+            "ok": bool(vram_ok),
+            "details": vram_details,
+            "required": False,
+        }
+    )
 
     feature_tiers = _summarize_feature_tiers(checks)
     checks.extend(feature_tiers)

@@ -24,6 +24,7 @@ from core.config import (
     WAKE_WORD_AR_CHUNK_SECONDS,
     WAKE_WORD_AR_CONFIRM_WINDOW_SECONDS,
     WAKE_WORD_AR_CONSECUTIVE_HITS_REQUIRED,
+    WAKE_WORD_AR_ONNX_PATH,
     WAKE_WORD_AR_ENABLED,
     WAKE_WORD_AR_STT_MODEL,
     WAKE_WORD_AR_TRIGGERS,
@@ -40,8 +41,10 @@ from core.config import (
 from core.logger import logger
 
 _model = None
+_arabic_onnx_model = None
 _ar_stt_model = None
 _ar_stt_model_name = ""
+_arabic_onnx_model_path = ""
 _last_detection_ts = 0.0
 _ar_last_hit_ts = 0.0
 _ar_consecutive_hits = 0
@@ -341,6 +344,41 @@ def _get_ar_stt_model(model_name: str):
     return _ar_stt_model
 
 
+def _get_arabic_onnx_model(model_path: str):
+    """Load an optional custom Arabic wake-word ONNX model.
+
+    The custom model is preferred when configured because it reacts much faster
+    than the Whisper fallback. If loading fails we deliberately fall back to the
+    existing STT-based detector so the assistant still works on older setups.
+    """
+    global _arabic_onnx_model
+    global _arabic_onnx_model_path
+
+    candidate_path = str(model_path or "").strip()
+    if not candidate_path:
+        return None
+    if _arabic_onnx_model is not None and _arabic_onnx_model_path == candidate_path:
+        return _arabic_onnx_model
+
+    try:
+        import openwakeword
+        from openwakeword.model import Model
+    except Exception as exc:
+        raise RuntimeError(
+            "openwakeword is unavailable for the Arabic ONNX wake model."
+        ) from exc
+
+    path = pathlib.Path(candidate_path)
+    if not path.exists():
+        raise RuntimeError(f"Configured Arabic wake-word ONNX model was not found: {candidate_path}")
+
+    _ensure_onnx_resources()
+    _arabic_onnx_model = Model(wakeword_models=[str(path)], inference_framework="onnx")
+    _arabic_onnx_model_path = candidate_path
+    logger.info("Loaded custom Arabic wake-word ONNX model from %s", candidate_path)
+    return _arabic_onnx_model
+
+
 def _transcribe_arabic_window(audio_window: np.ndarray, model_name: str) -> str:
     if audio_window is None or int(getattr(audio_window, "size", 0)) <= 0:
         return ""
@@ -451,14 +489,27 @@ def preload_runtime_wake_word():
 
     english_model_loaded = False
     arabic_model_loaded = False
+    arabic_onnx_model_loaded = False
 
     if english_layer_enabled:
         _get_model()
         english_model_loaded = True
 
+    arabic_onnx_path = str(WAKE_WORD_AR_ONNX_PATH or "").strip()
+    if arabic_layer_enabled and arabic_onnx_path:
+        try:
+            _get_arabic_onnx_model(arabic_onnx_path)
+            arabic_onnx_model_loaded = True
+        except Exception as exc:
+            logger.warning(
+                "Arabic wake-word ONNX model unavailable, falling back to Whisper: %s",
+                exc,
+            )
+
     if arabic_layer_enabled:
         ar_model_name = str(phrase_runtime.get("ar_stt_model") or WAKE_WORD_AR_STT_MODEL)
-        _get_ar_stt_model(ar_model_name)
+        if not arabic_onnx_model_loaded:
+            _get_ar_stt_model(ar_model_name)
         arabic_model_loaded = True
 
     return {
@@ -467,6 +518,7 @@ def preload_runtime_wake_word():
         "english_layer_enabled": bool(english_layer_enabled),
         "arabic_layer_enabled": bool(arabic_layer_enabled),
         "english_model_loaded": bool(english_model_loaded),
+        "arabic_onnx_model_loaded": bool(arabic_onnx_model_loaded),
         "arabic_model_loaded": bool(arabic_model_loaded),
     }
 
@@ -549,6 +601,17 @@ def listen_for_wake_word():
         phrase_runtime.get("ar_confirm_window_seconds") or WAKE_WORD_AR_CONFIRM_WINDOW_SECONDS
     )
     ar_model_name = str(phrase_runtime.get("ar_stt_model") or WAKE_WORD_AR_STT_MODEL)
+    ar_onnx_path = str(WAKE_WORD_AR_ONNX_PATH or "").strip()
+    arabic_onnx_model = None
+    if arabic_layer_enabled and ar_onnx_path:
+        try:
+            arabic_onnx_model = _get_arabic_onnx_model(ar_onnx_path)
+        except Exception as exc:
+            logger.warning(
+                "Arabic wake-word ONNX model unavailable at runtime, using Whisper fallback: %s",
+                exc,
+            )
+            arabic_onnx_model = None
 
     ar_samples = max(WAKE_WORD_CHUNK_SIZE, int(round(float(ar_chunk_seconds) * float(SAMPLE_RATE))))
     ar_chunks = max(1, int(np.ceil(float(ar_samples) / float(WAKE_WORD_CHUNK_SIZE))))
@@ -560,6 +623,7 @@ def listen_for_wake_word():
     ar_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="jarvis-wake-ar") if arabic_layer_enabled else None
     ar_future = None
     ar_future_started_ts = 0.0
+    ar_future_backend = "whisper"
     _ar_consecutive_hits = 0
     _ar_last_hit_ts = 0.0
 
@@ -607,6 +671,28 @@ def listen_for_wake_word():
                     ar_ring.append(audio_chunk.copy())
                     now = time.perf_counter()
 
+                    if arabic_onnx_model is not None:
+                        try:
+                            prediction = arabic_onnx_model.predict(audio_chunk)
+                            if prediction:
+                                score = max(prediction.values())
+                            else:
+                                score = 0.0
+                            if WAKE_WORD_SCORE_DEBUG and score is not None:
+                                print(f"[WakeWord][AR-ONNX] score={float(score):.6f}")
+                            if score and float(score) > 0.5:
+                                if now - _last_detection_ts < wake_cooldown:
+                                    continue
+                                _last_detection_ts = now
+                                print("[WakeWord] Wake word detected (arabic onnx).")
+                                return "arabic_onnx"
+                        except Exception as exc:
+                            logger.warning(
+                                "Arabic wake-word ONNX prediction failed, switching to Whisper fallback: %s",
+                                exc,
+                            )
+                            arabic_onnx_model = None
+
                     if ar_future is not None and ar_future.done():
                         try:
                             transcript = ar_future.result()
@@ -650,7 +736,7 @@ def listen_for_wake_word():
                                 continue
                             _last_detection_ts = now
                             print(f"[WakeWord] Wake word detected (phrase): {matched_trigger}")
-                            return "phrase"
+                            return "arabic_phrase"
 
                     if ar_future is not None:
                         if (
@@ -669,12 +755,19 @@ def listen_for_wake_word():
                         continue
                     last_ar_check_ts = now
 
+                    if arabic_onnx_model is not None:
+                        ar_future = None
+                        ar_future_started_ts = now
+                        ar_future_backend = "onnx"
+                        continue
+
                     window = np.concatenate(list(ar_ring), axis=0).astype(np.int16, copy=False)
                     if window.shape[0] > ar_samples:
                         window = window[-ar_samples:]
 
                     if ar_executor is not None:
                         ar_future_started_ts = now
+                        ar_future_backend = "whisper"
                         ar_future = ar_executor.submit(_transcribe_arabic_window, window, ar_model_name)
     finally:
         if ar_executor is not None:

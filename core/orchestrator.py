@@ -28,6 +28,7 @@ from audio.wake_word import (
 )
 from core.command_parser import parse_command
 from core.command_router import initialize_command_services, route_command
+from core.knowledge_base import knowledge_base_service
 from core.doctor import collect_diagnostics
 from core.config import (
     DOCTOR_INCLUDE_MODEL_LOAD_CHECKS,
@@ -49,6 +50,7 @@ from core.config import (
     SEMANTIC_ROUTER_ENABLED,
     STARTUP_PARSER_NLP_PREWARM_ENABLED,
     TTS_PREWARM_ENABLED,
+    KB_AUTO_SYNC_ENABLED,
 )
 from core.intent_confidence import assess_intent_confidence
 from core.logger import logger
@@ -90,13 +92,16 @@ def _is_stt_annotation_only(text):
 
 def _resolve_stt_language_hint(*, wake_source=None):
     _ = wake_source
-    # Use the session's preferred language as a soft hint so the Egyptian model
-    # is selected immediately for Arabic speakers, avoiding the extra auto-detect
-    # pass on every utterance.  Falls back to None (fully automatic) when no
-    # language preference has been established yet.
-    lang = session_memory.get_preferred_language()
+    # Phase 2.9 — combine explicit user preference with recent persisted language
+    # history so STT picks the right model fast even right after a restart. The
+    # session_memory helper handles the dominance/threshold logic; we only need
+    # to translate ``None`` into "fully automatic" for the STT layer.
+    lang = session_memory.get_stt_language_hint()
     if lang in {"ar", "en"}:
         return lang
+    legacy = session_memory.get_preferred_language()
+    if legacy in {"ar", "en"}:
+        return legacy
     return None
 
 
@@ -707,6 +712,7 @@ def _detect_and_set_runtime_model():
         model_name,
         num_ctx=num_ctx,
         lightweight_num_ctx=lightweight_num_ctx,
+        tier=str(tier.get("tier") or "medium") if isinstance(tier, dict) else "medium",
     )
     _ensure_model_available(model_name, ollama_url)
 
@@ -807,17 +813,26 @@ def _run_startup_prewarm_blocking():
         ("stt", _preload_stt_model),
         ("llm", _prewarm_llm),
     ]
-    if STARTUP_PARSER_NLP_PREWARM_ENABLED:
+    cpu_cores = max(1, int(os.cpu_count() or 1))
+    allow_extended_prewarm = cpu_cores >= 6
+    allow_heavy_prewarm = cpu_cores >= 10
+
+    if STARTUP_PARSER_NLP_PREWARM_ENABLED and allow_extended_prewarm:
         tasks.append(("parser_nlp", _prewarm_parser_nlp))
-    if SEMANTIC_ROUTER_ENABLED:
+    if SEMANTIC_ROUTER_ENABLED and allow_heavy_prewarm:
         tasks.append(("semantic_router", _prewarm_semantic_router))
-    if TTS_PREWARM_ENABLED:
+    if TTS_PREWARM_ENABLED and allow_extended_prewarm:
         tasks.append(("tts", _prewarm_tts))
 
     if not tasks:
         return
 
-    logger.info("Startup prewarm started; waiting before wake-word listening begins.")
+    logger.info(
+        "Startup prewarm started (cpu_cores=%d, extended=%s, heavy=%s); waiting before wake-word listening begins.",
+        cpu_cores,
+        allow_extended_prewarm,
+        allow_heavy_prewarm,
+    )
     started = time.perf_counter()
 
     with ThreadPoolExecutor(
@@ -849,6 +864,13 @@ def run():
 
     # Block startup until warm-up completes so wake-word listening begins on a fully loaded runtime.
     _run_startup_prewarm_blocking()
+
+    if KB_AUTO_SYNC_ENABLED:
+        ok, message = knowledge_base_service.start_auto_sync()
+        if ok:
+            logger.info("Knowledge-base auto-sync startup: %s", message)
+        else:
+            logger.warning("Knowledge-base auto-sync startup skipped: %s", message)
 
     if DOCTOR_STARTUP_ENABLED:
         _run_doctor_diagnostics("startup")
@@ -939,6 +961,10 @@ def run():
                 )
             )
     finally:
+        try:
+            knowledge_base_service.stop_auto_sync()
+        except Exception:
+            pass
         perform_shutdown_cleanup()
         executor.shutdown(wait=False, cancel_futures=False)
 

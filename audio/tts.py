@@ -8,6 +8,7 @@ import time
 import wave
 
 from core.config import (
+    BARGE_IN_VAD_ENABLED,
     ELEVENLABS_API_KEY,
     ELEVENLABS_BASE_URL,
     TTS_ARABIC_SPOKEN_DIALECT,
@@ -28,6 +29,7 @@ from core.config import (
     TTS_QUALITY_MODE,
     TTS_SIMULATED_CHAR_DELAY,
 )
+from audio.barge_in import BargeInMonitor
 from core.logger import logger
 from core.metrics import metrics
 from core.persona import persona_manager
@@ -85,69 +87,169 @@ _EGYPTIAN_TTS_PHRASE_REPLACEMENTS = (
     ("لن أستطيع", "مش هقدر"),
     ("لن يستطيع", "مش هيقدر"),
     ("لن تستطيع", "مش هتقدر"),
+    ("لن نستطيع", "مش هنقدر"),
     ("لن أتمكن", "مش هقدر"),
+    ("لن يتمكن", "مش هيقدر"),
     ("لا أستطيع", "مش قادر"),
     ("لا يستطيع", "مش قادر"),
     ("لا تستطيع", "مش قادرة"),
+    ("لا نستطيع", "مش قادرين"),
     ("لا أقدر", "مش قادر"),
     ("لا أعرف", "مش عارف"),
     ("لا أعلم", "مش عارف"),
+    ("لم أعد أعرف", "بقيت مش عارف"),
     # Negated existence (before bare negation)
     ("لا يوجد", "مفيش"),
     ("لا توجد", "مفيش"),
+    ("ليس هناك", "مفيش"),
+    ("ليس لدي", "معنديش"),
+    ("ليست لدي", "معنديش"),
+    ("ليس لديك", "معندكش"),
+    ("ليس لديه", "معندوش"),
     # Negated past tense
     ("لم يكن", "ماكانش"),
     ("لم تكن", "ماكانتش"),
     ("لم أكن", "ماكنتش"),
+    ("لم أفعل", "معملتش"),
+    ("لم أعمل", "معملتش"),
+    ("لم أرى", "ماشفتش"),
+    ("لم أسمع", "ماسمعتش"),
+    # Future tense — `سوف` / `س` prefix becomes `هـ`
+    ("سوف أقوم", "هعمل"),
+    ("سوف أعمل", "هعمل"),
+    ("سوف أساعدك", "هساعدك"),
+    ("سوف أخبرك", "هقولك"),
+    ("سوف أقول", "هقول"),
+    ("سوف نقوم", "هنعمل"),
+    ("سوف نعمل", "هنعمل"),
+    ("سوف يتم", "هيتم"),
+    ("سأقوم بـ", "هـ"),
+    ("سأقوم", "هعمل"),
+    ("سأعمل", "هعمل"),
+    ("سأخبرك", "هقولك"),
+    ("سأشرح", "هشرحلك"),
+    ("سأساعدك", "هساعدك"),
+    ("سأرسل", "هبعت"),
+    ("سوف أرسل", "هبعت"),
+    ("سوف أرسلها", "هبعتها"),
+    ("سوف أرسله", "هبعته"),
+    ("سوف أحاول", "هحاول"),
+    ("سوف أفكر", "هفكر"),
+    ("سأحاول", "هحاول"),
+    ("سأفكر", "هفكر"),
+    ("سنقوم", "هنعمل"),
+    ("سنعمل", "هنعمل"),
+    ("سيتم", "هيتم"),
     # Question words: compound before simple
     ("كيف ذلك", "إزاي ده"),
+    ("كيف يمكن", "إزاي ممكن"),
+    ("كيف يمكنك", "إزاي تقدر"),
     ("من هو", "مين ده"),
     ("من هي", "مين دي"),
+    ("ما هو", "إيه ده"),
+    ("ما هي", "إيه دي"),
+    ("ماذا تعني", "تعني إيه"),
+    ("ماذا يعني", "يعني إيه"),
     ("لماذا", "ليه"),          # must precede ماذا
     ("لمَ", "ليه"),
     ("ماذا", "إيه"),
     ("متى", "إمتى"),
     ("أين", "فين"),
+    ("كيف", "إزاي"),
     # Multi-word expressions (before their shorter components)
     ("بكل تأكيد", "اكيد"),
     ("بالتأكيد", "اكيد"),
     ("علاوة على ذلك", "وكمان"),
     ("بالإضافة إلى ذلك", "وكمان"),
+    ("بالإضافة الى ذلك", "وكمان"),
+    ("بالإضافة إلى", "كمان"),
     ("في الوقت الحالي", "دلوقتي"),
     ("في الوقت الراهن", "دلوقتي"),
+    ("في هذه اللحظة", "دلوقتي"),
+    ("في هذا الوقت", "دلوقتي"),
     ("على سبيل المثال", "مثلاً"),
+    ("على الأرجح", "غالباً"),
+    ("على الأقل", "على الأقل"),
+    ("على الأكثر", "على الأكثر"),
+    ("بشكل عام", "بشكل عام"),
+    ("بشكل خاص", "خصوصاً"),
+    ("بشكل سريع", "بسرعة"),
+    ("بشكل كبير", "بشكل كبير"),
     ("من الضروري", "لازم"),
+    ("من الأفضل", "الأحسن"),
+    ("من الممكن", "ممكن"),
+    ("من المهم", "مهم"),
     ("يجب عليك", "لازم"),
+    ("يجب علي", "لازم"),
     ("يجب أن", "لازم"),
+    ("يجب ان", "لازم"),
     ("ينبغي أن", "المفروض"),
+    ("ينبغي ان", "المفروض"),
     ("من المفترض", "المفروض"),
     ("بعد ذلك", "بعدين"),
     ("قبل ذلك", "قبل كده"),
+    ("بعد قليل", "بعد شوية"),
+    ("منذ قليل", "من شوية"),
+    ("منذ فترة", "من فترة"),
     ("في البداية", "في الأول"),
+    ("في النهاية", "في الآخر"),
+    ("في المنتصف", "في النص"),
     ("مع ذلك", "مع كده"),
     ("رغم ذلك", "مع كده"),
+    ("بالرغم من", "رغم"),
+    ("على أي حال", "على العموم"),
+    ("على كل حال", "على العموم"),
+    ("بأي حال", "بأي شكل"),
     ("يحتاج إلى", "محتاج"),
     ("يحتاج الى", "محتاج"),
+    ("أحتاج إلى", "محتاج"),
+    ("أحتاج الى", "محتاج"),
+    ("نحتاج إلى", "محتاجين"),
+    ("نحتاج الى", "محتاجين"),
     ("من فضلك،", "لو سمحت،"),
+    ("لو سمحتم", "لو سمحت"),
     ("تمام الأمر", "تمام"),
     ("تم بنجاح", "اتعمل تمام"),
     ("تم الأمر", "خلاص"),
+    ("هل تريد", "عايز"),
+    ("هل تريدين", "عايزة"),
+    ("هل يمكنك", "تقدر"),
+    ("هل يمكنني", "اقدر"),
+    ("هل يمكن", "ممكن"),
+    # Politeness / acknowledgements
+    ("شكراً جزيلاً", "متشكر جداً"),
+    ("شكرا جزيلا", "متشكر جداً"),
+    ("لا شكر على واجب", "العفو"),
     # Demonstrative compounds (before bare demonstratives)
     ("هذا الأمر", "الموضوع ده"),
     ("هذه الطريقة", "الطريقة دي"),
     ("هذا الشيء", "الحاجة دي"),
+    ("هذه الحالة", "الحالة دي"),
+    ("هذه المرة", "المرة دي"),
+    ("هذه الأيام", "الأيام دي"),
+    ("هذا اليوم", "اليوم ده"),
+    ("هذه السنة", "السنة دي"),
     # Relative pronouns
     ("الذي", "اللي"),
     ("التي", "اللي"),
     ("الذين", "اللي"),
     ("اللذان", "اللي"),
+    ("اللتان", "اللي"),
     # Connectors (compound before simple)
     ("لأنه", "عشانه"),
     ("لأنها", "عشانها"),
     ("ولكن", "بس"),
     ("لكن", "بس"),
     ("لأن", "عشان"),
+    ("كي لا", "عشان ما"),
+    ("لكي", "عشان"),
     ("كذلك", "كمان"),
+    ("بحيث", "بحيث"),
+    ("بينما", "وانت"),
+    ("في حين", "وانت"),
+    ("إذا", "لو"),
+    ("اذا", "لو"),
+    ("إن", "لو"),
     # Verbs (negated before bare)
     ("يُفضَّل", "الأحسن"),
     ("يُفضل", "الأحسن"),
@@ -157,8 +259,17 @@ _EGYPTIAN_TTS_PHRASE_REPLACEMENTS = (
     ("للأسف", "يا ريت"),
     ("أولاً", "الأول"),
     ("ثانياً", "تانياً"),
+    ("ثالثاً", "تالتاً"),
+    ("رابعاً", "رابعاً"),
     ("أخيراً", "في الآخر"),
     ("من فضلك", "لو سمحت"),
+    # Ownership / pronouns
+    ("لدي", "عندي"),
+    ("لديك", "عندك"),
+    ("لديه", "عنده"),
+    ("لديها", "عندها"),
+    ("لدينا", "عندنا"),
+    ("لديهم", "عندهم"),
 )
 
 _EGYPTIAN_TTS_WORD_REPLACEMENTS = (
@@ -166,12 +277,22 @@ _EGYPTIAN_TTS_WORD_REPLACEMENTS = (
     # Negated forms are handled in the phrase table above; only bare forms here.
     # Ability
     ("يمكنني", "اقدر"),
+    ("يمكنه", "يقدر"),
+    ("يمكنها", "تقدر"),
     ("أستطيع", "اقدر"),
+    ("نستطيع", "نقدر"),
     ("يمكنك", "تقدر"),
     ("يمكنكم", "تقدروا"),
     ("بإمكانك", "تقدر"),
+    ("بإمكاني", "بقدر"),
     # Time
     ("الآن", "دلوقتي"),
+    ("الان", "دلوقتي"),
+    ("اليوم", "النهاردة"),
+    ("غداً", "بكرة"),
+    ("غدا", "بكرة"),
+    ("أمس", "امبارح"),
+    ("البارحة", "امبارح"),
     # Demonstratives
     ("هذا", "ده"),
     ("هذه", "دي"),
@@ -182,40 +303,59 @@ _EGYPTIAN_TTS_WORD_REPLACEMENTS = (
     # Verbs
     ("أذهب", "أروح"),
     ("يذهب", "يروح"),
+    ("تذهب", "تروح"),
     ("نذهب", "نروح"),
+    ("اذهب", "روح"),
     ("أريد", "عايز"),
     ("تريد", "عايز"),
     ("يريد", "عايز"),
+    ("تريدين", "عايزة"),
     ("نريد", "عايزين"),
     ("أعرف", "عارف"),
+    ("تعرف", "تعرف"),
+    ("يعرف", "بيعرف"),
     ("أعلم", "عارف"),
+    ("تعلم", "تعرف"),
     ("يقول", "بيقول"),
+    ("تقول", "بتقول"),
+    ("نقول", "بنقول"),
     ("يعمل", "بيعمل"),
+    ("تعمل", "بتعمل"),
     ("أعمل", "بعمل"),
     ("نعمل", "بنعمل"),
     ("أفكر", "بفكر"),
+    ("تفكر", "بتفكر"),
     ("يفكر", "بيفكر"),
     ("أنظر", "أشوف"),
     ("تنظر", "تشوف"),
     ("ينظر", "يشوف"),
     ("يحتاج", "محتاج"),
+    ("تحتاج", "محتاجة"),
     ("يفضل", "الأحسن"),
+    ("يجب", "لازم"),
     # Like / similar
     ("مثل", "زي"),
     # Also / too
     ("أيضاً", "كمان"),
     ("أيضا", "كمان"),
+    ("كذلك", "كمان"),
     # Negation (bare)
     ("ليس", "مش"),
+    ("ليست", "مش"),
     ("لست", "مش"),
+    ("لسنا", "مش"),
     # Common words
     ("جداً", "أوي"),
     ("جدا", "أوي"),
     ("كثيراً", "أوي"),
     ("كثيرا", "أوي"),
+    ("قليلاً", "شوية"),
+    ("قليلا", "شوية"),
     ("سريعاً", "بسرعة"),
     ("سريعا", "بسرعة"),
+    ("ببطء", "براحتك"),
     ("صحيح", "صح"),
+    ("خاطئ", "غلط"),
     ("غلط", "غلط"),
     ("كلام", "كلام"),
     ("حسناً", "تمام"),
@@ -224,10 +364,31 @@ _EGYPTIAN_TTS_WORD_REPLACEMENTS = (
     ("شكراً", "شكراً"),
     ("عفواً", "أهلاً"),
     ("بالطبع", "طبعاً"),
+    ("ربما", "يمكن"),
+    ("لربما", "يمكن"),
+    # Quantity / degree
+    ("بعض", "شوية"),
+    ("معظم", "أغلب"),
+    # Common nouns commonly heard from MSA outputs
+    ("الناس", "الناس"),
+    ("الأشخاص", "الناس"),
+    ("شخص", "حد"),
+    ("مكان", "مكان"),
+    ("شيء", "حاجة"),
+    ("أشياء", "حاجات"),
 )
 
 
 def _rewrite_to_egyptian_colloquial(text):
+    """Rewrite an MSA-tilted line into Egyptian Arabic for natural TTS output.
+
+    Phase 2.10 hardening:
+      * word-boundary lookarounds use Unicode word characters (``\\w``) so
+        Arabic words next to punctuation (``؟``, ``،``, ``.``, ``!``) are
+        rewritten — the previous whitespace-only boundary missed them;
+      * phrase-level replacements run first so multi-word MSA expressions
+        (``لا أستطيع``, ``سوف أقوم``) win over their single-word forms.
+    """
     updated = str(text or "")
     if not updated:
         return updated
@@ -236,7 +397,8 @@ def _rewrite_to_egyptian_colloquial(text):
         updated = updated.replace(source, target)
 
     for source, target in _EGYPTIAN_TTS_WORD_REPLACEMENTS:
-        updated = re.sub(rf"(?<!\S){re.escape(source)}(?!\S)", target, updated)
+        pattern = rf"(?<!\w){re.escape(source)}(?!\w)"
+        updated = re.sub(pattern, target, updated, flags=re.UNICODE)
 
     updated = re.sub(r"\s+", " ", updated).strip()
     return updated
@@ -258,6 +420,33 @@ class SpeechEngine:
         self._edge_tts_unsupported_voices = set()
         self._elevenlabs_unavailable_logged = False
         self._enabled = bool(TTS_ENABLED)
+        # Phase 2.11 — VAD barge-in monitor (started/stopped around speak calls).
+        self._barge_in_monitor = BargeInMonitor(
+            on_barge_in=self._on_barge_in_detected,
+            is_active=self.is_speaking,
+        )
+
+    def _on_barge_in_detected(self):
+        """Stop active TTS when the VAD monitor flags user speech.
+
+        Runs on the monitor thread; ``interrupt()`` is thread-safe.
+        """
+        logger.info("Barge-in: stopping TTS so the user can speak.")
+        self.interrupt()
+
+    def _start_barge_in_monitor(self):
+        if not BARGE_IN_VAD_ENABLED:
+            return
+        try:
+            self._barge_in_monitor.start()
+        except Exception as exc:
+            logger.debug("Could not start barge-in monitor: %s", exc)
+
+    def _stop_barge_in_monitor(self):
+        try:
+            self._barge_in_monitor.stop()
+        except Exception as exc:
+            logger.debug("Could not stop barge-in monitor: %s", exc)
 
     def _normalize_backend(self, backend):
         raw = str(backend or "auto").strip().lower()
@@ -352,6 +541,10 @@ class SpeechEngine:
             self._thread = None
             self._queue_thread = None
 
+        # Stop the barge-in monitor first so it doesn't fire while we're tearing
+        # the playback thread down.
+        self._stop_barge_in_monitor()
+
         if process is not None:
             try:
                 process.terminate()
@@ -389,6 +582,8 @@ class SpeechEngine:
         with self._lock:
             self._thread = thread
         thread.start()
+        # Start the VAD barge-in monitor so the user can talk over the assistant.
+        self._start_barge_in_monitor()
         return True, "Speech started."
 
     def speak_sentence_queue(self, sentences_iterator, language=None):
@@ -422,6 +617,8 @@ class SpeechEngine:
                         and self._queue_thread.ident == threading.current_thread().ident
                     ):
                         self._queue_thread = None
+                # Sentence queue done — release the barge-in monitor.
+                self._stop_barge_in_monitor()
 
         thread = threading.Thread(
             target=_run_sentence_queue,
@@ -431,6 +628,8 @@ class SpeechEngine:
         with self._lock:
             self._queue_thread = thread
         thread.start()
+        # Phase 2.11 — barge-in monitor is shared across speak_async + queue paths.
+        self._start_barge_in_monitor()
         return True, "Speech queue started."
 
     def _resolve_backend(self):
@@ -708,8 +907,17 @@ class SpeechEngine:
             metrics.record_stage("tts", time.perf_counter() - started, success=success)
             with self._lock:
                 self._process = None
+                released_thread = False
                 if self._thread and self._thread.ident == threading.current_thread().ident:
                     self._thread = None
+                    released_thread = True
+                queue_thread_active = bool(
+                    self._queue_thread and self._queue_thread.is_alive()
+                )
+            # Stop the barge-in monitor only when no other speech path is still
+            # active — the queue path manages its own teardown.
+            if released_thread and not queue_thread_active:
+                self._stop_barge_in_monitor()
 
     def _speak_console(self, text, prefix):
         words = text.split()

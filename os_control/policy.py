@@ -6,6 +6,7 @@ from core.config import (
     POLICY_ALLOWED_PATHS,
     POLICY_BLOCKED_PATH_PREFIXES,
     POLICY_COMMAND_PERMISSIONS,
+    POLICY_DRY_RUN_MODE,
     POLICY_PROFILES,
     POLICY_READ_ONLY_MODE,
 )
@@ -19,6 +20,7 @@ class PolicyEngine:
         self._profiles = POLICY_PROFILES
         self._active_profile = "normal"
         self._read_only_mode = POLICY_READ_ONLY_MODE
+        self._dry_run_mode = POLICY_DRY_RUN_MODE
         self._command_permissions = dict(POLICY_COMMAND_PERMISSIONS)
 
     def set_read_only_mode(self, enabled):
@@ -28,6 +30,14 @@ class PolicyEngine:
     def set_command_permission(self, command_key, enabled):
         with self._lock:
             self._command_permissions[command_key] = bool(enabled)
+
+    def set_dry_run_mode(self, enabled):
+        with self._lock:
+            self._dry_run_mode = bool(enabled)
+
+    def is_dry_run_mode(self):
+        with self._lock:
+            return bool(self._dry_run_mode)
 
     def is_command_allowed(self, command_key):
         with self._lock:
@@ -62,6 +72,7 @@ class PolicyEngine:
         with self._lock:
             self._active_profile = profile_key
             self._read_only_mode = bool(profile.get("read_only_mode", False))
+            self._dry_run_mode = bool(profile.get("dry_run_mode", False))
             self._command_permissions = dict(profile.get("command_permissions", {}))
         return True, f"Policy profile set to: {profile_key}"
 
@@ -74,9 +85,11 @@ class PolicyEngine:
             permissions = dict(self._command_permissions)
             profile = self._active_profile
             read_only = self._read_only_mode
+            dry_run = self._dry_run_mode
         return {
             "profile": profile,
             "read_only_mode": read_only,
+            "dry_run_mode": dry_run,
             "allowed_paths": list(self._allowed_roots),
             "blocked_prefixes": list(self._blocked_prefixes),
             "permissions": permissions,

@@ -90,6 +90,7 @@ if WAKE_WORD_MODE not in {"english", "arabic", "both"}:
     WAKE_WORD_MODE = "both"
 
 WAKE_WORD_AR_ENABLED = _env_bool("JARVIS_WAKE_WORD_AR_ENABLED", True)
+WAKE_WORD_AR_ONNX_PATH = _env("JARVIS_WAKE_WORD_AR_ONNX_PATH", "").strip()
 _DEFAULT_WAKE_WORD_AR_TRIGGERS = (
     "hey jarvis",
     "hello jarvis",
@@ -248,6 +249,30 @@ TTS_SIMULATED_CHAR_DELAY = 0.02
 BARGE_IN_INTERRUPT_ON_WAKE = True
 WAKE_WORD_IGNORE_WHILE_SPEAKING = True
 
+# Phase 2.11 — VAD-based barge-in: detect user speech while TTS is playing
+# and treat it as an implicit interrupt (user wants to override the assistant).
+BARGE_IN_VAD_ENABLED = _env_bool("JARVIS_BARGE_IN_VAD_ENABLED", True)
+# Energy floor (0..1 normalized RMS). Higher = harder to trigger; quieter rooms
+# may need a value around 0.018, noisy rooms around 0.04.
+BARGE_IN_VAD_ENERGY_THRESHOLD = max(
+    0.005,
+    _env_float("JARVIS_BARGE_IN_VAD_ENERGY_THRESHOLD", 0.030),
+)
+# Minimum sustained speech duration (seconds) that must be observed before the
+# monitor decides a true barge-in is happening — keeps coughs and clicks from
+# stopping speech mid-sentence.
+BARGE_IN_VAD_MIN_SPEECH_SECONDS = max(
+    0.10,
+    _env_float("JARVIS_BARGE_IN_VAD_MIN_SPEECH_SECONDS", 0.45),
+)
+# How long after TTS starts before the monitor begins listening. Prevents
+# the speaker's own audio (echoed through the mic) from triggering an instant
+# self-interrupt on systems without echo cancellation.
+BARGE_IN_VAD_GRACE_SECONDS = max(
+    0.0,
+    _env_float("JARVIS_BARGE_IN_VAD_GRACE_SECONDS", 0.6),
+)
+
 # Persona
 PERSONA_DEFAULT = "assistant"
 PERSONA_LENGTH_TARGET_ENABLED = _env_bool("JARVIS_PERSONA_LENGTH_TARGET_ENABLED", True)
@@ -274,6 +299,45 @@ WEATHER_DEFAULT_CITY = _env("JARVIS_WEATHER_CITY", "Cairo")
 # Web search
 WEB_SEARCH_ENABLED = _env_bool("JARVIS_WEB_SEARCH_ENABLED", True)
 WEB_SEARCH_MAX_RESULTS = max(1, _env_int("JARVIS_WEB_SEARCH_MAX_RESULTS", 3))
+# Trusted domains promoted by the recency/quality scorer. Empty = no preference.
+_DEFAULT_WEB_SEARCH_TRUSTED_DOMAINS = (
+    "wikipedia.org",
+    "bbc.com",
+    "bbc.co.uk",
+    "reuters.com",
+    "apnews.com",
+    "aljazeera.com",
+    "aljazeera.net",
+    "ahram.org.eg",
+    "youm7.com",
+    "masrawy.com",
+    "elwatannews.com",
+    "github.com",
+    "stackoverflow.com",
+    "python.org",
+    "docs.python.org",
+    "developer.mozilla.org",
+    "msdn.microsoft.com",
+    "learn.microsoft.com",
+    "openmeteo.com",
+    "metoffice.gov.uk",
+)
+WEB_SEARCH_TRUSTED_DOMAINS = _env_list(
+    "JARVIS_WEB_SEARCH_TRUSTED_DOMAINS",
+    _DEFAULT_WEB_SEARCH_TRUSTED_DOMAINS,
+)
+# Domains that should be filtered out unconditionally. Empty by default.
+WEB_SEARCH_BLOCKED_DOMAINS = _env_list(
+    "JARVIS_WEB_SEARCH_BLOCKED_DOMAINS",
+    (),
+)
+# Score blending weights — all values clamped between 0 and 1.
+WEB_SEARCH_TRUSTED_DOMAIN_BOOST = max(
+    0.0, min(1.0, _env_float("JARVIS_WEB_SEARCH_TRUSTED_DOMAIN_BOOST", 0.35))
+)
+WEB_SEARCH_RECENCY_BOOST = max(
+    0.0, min(1.0, _env_float("JARVIS_WEB_SEARCH_RECENCY_BOOST", 0.25))
+)
 
 # Offline knowledge base (Phase 4)
 KB_ENABLED = True
@@ -293,6 +357,9 @@ KB_MIN_SEMANTIC_ONLY_SCORE = 0.58
 KB_RERANK_CANDIDATE_MULTIPLIER = 4
 KB_LEXICAL_RERANK_WEIGHT = 0.35
 KB_EMBEDDING_RERANK_WEIGHT = 0.65
+KB_AUTO_SYNC_ENABLED = _env_bool("JARVIS_KB_AUTO_SYNC_ENABLED", False)
+KB_AUTO_SYNC_INTERVAL_SECONDS = max(1.0, _env_float("JARVIS_KB_AUTO_SYNC_INTERVAL_SECONDS", 4.0))
+KB_AUTO_SYNC_PATHS = _env_list("JARVIS_KB_AUTO_SYNC_PATHS", ())
 KB_BLOCKED_CONTEXT_PATTERNS = (
     "ignore previous instruction",
     "ignore all previous instruction",
@@ -306,8 +373,20 @@ KB_BLOCKED_CONTEXT_PATTERNS = (
 # Session memory
 MEMORY_ENABLED = True
 MEMORY_FILE = _project_path("jarvis_memory.json")
+# Phase 2.8 — primary persistence is SQLite; the JSON file above is now used
+# only for legacy migration on first launch and as a debug-export target.
+MEMORY_DB_FILE = _env("JARVIS_MEMORY_DB_FILE", _project_path("jarvis_memory.db"))
+MEMORY_BACKEND = str(_env("JARVIS_MEMORY_BACKEND", "sqlite")).strip().lower() or "sqlite"
+if MEMORY_BACKEND not in {"sqlite", "json"}:
+    MEMORY_BACKEND = "sqlite"
 MEMORY_MAX_TURNS = 10
 MEMORY_MAX_CONTEXT_CHARS = max(300, _env_int("JARVIS_MEMORY_MAX_CONTEXT_CHARS", 900))
+# Phase 2.9 — persist last N language detections + explicit user preference
+# across app restarts so STT language hinting survives reboots.
+MEMORY_PERSIST_LANGUAGE_HISTORY = _env_bool("JARVIS_MEMORY_PERSIST_LANGUAGE_HISTORY", True)
+MEMORY_LANGUAGE_HISTORY_PERSIST_LIMIT = max(
+    1, _env_int("JARVIS_MEMORY_LANGUAGE_HISTORY_PERSIST_LIMIT", 3)
+)
 CLARIFICATION_PREFERENCE_HALF_LIFE_SECONDS = _env_int(
     "JARVIS_CLARIFICATION_PREFERENCE_HALF_LIFE_SECONDS",
     1209600,
@@ -381,6 +460,7 @@ SEARCH_INDEX_MAX_RESULTS = 20
 JOB_MAX_RETRIES_DEFAULT = 1
 
 POLICY_READ_ONLY_MODE = False
+POLICY_DRY_RUN_MODE = _env_bool("JARVIS_POLICY_DRY_RUN_MODE", False)
 POLICY_ALLOWED_PATHS = (
     os.path.abspath(DEFAULT_WORKING_DIRECTORY),
     os.path.abspath(os.path.join(DEFAULT_WORKING_DIRECTORY, "Desktop")),
@@ -415,6 +495,7 @@ POLICY_COMMAND_PERMISSIONS = {
 POLICY_PROFILES = {
     "strict": {
         "read_only_mode": True,
+        "dry_run_mode": True,
         "command_permissions": {
             "confirmation": True,
             "rollback": True,
@@ -439,10 +520,12 @@ POLICY_PROFILES = {
     },
     "normal": {
         "read_only_mode": POLICY_READ_ONLY_MODE,
+        "dry_run_mode": POLICY_DRY_RUN_MODE,
         "command_permissions": POLICY_COMMAND_PERMISSIONS,
     },
     "demo": {
         "read_only_mode": True,
+        "dry_run_mode": True,
         "command_permissions": {
             "confirmation": True,
             "rollback": True,
