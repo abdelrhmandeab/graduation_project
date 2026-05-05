@@ -221,7 +221,7 @@ def _get_language_detector_whisper_model() -> Any:
     global _LANG_DETECT_MODEL
     global _LANG_DETECT_MODEL_NAME
 
-    detector_name = str(STT_LANGUAGE_DETECT_MODEL or "tiny").strip() or "tiny"
+    detector_name = str(STT_LANGUAGE_DETECT_MODEL or "small").strip() or "small"
     if detector_name == str(WHISPER_MODEL):
         return _get_local_whisper_model()
 

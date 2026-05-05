@@ -1,0 +1,1011 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jarvis V2 — Evolution Plan</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:ital,wght@0,400;0,500;0,700;1,400&family=Playfair+Display:wght@700;900&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0c0c0f;--surface:#151519;--surface2:#1c1c22;--border:#2a2a33;
+  --text:#e8e6e3;--text2:#9d9b97;--accent:#6ee7b7;--accent2:#34d399;
+  --red:#f87171;--amber:#fbbf24;--blue:#60a5fa;--purple:#a78bfa;
+  --font-display:'Playfair Display',serif;
+  --font-body:'DM Sans',system-ui,sans-serif;
+  --font-mono:'DM Mono',monospace;
+}
+html{scroll-behavior:smooth;background:var(--bg);color:var(--text);font-family:var(--font-body);font-size:16px;line-height:1.7}
+body{max-width:1100px;margin:0 auto;padding:2rem 1.5rem 6rem}
+
+/* Navigation */
+nav{position:sticky;top:0;z-index:100;background:rgba(12,12,15,0.92);backdrop-filter:blur(12px);border-bottom:1px solid var(--border);margin:-2rem -1.5rem 3rem;padding:0.8rem 1.5rem;display:flex;gap:1rem;overflow-x:auto;white-space:nowrap;scrollbar-width:none}
+nav::-webkit-scrollbar{display:none}
+nav a{color:var(--text2);text-decoration:none;font-size:0.82rem;font-family:var(--font-mono);padding:0.3rem 0.6rem;border-radius:4px;transition:all 0.2s}
+nav a:hover{color:var(--accent);background:rgba(110,231,183,0.08)}
+
+/* Header */
+.hero{text-align:center;padding:3rem 0 4rem;border-bottom:1px solid var(--border);margin-bottom:3rem}
+.hero h1{font-family:var(--font-display);font-size:clamp(2.5rem,5vw,4rem);font-weight:900;letter-spacing:-0.02em;background:linear-gradient(135deg,var(--accent),var(--blue));-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:0.5rem}
+.hero .subtitle{font-size:1.1rem;color:var(--text2);max-width:600px;margin:0 auto}
+.hero .meta{margin-top:1.2rem;font-family:var(--font-mono);font-size:0.78rem;color:var(--text2)}
+
+/* Sections */
+section{margin-bottom:3.5rem}
+h2{font-family:var(--font-display);font-size:1.8rem;font-weight:700;margin-bottom:1.5rem;padding-bottom:0.5rem;border-bottom:2px solid var(--accent);display:inline-block}
+h3{font-size:1.15rem;font-weight:700;color:var(--accent);margin:1.5rem 0 0.8rem;font-family:var(--font-mono)}
+h4{font-size:1rem;font-weight:600;margin:1rem 0 0.5rem;color:var(--text)}
+p{margin-bottom:0.8rem;color:var(--text)}
+.dim{color:var(--text2)}
+
+/* Idea Cards */
+.idea-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:1.5rem;margin-bottom:1.5rem;transition:border-color 0.3s}
+.idea-card:hover{border-color:var(--accent)}
+.idea-header{display:flex;align-items:center;gap:0.8rem;margin-bottom:1rem;flex-wrap:wrap}
+.idea-num{font-family:var(--font-mono);font-size:0.75rem;background:var(--accent);color:var(--bg);padding:0.15rem 0.5rem;border-radius:4px;font-weight:500}
+.idea-title{font-size:1.1rem;font-weight:700}
+.badge{font-family:var(--font-mono);font-size:0.7rem;padding:0.15rem 0.5rem;border-radius:3px;font-weight:500}
+.badge.yes{background:rgba(110,231,183,0.15);color:var(--accent)}
+.badge.partial{background:rgba(251,191,36,0.15);color:var(--amber)}
+.badge.complex{background:rgba(168,85,247,0.15);color:var(--purple)}
+.badge.done{background:rgba(96,165,250,0.15);color:var(--blue)}
+
+.sub{font-size:0.92rem;color:var(--text2);margin-bottom:0.6rem}
+.improve{background:var(--surface2);border-left:3px solid var(--accent2);padding:0.8rem 1rem;border-radius:0 6px 6px 0;margin:0.8rem 0;font-size:0.92rem}
+.improve strong{color:var(--accent)}
+
+/* Phase cards */
+.phase{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:1.8rem;margin-bottom:2rem;position:relative;overflow:hidden}
+.phase::before{content:'';position:absolute;top:0;left:0;right:0;height:3px}
+.phase.p1::before{background:var(--red)}
+.phase.p2::before{background:var(--amber)}
+.phase.p3::before{background:var(--accent)}
+.phase.p4::before{background:var(--blue)}
+.phase.p5::before{background:var(--purple)}
+.phase-label{font-family:var(--font-mono);font-size:0.78rem;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:0.5rem}
+.phase.p1 .phase-label{color:var(--red)}
+.phase.p2 .phase-label{color:var(--amber)}
+.phase.p3 .phase-label{color:var(--accent)}
+.phase.p4 .phase-label{color:var(--blue)}
+.phase.p5 .phase-label{color:var(--purple)}
+.phase h3{margin-top:0}
+
+/* Task list */
+.task{display:flex;gap:0.8rem;padding:0.6rem 0;border-bottom:1px solid rgba(42,42,51,0.5);font-size:0.92rem;align-items:flex-start}
+.task:last-child{border-bottom:none}
+.task-id{font-family:var(--font-mono);color:var(--text2);min-width:2.5rem;font-size:0.82rem;padding-top:0.1rem}
+.task-body{flex:1}
+.task-file{font-family:var(--font-mono);font-size:0.78rem;color:var(--text2);margin-top:0.2rem}
+.task-effort{font-family:var(--font-mono);font-size:0.75rem;color:var(--text2);min-width:4rem;text-align:right}
+
+/* Test table */
+.test-table{width:100%;border-collapse:collapse;margin:1rem 0;font-size:0.88rem}
+.test-table th{font-family:var(--font-mono);font-size:0.78rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--accent);text-align:left;padding:0.6rem 0.8rem;border-bottom:2px solid var(--border)}
+.test-table td{padding:0.5rem 0.8rem;border-bottom:1px solid var(--border);vertical-align:top}
+.test-table tr:hover{background:rgba(110,231,183,0.03)}
+.test-table code{font-family:var(--font-mono);font-size:0.82rem;background:var(--surface2);padding:0.1rem 0.4rem;border-radius:3px;color:var(--accent)}
+
+/* Code blocks */
+pre{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:1rem;overflow-x:auto;font-family:var(--font-mono);font-size:0.82rem;line-height:1.6;margin:0.8rem 0;color:var(--text2)}
+code{font-family:var(--font-mono);font-size:0.88em}
+
+/* Summary grid */
+.summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;margin:1.5rem 0}
+.summary-cell{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:1rem;text-align:center}
+.summary-cell .num{font-family:var(--font-display);font-size:2rem;font-weight:900;color:var(--accent)}
+.summary-cell .label{font-size:0.82rem;color:var(--text2);margin-top:0.3rem}
+
+/* Responsive */
+@media(max-width:700px){body{padding:1rem 1rem 4rem}.idea-header{flex-direction:column;align-items:flex-start}.task{flex-direction:column;gap:0.3rem}.task-effort{text-align:left}}
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="#analysis">Idea Analysis</a>
+  <a href="#summary">Summary</a>
+  <a href="#phases">Implementation Phases</a>
+  <a href="#codex">Codex / Claude Code Tasks</a>
+  <a href="#testing">Testing Guide</a>
+</nav>
+
+<div class="hero">
+  <h1>Jarvis V2 Evolution</h1>
+  <p class="subtitle">18 new ideas analyzed, improved, and organized into a production-level implementation plan for Codex and Claude Code</p>
+  <p class="meta">May 2026 · Building on Phases 1–5 baseline · Windows 10/11 · CPU-first</p>
+</div>
+
+<!-- ================================================================ -->
+<section id="analysis">
+<h2>Idea-by-Idea Analysis</h2>
+
+<p class="dim" style="margin-bottom:2rem">Each idea is assessed for achievability, mapped to existing code, and enhanced with concrete improvements.</p>
+
+<!-- IDEA 1 -->
+<div class="idea-card">
+  <div class="idea-header">
+    <span class="idea-num">#1</span>
+    <span class="idea-title">Remove language detection from wake word + add voice recognition later</span>
+    <span class="badge yes">Achievable</span>
+  </div>
+  <p><strong>Current state:</strong> <code>audio/wake_word.py</code> uses Whisper tiny for Arabic wake word detection — this is a full STT transcription step just to detect a single phrase, which is slow (~300ms) and unreliable.</p>
+  <p><strong>Assessment:</strong> Fully achievable and already partially supported — the code has an <code>WAKE_WORD_AR_ONNX_PATH</code> config for a custom ONNX model that bypasses Whisper. Removing the language detection layer from wake word is a pure win for latency.</p>
+  <div class="improve">
+    <strong>Improvement:</strong> Instead of just removing language detection, replace the entire Arabic wake word path with a dedicated keyword-spotter ONNX model (ties into idea #3). For voice recognition (speaker ID), add it as a Phase 5 feature using <code>speechbrain</code> ECAPA-TDNN embeddings — small (~25MB), runs on CPU, and can store a voiceprint during setup. This way the wake word fires instantly, and speaker verification runs asynchronously on the captured audio chunk before executing sensitive commands.
+  </div>
+</div>
+
+<!-- IDEA 2 -->
+<div class="idea-card">
+  <div class="idea-header">
+    <span class="idea-num">#2</span>
+    <span class="idea-title">Semantic + Hybrid VAD: lightweight local for speech start, complex cloud for turn-taking</span>
+    <span class="badge yes">Achievable</span>
+  </div>
+  <p><strong>Current state:</strong> <code>audio/wake_word.py</code> uses simple energy-threshold VAD (<code>JARVIS_VAD_ENERGY_THRESHOLD=0.015</code>) with fixed silence detection (<code>JARVIS_VAD_SILENCE_SECONDS=0.55</code>). This is fast but misses speech in noisy environments and can't handle conversational turn-taking.</p>
+  <p><strong>Assessment:</strong> Fully achievable. The two-tier approach is the right architecture:</p>
+  <div class="improve">
+    <strong>Improvement:</strong> Use <strong>Silero VAD</strong> (1.2MB ONNX, runs at ~2ms per chunk on CPU) as the local tier instead of writing a custom one — it's already proven, bilingual, and handles Arabic speech onset well. For the cloud tier, skip a separate cloud VAD service (adds dependency + latency). Instead, use the existing Whisper/ElevenLabs STT endpoint's built-in endpoint detection as implicit cloud VAD — it already handles turn boundaries during transcription. Add a <strong>configurable flush timeout</strong> (e.g., 1.5s silence = end of turn) that adapts based on whether the conversation is a command (short timeout) or a question (longer timeout, lets user think). This gives you semantic VAD behavior without a separate service.
+  </div>
+</div>
+
+<!-- IDEA 3 -->
+<div class="idea-card">
+  <div class="idea-header">
+    <span class="idea-num">#3</span>
+    <span class="idea-title">Try Picovoice Porcupine for wake word</span>
+    <span class="badge partial">Achievable with caveats</span>
+  </div>
+  <p><strong>Current state:</strong> English wake word uses openWakeWord ONNX (free, open-source, ~2ms inference). Arabic uses Whisper tiny fallback.</p>
+  <p><strong>Assessment:</strong> Porcupine is excellent (sub-10ms, very low false-accept rate) BUT it requires a paid license for custom keywords and has per-device limits on the free tier. For a production project meant to run on any PC, this creates a licensing dependency.</p>
+  <div class="improve">
+    <strong>Improvement:</strong> Better approach — train a <strong>custom openWakeWord model</strong> for "جارفيس" using their training pipeline (they provide a Colab notebook). This gives you the same ~2ms inference as the English model, zero licensing cost, and full control. Steps: (1) Generate synthetic Arabic speech samples using edge-tts with different Arabic voices saying "جارفيس", "يا جارفيس", etc. (2) Augment with room impulse responses + noise. (3) Train using openWakeWord's training notebook. (4) Export to ONNX. (5) Ship alongside the English model. Keep Porcupine as an optional premium tier (if user provides their own API key) for environments that demand maximum accuracy.
+  </div>
+</div>
+
+<!-- IDEA 4 -->
+<div class="idea-card">
+  <div class="idea-header">
+    <span class="idea-num">#4</span>
+    <span class="idea-title">Slim system prompt builder: minimal and full prompts + remove redundancy</span>
+    <span class="badge yes">Achievable</span>
+    <span class="badge done">Partially done</span>
+  </div>
+  <p><strong>Current state:</strong> <code>llm/prompt_builder.py</code> already has <code>build_prompt_package()</code> and <code>build_lightweight_prompt()</code>. The weakness plan identified the prompt was 40+ lines — it's been slimmed but can go further.</p>
+  <p><strong>Assessment:</strong> Already partially implemented. The next step is the "remove redundant instructions that the persona already implies" part.</p>
+  <div class="improve">
+    <strong>Improvement:</strong> Create three prompt tiers instead of two: <strong>(1) Micro</strong> (3-4 lines + 1 example, for qwen3:0.6b–1.7b) — just role + language + one example. <strong>(2) Slim</strong> (6-8 lines + 2 examples, for qwen3:4b) — role + language + behavior hints + examples. <strong>(3) Full</strong> (12-15 lines + 3 examples, for qwen3:8b+) — everything. Auto-select based on <code>get_runtime_model_tier()</code>. Audit every line: if the persona config already says "friendly" or "concise", don't repeat it in the prompt. Add a prompt token counter that logs on first use so you can track regression.
+  </div>
+</div>
+
+<!-- IDEA 5 -->
+<div class="idea-card">
+  <div class="idea-header">
+    <span class="idea-num">#5</span>
+    <span class="idea-title">Replace PowerShell for simple operations, use ctypes + Windows API</span>
+    <span class="badge yes">Achievable</span>
+  </div>
+  <p><strong>Current state:</strong> <code>os_control/powershell_bridge.py</code> spawns PowerShell for everything — volume, brightness, lock screen, screenshots. Each spawn costs 150–400ms.</p>
+  <p><strong>Assessment:</strong> Fully achievable and already in the weakness plan. The ctypes approach is proven on Windows.</p>
+  <div class="improve">
+    <strong>Improvement:</strong> Create <code>os_control/native_ops.py</code> with these specific APIs: volume via <code>IAudioEndpointVolume</code> (COM, not the ancient <code>waveOutSetVolume</code>), brightness via WMI <code>WmiMonitorBrightness</code> (simpler than DDC/CI for laptops), lock via <code>user32.LockWorkStation</code>, sleep via <code>SetSuspendState</code>, screenshot via <code>user32.GetDC</code> + <code>BitBlt</code>. Add a <strong>performance decorator</strong> that measures ctypes vs PowerShell latency and logs it — this gives you real data. Keep PowerShell as automatic fallback for any ctypes failure. Target: <20ms for volume/brightness vs current 200-400ms.
+  </div>
+</div>
+
+<!-- IDEA 6 -->
+<div class="idea-card">
+  <div class="idea-header">
+    <span class="idea-num">#6</span>
+    <span class="idea-title">Refactor post-processing: keep Egyptian rewriter + length control, remove LLM rewrites</span>
+    <span class="badge yes">Achievable</span>
+    <span class="badge done">Mostly done</span>
+  </div>
+  <p><strong>Current state:</strong> <code>_finalize_success_response()</code> in <code>core/command_router.py</code> already runs only 3 transforms: low-value fallback, Egyptian dialect rewrite, and persona length cap. The old triple-LLM rewrite pipeline was removed.</p>
+  <p><strong>Assessment:</strong> 80% done. The remaining work is to add explicit language enforcement without an LLM call.</p>
+  <div class="improve">
+    <strong>Improvement:</strong> Add a <strong>script-detection language enforcer</strong> as the 4th (final) step — no LLM needed. Use Unicode script analysis: if user spoke Arabic and >60% of the response characters are Latin (excluding proper nouns/technical terms), inject a one-line note asking the model to retry in Arabic on the next turn, and cache the failure pattern. This catches the rare case where qwen3 drifts to English mid-response. Also, move the Egyptian colloquial rewriter to the TTS layer (<code>audio/tts.py</code>) so it only runs when text is actually spoken, not when it's displayed in logs.
+  </div>
+</div>
+
+<!-- IDEA 7 -->
+<div class="idea-card">
+  <div class="idea-header">
+    <span class="idea-num">#7</span>
+    <span class="idea-title">Improve streaming sentence detection for Arabic</span>
+    <span class="badge yes">Achievable</span>
+  </div>
+  <p><strong>Current state:</strong> <code>llm/ollama_client.py</code> uses a regex-based sentence splitter that works for English punctuation but misses Arabic clause boundaries (Arabic text often has fewer periods and relies on conjunctions like و/ف for flow).</p>
+  <p><strong>Assessment:</strong> Fully achievable. This is the most impactful change for Arabic TTS quality.</p>
+  <div class="improve">
+    <strong>Improvement:</strong> Implement a <strong>dual-mode sentence buffer</strong>: (1) <strong>Punctuation mode</strong> — split on <code>. ! ? ؟ ، ؛ \n</code> (add Arabic semicolon and comma as soft breaks). (2) <strong>Fallback flush</strong> — if no punctuation found after <strong>N=50 characters</strong> (not tokens — characters are more predictable for Arabic) or <strong>M=12 tokens</strong>, look for the last Arabic conjunction (و/ف/ثم) or whitespace boundary and flush there. (3) <strong>Hard flush</strong> at 100 characters regardless. Add configurable thresholds via env vars: <code>JARVIS_STREAM_AR_SOFT_FLUSH_CHARS=50</code>, <code>JARVIS_STREAM_AR_HARD_FLUSH_CHARS=100</code>. Test with the Egyptian colloquial rewriter to ensure flushed chunks don't break mid-substitution.
+  </div>
+</div>
+
+<!-- IDEA 8 -->
+<div class="idea-card">
+  <div class="idea-header">
+    <span class="idea-num">#8</span>
+    <span class="idea-title">Enhance knowledge base: watchdog auto-sync + improved reranking + small reranking model</span>
+    <span class="badge yes">Achievable</span>
+    <span class="badge done">Partially done</span>
+  </div>
+  <p><strong>Current state:</strong> <code>core/knowledge_base.py</code> already has watchdog support with debounced file system events, polling fallback, FAISS indexing, and hybrid scoring (<code>KB_EMBEDDING_RERANK_WEIGHT</code> + <code>KB_LEXICAL_RERANK_WEIGHT</code>).</p>
+  <p><strong>Assessment:</strong> The foundation is solid. The improvements are about quality of retrieval, not infrastructure.</p>
+  <div class="improve">
+    <strong>Improvement:</strong> Three layers of improvement: (1) <strong>Auto-sync UX</strong> — add a configurable notes folder path in <code>.env</code> (e.g., <code>JARVIS_KB_WATCH_FOLDERS=~/Documents/Notes,~/Obsidian</code>) and auto-start watching on boot. Already partially done. (2) <strong>Hybrid reranking</strong> — add BM25 scoring alongside the current lexical TF-IDF. Use <code>rank-bm25</code> (pure Python, no deps). Weight: 0.5 embedding + 0.3 BM25 + 0.2 lexical. (3) <strong>Small reranking model</strong> — defer to Phase 5. Use <code>cross-encoder/ms-marco-MiniLM-L-2-v2</code> (17MB) as an optional reranker on the top-K candidates. Only load if RAM permits (>12GB). This is a "polish" feature, not critical path.
+  </div>
+</div>
+
+<!-- IDEA 9 -->
+<div class="idea-card">
+  <div class="idea-header">
+    <span class="idea-num">#9</span>
+    <span class="idea-title">Better tool prompting: one-line instruction per tool instead of raw dump</span>
+    <span class="badge yes">Achievable</span>
+  </div>
+  <p><strong>Current state:</strong> <code>llm/prompt_builder.py</code>'s <code>build_tool_augmented_prompt()</code> injects raw live data results into the prompt. The model sometimes ignores the data or misinterprets it because there's no instruction telling it what to do with each data type.</p>
+  <p><strong>Assessment:</strong> Easy win, high impact on response quality.</p>
+  <div class="improve">
+    <strong>Improvement:</strong> Create a <strong>tool instruction registry</strong> — a dict mapping tool names to one-line instructions. Example: <code>{"weather": "Use this weather data to answer. Include temperature and conditions. Say the city name.", "web_search": "Use these search results to answer. Cite the most relevant result. If results are stale, say so.", "kb": "Use this knowledge base context to answer. Prefer KB info over your training data."}</code> Inject the instruction <em>before</em> the data block in the prompt. Also, when injecting live data, add a timestamp so the model knows how fresh it is.
+  </div>
+</div>
+
+<!-- IDEA 10 -->
+<div class="idea-card">
+  <div class="idea-header">
+    <span class="idea-num">#10</span>
+    <span class="idea-title">Implement proper VAD-based interrupt while speaking</span>
+    <span class="badge yes">Achievable</span>
+  </div>
+  <p><strong>Current state:</strong> <code>BARGE_IN_INTERRUPT_ON_WAKE</code> exists — if the wake word is detected while TTS is playing, it interrupts. But there's no VAD-based interrupt (user speaks without saying the wake word → Jarvis should stop talking).</p>
+  <p><strong>Assessment:</strong> Achievable but needs careful audio engineering to avoid feedback (Jarvis's own speaker audio triggering the VAD).</p>
+  <div class="improve">
+    <strong>Improvement:</strong> Two-stage approach: (1) <strong>Software echo cancellation</strong> — while TTS is playing, subtract the known TTS audio waveform from the mic input (you have the exact audio being played). Use a simple energy-ratio comparison: if mic RMS > (speaker RMS × 1.5), there's likely real speech. (2) <strong>Silero VAD confirmation</strong> — run the speech chunk through Silero VAD. If both checks pass, fire the interrupt. Add a <strong>cooldown</strong> (500ms after interrupt before accepting new audio) to prevent bounce. Wire into the TTS playback loop in <code>audio/tts.py</code> and the orchestrator's speaking state.
+  </div>
+</div>
+
+<!-- IDEA 11 -->
+<div class="idea-card">
+  <div class="idea-header">
+    <span class="idea-num">#11</span>
+    <span class="idea-title">Let Qwen3 use tool calling for complex intents instead of pure text generation</span>
+    <span class="badge yes">Achievable</span>
+  </div>
+  <p><strong>Current state:</strong> All intents go through the 4-tier cascade (regex → semantic → keyword → LLM text). When the LLM is reached, it generates free text and the router tries to parse it. Complex multi-step requests (e.g., "search for my last report and email it to Ahmed") get lost.</p>
+  <p><strong>Assessment:</strong> Qwen3 supports Ollama's tool/function calling format. This is the right evolution.</p>
+  <div class="improve">
+    <strong>Improvement:</strong> Don't replace the existing cascade — add tool calling as <strong>Tier 3.5</strong> between keyword NLP and pure LLM chat. Define a <strong>tool schema</strong> for each action family: <code>open_app(name: str)</code>, <code>search_files(query: str, location: str)</code>, <code>set_timer(minutes: int)</code>, <code>web_search(query: str)</code>, <code>set_volume(level: int)</code>, etc. When the first 3 tiers fail, send the user's text to Qwen3 with the tool definitions. If the model returns a tool call → execute it. If it returns text → treat as chat response. This handles "search for X and open it" as two tool calls in sequence. Use Ollama's <code>/api/chat</code> with <code>tools</code> parameter. Only enable on medium+ hardware tiers (tool calling needs 4b+ to be reliable).
+  </div>
+</div>
+
+<!-- IDEA 12 -->
+<div class="idea-card">
+  <div class="idea-header">
+    <span class="idea-num">#12</span>
+    <span class="idea-title">Intent router evolution path: regex → semantic → function calling → pure LLM</span>
+    <span class="badge yes">Achievable</span>
+    <span class="badge done">Mostly done</span>
+  </div>
+  <p><strong>Current state:</strong> The 4-tier cascade already exists: (1) Regex parser with fast-path, (2) Semantic router (MiniLM embeddings), (3) Keyword NLP (rapidfuzz), (4) LLM fallback. This is almost exactly your proposed evolution.</p>
+  <p><strong>Assessment:</strong> The architecture matches. The gap is the function-calling tier (idea #11) and improving each tier's quality.</p>
+  <div class="improve">
+    <strong>Improvement:</strong> Rename and formalize the cascade as a <strong>5-tier routing pipeline</strong> with clear metrics at each tier: (1) <strong>Regex</strong> — structural commands, confirmation tokens, file paths (~0ms). (2) <strong>Semantic</strong> — paraphrase-tolerant intent classification (~5-10ms). (3) <strong>Keyword NLP</strong> — fuzzy match for noisy STT (~2ms). (4) <strong>Function calling</strong> — Qwen3 tool use for complex/multi-step intents (~500-1500ms). (5) <strong>Pure LLM chat</strong> — conversational fallback (~500-2000ms). Add per-tier hit-rate metrics to <code>core/metrics.py</code> so you can see what percentage of requests each tier handles. Target: 70% resolved by tiers 1-3 (instant), 20% by tier 4 (tool calling), 10% by tier 5 (chat).
+  </div>
+</div>
+
+<!-- IDEA 13 -->
+<div class="idea-card">
+  <div class="idea-header">
+    <span class="idea-num">#13</span>
+    <span class="idea-title">Scan Windows for all installed apps and add them to app control automatically</span>
+    <span class="badge yes">Achievable</span>
+  </div>
+  <p><strong>Current state:</strong> <code>os_control/app_ops.py</code> has a hardcoded <code>_APP_CATALOG</code> dict with ~20 apps (Notepad, Calculator, Chrome, etc.) and manually written aliases.</p>
+  <p><strong>Assessment:</strong> Fully achievable. Windows has multiple registries and folders where installed apps are listed.</p>
+  <div class="improve">
+    <strong>Improvement:</strong> Create <code>os_control/app_scanner.py</code> that scans three sources on startup: (1) <strong>Registry</strong> — <code>HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall</code> and the WOW6432Node equivalent. (2) <strong>Start Menu shortcuts</strong> — <code>%ProgramData%\Microsoft\Windows\Start Menu</code> + user's Start Menu. (3) <strong>App Paths registry</strong> — <code>HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths</code>. Parse <code>DisplayName</code> and <code>InstallLocation</code> from each. Auto-generate aliases by splitting the display name (e.g., "Adobe Photoshop 2024" → aliases: ["photoshop", "adobe photoshop"]). Merge with the hardcoded catalog (hardcoded entries win for canonical names + Arabic aliases). Cache the scan result to <code>.jarvis_cache/app_catalog.json</code> with a 24-hour TTL. Re-scan on demand via voice command: "Jarvis, rescan apps".
+  </div>
+</div>
+
+<!-- IDEA 14 -->
+<div class="idea-card">
+  <div class="idea-header">
+    <span class="idea-num">#14</span>
+    <span class="idea-title">Confirm with PIN code on power off and restart commands only</span>
+    <span class="badge yes">Achievable</span>
+    <span class="badge done">Partially done</span>
+  </div>
+  <p><strong>Current state:</strong> <code>core/config.py</code> has <code>JARVIS_SECOND_FACTOR_PIN</code> and <code>JARVIS_SECOND_FACTOR_PASSPHRASE</code>. The confirmation system exists in <code>os_control/confirmation.py</code> with risk tiers. Shutdown/restart are already classified as high-risk.</p>
+  <p><strong>Assessment:</strong> The infrastructure exists. Just need to wire PIN confirmation specifically to power off/restart.</p>
+  <div class="improve">
+    <strong>Improvement:</strong> Make the PIN flow voice-friendly: when user says "shut down" or "restart", Jarvis responds with "Are you sure? Tell me your PIN to confirm." The user speaks the PIN (digits only), STT transcribes it, and the system compares against the hashed PIN. Add a <strong>3-attempt limit</strong> with a 60-second lockout. Also add PIN confirmation for <strong>disk format/delete system files</strong> if those commands ever get added. Keep simple confirmations (yes/no) for medium-risk actions like closing all apps.
+  </div>
+</div>
+
+<!-- IDEA 15 -->
+<div class="idea-card">
+  <div class="idea-header">
+    <span class="idea-num">#15</span>
+    <span class="idea-title">Add mixed language commands (Arabic-English code-switching)</span>
+    <span class="badge yes">Achievable</span>
+  </div>
+  <p><strong>Current state:</strong> <code>JARVIS_STT_MIXED_TREAT_AS_ARABIC=false</code> exists but is off. The command parser has some bilingual patterns but doesn't handle mid-sentence switching well (e.g., "افتح Chrome" or "open الملفات").</p>
+  <p><strong>Assessment:</strong> This is natural Egyptian speech behavior — mixing Arabic verbs with English nouns. Critical for UX.</p>
+  <div class="improve">
+    <strong>Improvement:</strong> Three changes: (1) <strong>STT</strong> — set Whisper's language to <code>None</code> (auto-detect) for the main transcription pass instead of forcing AR or EN. ElevenLabs Scribe v2 already handles multilingual. (2) <strong>Command parser</strong> — add a <strong>code-switch normalization</strong> step before parsing: detect Arabic verb + English noun patterns (e.g., "افتح Chrome" → extract "Chrome" as app_name, detect "افتح" as open intent). Use the existing app alias lookup on the English portion. (3) <strong>Semantic router</strong> — the MiniLM model is already multilingual, so mixed-language utterances should route correctly without changes. Test with the 20 most common Egyptian code-switch patterns.
+  </div>
+</div>
+
+<!-- IDEA 16 -->
+<div class="idea-card">
+  <div class="idea-header">
+    <span class="idea-num">#16</span>
+    <span class="idea-title">For search/find results, open the folder or search results window</span>
+    <span class="badge yes">Achievable</span>
+  </div>
+  <p><strong>Current state:</strong> <code>os_control/file_ops.py</code> has <code>find_files()</code> that returns results as text. The results are spoken by TTS but the user can't see or interact with them.</p>
+  <p><strong>Assessment:</strong> Fully achievable using Windows Explorer's built-in search and <code>os.startfile()</code>.</p>
+  <div class="improve">
+    <strong>Improvement:</strong> Three result-display modes: (1) <strong>Single file found</strong> — open the parent folder with the file selected: <code>subprocess.run(["explorer", "/select,", file_path])</code>. (2) <strong>Multiple files found</strong> — open Explorer with a search query pre-filled: <code>subprocess.run(["explorer", f"search-ms:query={query}&crumb=location:{search_dir}"])</code>. (3) <strong>Folder navigation</strong> — just open the folder: <code>os.startfile(folder_path)</code>. Add a voice confirmation: "I found 3 files. Opening the folder for you." The key is to always give a visual result alongside the voice response.
+  </div>
+</div>
+
+<!-- IDEA 17 -->
+<div class="idea-card">
+  <div class="idea-header">
+    <span class="idea-num">#17</span>
+    <span class="idea-title">For settings/timer, open the actual Windows settings page or clock app</span>
+    <span class="badge yes">Achievable</span>
+  </div>
+  <p><strong>Current state:</strong> <code>os_control/settings_ops.py</code> has <code>ms-settings:</code> protocol support. Timer uses <code>threading.Timer</code> + <code>winsound</code> internally.</p>
+  <p><strong>Assessment:</strong> Settings pages already work via <code>ms-settings:</code> URIs. Timer needs to also open the Windows Clock app.</p>
+  <div class="improve">
+    <strong>Improvement:</strong> (1) <strong>Settings</strong> — expand the <code>ms-settings:</code> URI map to cover all common settings pages (WiFi, Bluetooth, Display, Sound, Battery, Storage, Apps, Updates, Privacy). When user says "open WiFi settings", launch <code>ms-settings:network-wifi</code>. Add bilingual aliases: "إعدادات الواي فاي" → <code>ms-settings:network-wifi</code>. (2) <strong>Timer</strong> — dual approach: set a background timer (for the alarm sound) AND open Windows Clock app with a timer pre-configured. Use the <code>ms-clock:</code> protocol or <code>start ms-clock:</code>. On Windows 11, the Clock app supports <code>ms-clock:timer</code> deep link. Fall back to the internal <code>threading.Timer</code> if the Clock app isn't available. This gives the user both a visual countdown and a reliable background alarm.
+  </div>
+</div>
+
+<!-- IDEA 18 -->
+<div class="idea-card">
+  <div class="idea-header">
+    <span class="idea-num">#18</span>
+    <span class="idea-title">Local LLM doesn't have internet access — need to solve this</span>
+    <span class="badge yes">Achievable</span>
+    <span class="badge done">Already solved</span>
+  </div>
+  <p><strong>Current state:</strong> <code>tools/weather.py</code> (Open-Meteo) and <code>tools/web_search.py</code> (DuckDuckGo) already fetch live data from the internet. The results are injected into the LLM prompt as a <code>LIVE DATA:</code> block via <code>build_tool_augmented_prompt()</code>.</p>
+  <p><strong>Assessment:</strong> This is already solved architecturally. The LLM itself doesn't access the internet — the <em>application layer</em> fetches data and feeds it to the model as context. This is the correct pattern (RAG-style augmentation).</p>
+  <div class="improve">
+    <strong>Improvement:</strong> The real gap is <strong>coverage and reliability</strong>: (1) Add more data sources: <strong>currency exchange</strong> (free API from exchangerate-api.com), <strong>news headlines</strong> (RSS feeds from BBC/Al Jazeera — no API key needed), <strong>prayer times</strong> (aladhan.com API — relevant for Egyptian users). (2) Add a <strong>data freshness indicator</strong> in the prompt: "Weather data fetched 2 seconds ago" vs "Search results cached 5 minutes ago" so the model can hedge appropriately. (3) Add a <strong>tool failure fallback</strong>: if DuckDuckGo is unreachable, try a cached result or tell the user "I couldn't reach the internet, but here's what I know from my training data."
+  </div>
+</div>
+
+</section>
+
+<!-- ================================================================ -->
+<section id="summary">
+<h2>Summary</h2>
+
+<div class="summary-grid">
+  <div class="summary-cell"><div class="num">18</div><div class="label">Ideas Analyzed</div></div>
+  <div class="summary-cell"><div class="num">15</div><div class="label">Fully Achievable</div></div>
+  <div class="summary-cell"><div class="num">1</div><div class="label">Achievable with Caveats</div></div>
+  <div class="summary-cell"><div class="num">5</div><div class="label">Already Partially Done</div></div>
+</div>
+
+<p>Every single idea is achievable. Five of them (#4, #6, #8, #14, #18) are already partially or fully implemented in the current codebase. Idea #3 (Porcupine) is achievable but has a licensing concern — the recommended alternative (custom openWakeWord training) is better for your project's goals.</p>
+
+<p>The ideas naturally cluster into 5 implementation phases based on dependencies and impact.</p>
+</section>
+
+<!-- ================================================================ -->
+<section id="phases">
+<h2>Implementation Phases</h2>
+
+<!-- PHASE 1 -->
+<div class="phase p1">
+  <div class="phase-label">Phase 1 — Audio & Wake Word Overhaul</div>
+  <h3>Foundation: Get the ears right first</h3>
+  <p class="dim">Everything downstream depends on accurate wake word detection and proper VAD. Fix the audio pipeline before touching routing or LLM.</p>
+
+  <div class="task"><span class="task-id">1.1</span><div class="task-body"><strong>Replace Arabic wake word with custom openWakeWord ONNX model</strong><br>Train model using synthetic + real data. Ship alongside English model. Remove Whisper-tiny fallback path.<div class="task-file">audio/wake_word.py, scripts/train_arabic_wake.py (new)</div></div><span class="task-effort">3–5 days</span></div>
+
+  <div class="task"><span class="task-id">1.2</span><div class="task-body"><strong>Remove language detection from wake word pipeline</strong><br>Wake word is now two ONNX models (EN + AR) running in parallel — no STT, no language detection needed at this stage.<div class="task-file">audio/wake_word.py</div></div><span class="task-effort">2–3 hrs</span></div>
+
+  <div class="task"><span class="task-id">1.3</span><div class="task-body"><strong>Integrate Silero VAD for speech onset detection</strong><br>Replace energy-threshold VAD with Silero ONNX (1.2MB). Keep energy threshold as pre-filter to avoid running Silero on silence.<div class="task-file">audio/vad.py (new), audio/wake_word.py, core/config.py</div></div><span class="task-effort">1–2 days</span></div>
+
+  <div class="task"><span class="task-id">1.4</span><div class="task-body"><strong>Implement adaptive silence timeout</strong><br>Short timeout (0.5s) after wake word (expects command). Longer timeout (1.5s) mid-conversation (lets user think). Configurable via env vars.<div class="task-file">audio/vad.py, core/config.py</div></div><span class="task-effort">3–4 hrs</span></div>
+
+  <div class="task"><span class="task-id">1.5</span><div class="task-body"><strong>Implement VAD-based barge-in interrupt</strong><br>While TTS is playing, monitor mic with echo cancellation. If real speech detected (Silero confirms), stop TTS immediately.<div class="task-file">audio/tts.py, audio/vad.py, core/orchestrator.py</div></div><span class="task-effort">2–3 days</span></div>
+</div>
+
+<!-- PHASE 2 -->
+<div class="phase p2">
+  <div class="phase-label">Phase 2 — LLM & Prompt Quality</div>
+  <h3>Make the brain smarter without changing the model</h3>
+  <p class="dim">Improve what goes into and comes out of the LLM. These changes have the highest impact-per-line-of-code ratio.</p>
+
+  <div class="task"><span class="task-id">2.1</span><div class="task-body"><strong>Three-tier system prompt builder</strong><br>Micro (3-4 lines for ≤1.7b), Slim (6-8 lines for 4b), Full (12-15 lines for 8b+). Auto-select by model tier. Add token counter logging.<div class="task-file">llm/prompt_builder.py, llm/prompts/ (new dir)</div></div><span class="task-effort">1 day</span></div>
+
+  <div class="task"><span class="task-id">2.2</span><div class="task-body"><strong>Tool instruction registry for live data injection</strong><br>One-line instruction per tool type. Add timestamp to injected data. Improve prompt formatting.<div class="task-file">llm/prompt_builder.py, tools/live_data.py</div></div><span class="task-effort">3–4 hrs</span></div>
+
+  <div class="task"><span class="task-id">2.3</span><div class="task-body"><strong>Arabic streaming sentence splitter</strong><br>Dual-mode: punctuation split + character-count fallback (50 chars soft, 100 chars hard). Arabic conjunction awareness.<div class="task-file">llm/ollama_client.py, llm/sentence_buffer.py (new)</div></div><span class="task-effort">1 day</span></div>
+
+  <div class="task"><span class="task-id">2.4</span><div class="task-body"><strong>Script-detection language enforcer (no LLM)</strong><br>Unicode script analysis on response. Detect language drift. Log + soft-correct without LLM call.<div class="task-file">core/command_router.py</div></div><span class="task-effort">3–4 hrs</span></div>
+
+  <div class="task"><span class="task-id">2.5</span><div class="task-body"><strong>Add more live data sources</strong><br>Currency exchange (exchangerate-api), news RSS (BBC/Al Jazeera), prayer times (aladhan.com). Add freshness timestamps.<div class="task-file">tools/currency.py (new), tools/news.py (new), tools/prayer_times.py (new), tools/live_data.py</div></div><span class="task-effort">1–2 days</span></div>
+</div>
+
+<!-- PHASE 3 -->
+<div class="phase p3">
+  <div class="phase-label">Phase 3 — Desktop Control & Commands</div>
+  <h3>Make Jarvis actually useful for daily work</h3>
+  <p class="dim">Expand what Jarvis can do on the desktop. Focus on speed (ctypes) and coverage (app scanning).</p>
+
+  <div class="task"><span class="task-id">3.1</span><div class="task-body"><strong>Native Windows ops via ctypes</strong><br>Volume (IAudioEndpointVolume), brightness (WMI), lock (user32), sleep (SetSuspendState), screenshot (BitBlt). PowerShell fallback.<div class="task-file">os_control/native_ops.py (new), os_control/system_ops.py</div></div><span class="task-effort">2–3 days</span></div>
+
+  <div class="task"><span class="task-id">3.2</span><div class="task-body"><strong>Auto-scan installed apps from Windows registry + Start Menu</strong><br>Scan Registry, Start Menu, App Paths. Auto-generate aliases. Merge with hardcoded catalog. Cache with 24h TTL.<div class="task-file">os_control/app_scanner.py (new), os_control/app_ops.py</div></div><span class="task-effort">2 days</span></div>
+
+  <div class="task"><span class="task-id">3.3</span><div class="task-body"><strong>Visual results for file search</strong><br>Single file → open parent folder with file selected. Multiple files → Explorer search-ms: query. Folder → os.startfile.<div class="task-file">os_control/file_ops.py</div></div><span class="task-effort">3–4 hrs</span></div>
+
+  <div class="task"><span class="task-id">3.4</span><div class="task-body"><strong>Enhanced settings + timer with Windows UI integration</strong><br>Expand ms-settings: URI map. Timer opens Windows Clock app + background timer. Bilingual settings aliases.<div class="task-file">os_control/settings_ops.py, os_control/timer_ops.py</div></div><span class="task-effort">1 day</span></div>
+
+  <div class="task"><span class="task-id">3.5</span><div class="task-body"><strong>PIN confirmation for power off / restart</strong><br>Voice-friendly PIN flow. 3-attempt limit + 60s lockout. Hash PIN comparison.<div class="task-file">os_control/confirmation.py, os_control/system_ops.py</div></div><span class="task-effort">3–4 hrs</span></div>
+</div>
+
+<!-- PHASE 4 -->
+<div class="phase p4">
+  <div class="phase-label">Phase 4 — Intent Routing Evolution</div>
+  <h3>Understand what the user wants, even when they mix languages</h3>
+
+  <div class="task"><span class="task-id">4.1</span><div class="task-body"><strong>Add function-calling tier (Tier 3.5) to intent cascade</strong><br>Define tool schemas for all action families. Use Ollama /api/chat with tools param. Only on 4b+ models.<div class="task-file">core/command_router.py, llm/tool_caller.py (new)</div></div><span class="task-effort">2–3 days</span></div>
+
+  <div class="task"><span class="task-id">4.2</span><div class="task-body"><strong>Mixed-language command support</strong><br>Code-switch normalizer: detect Arabic verb + English noun patterns. Auto-detect STT language. Test with 20 common patterns.<div class="task-file">core/command_parser.py, audio/stt.py, nlp/codeswitching.py (new)</div></div><span class="task-effort">1–2 days</span></div>
+
+  <div class="task"><span class="task-id">4.3</span><div class="task-body"><strong>Per-tier routing metrics</strong><br>Track hit rate per tier. Log to metrics. Target: 70% tiers 1-3, 20% tier 4, 10% tier 5.<div class="task-file">core/metrics.py, core/command_router.py</div></div><span class="task-effort">3–4 hrs</span></div>
+</div>
+
+<!-- PHASE 5 -->
+<div class="phase p5">
+  <div class="phase-label">Phase 5 — Polish & Future-Proofing</div>
+  <h3>Nice-to-have features that elevate Jarvis to a polished product</h3>
+
+  <div class="task"><span class="task-id">5.1</span><div class="task-body"><strong>Knowledge base improvements: BM25 + optional cross-encoder reranker</strong><br>Add rank-bm25 scoring. Optional cross-encoder (17MB) for high-tier machines.<div class="task-file">core/knowledge_base.py</div></div><span class="task-effort">1–2 days</span></div>
+
+  <div class="task"><span class="task-id">5.2</span><div class="task-body"><strong>Speaker verification (voice recognition)</strong><br>ECAPA-TDNN embeddings via speechbrain (~25MB). Store voiceprint during setup. Verify asynchronously before sensitive commands.<div class="task-file">audio/speaker_id.py (new), core/config.py</div></div><span class="task-effort">2–3 days</span></div>
+
+  <div class="task"><span class="task-id">5.3</span><div class="task-body"><strong>Porcupine as optional premium wake word</strong><br>If user provides Picovoice API key, use Porcupine instead of openWakeWord. Graceful fallback.<div class="task-file">audio/wake_word.py, core/config.py</div></div><span class="task-effort">3–4 hrs</span></div>
+
+  <div class="task"><span class="task-id">5.4</span><div class="task-body"><strong>Additional live data: currency, news, prayer times</strong><br>If not completed in Phase 2, finish here.<div class="task-file">tools/</div></div><span class="task-effort">1 day</span></div>
+</div>
+
+</section>
+
+<!-- ================================================================ -->
+<section id="codex">
+<h2>Codex / Claude Code Task Prompts</h2>
+<p class="dim">Copy-paste these prompts directly into Codex or Claude Code. Each prompt is self-contained with context, file paths, and acceptance criteria.</p>
+
+<h3>Phase 1 Prompts</h3>
+
+<pre><code># Task 1.1–1.2: Arabic Wake Word ONNX + Remove Language Detection
+# Context: audio/wake_word.py currently uses Whisper tiny for Arabic wake detection.
+# This is slow (~300ms) and unreliable. Replace with an ONNX model approach.
+
+# Step 1: Create a training data generator script
+# File: scripts/generate_arabic_wake_data.py
+# - Use edge-tts to synthesize "جارفيس", "يا جارفيس" with ar-EG-SalmaNeural,
+#   ar-EG-ShakirNeural, ar-SA-HamedNeural voices
+# - Add noise augmentation (white noise, room reverb)
+# - Output WAV files in openWakeWord training format
+
+# Step 2: Modify audio/wake_word.py
+# - Remove the _get_ar_stt_model() Whisper path
+# - Remove _register_arabic_hit() multi-hit confirmation (ONNX is reliable enough)
+# - Make Arabic layer use the same openWakeWord Model() as English
+# - Load AR ONNX model from JARVIS_WAKE_WORD_AR_ONNX_PATH config
+# - Both EN and AR models run predict() on each audio chunk in parallel
+# - Remove all language detection from wake word pipeline
+
+# Acceptance: Arabic wake word fires in <40ms, no Whisper dependency in wake path</code></pre>
+
+<pre><code># Task 1.3–1.4: Silero VAD + Adaptive Silence Timeout
+# Context: Current VAD uses simple energy threshold (JARVIS_VAD_ENERGY_THRESHOLD=0.015)
+
+# Create: audio/vad.py
+# - Download Silero VAD ONNX from https://github.com/snakers4/silero-vad
+# - Class SileroVAD with methods: is_speech(audio_chunk) -> bool, reset()
+# - Pre-filter: skip Silero if RMS < energy_threshold (saves CPU on silence)
+# - Adaptive timeout: 
+#   - After wake word: 0.5s silence = end of utterance (command mode)
+#   - During conversation: 1.5s silence = end of turn (chat mode)
+#   - Configurable: JARVIS_VAD_COMMAND_SILENCE_SECONDS, JARVIS_VAD_CHAT_SILENCE_SECONDS
+
+# Wire into: audio/wake_word.py (replace energy VAD in recording loop)
+# Add to: core/config.py (new env vars)
+# Fallback: if Silero ONNX fails to load, fall back to energy threshold
+
+# Acceptance: Speech onset detection works in noisy room. Adaptive timeout
+# gives user time to think during conversation but snaps quickly for commands.</code></pre>
+
+<pre><code># Task 1.5: VAD-Based Barge-In Interrupt
+# Context: BARGE_IN_INTERRUPT_ON_WAKE exists but only triggers on wake word.
+# Need: user speaks (no wake word) while TTS playing → Jarvis stops.
+
+# Modify: audio/tts.py
+# - During playback, run a background thread reading mic audio
+# - Software echo cancellation: compare mic RMS to known TTS audio RMS
+#   If mic_rms > tts_rms * 1.5, possible real speech
+# - Confirm with Silero VAD (from audio/vad.py)
+# - If both pass, set an interrupt event
+# - TTS playback loop checks interrupt event between chunks
+# - 500ms cooldown after interrupt before accepting new audio
+
+# Modify: core/orchestrator.py
+# - When interrupt fires, cancel current TTS, enter listening state
+# - Log the interruption in metrics
+
+# Acceptance: Say "stop" or any word while Jarvis is speaking → TTS stops
+# within 200ms. Jarvis's own audio doesn't trigger false interrupts.</code></pre>
+
+<h3>Phase 2 Prompts</h3>
+
+<pre><code># Task 2.1: Three-Tier System Prompt Builder
+# Context: llm/prompt_builder.py has build_prompt_package() and build_lightweight_prompt()
+
+# Create: llm/prompts/ directory with three prompt templates
+# - micro_prompt.txt (3-4 lines + 1 few-shot example) for qwen3:0.6b-1.7b
+# - slim_prompt.txt (6-8 lines + 2 few-shot examples) for qwen3:4b
+# - full_prompt.txt (12-15 lines + 3 few-shot examples) for qwen3:8b+
+
+# Modify: llm/prompt_builder.py
+# - Add get_prompt_tier() that reads get_runtime_model_tier()
+# - build_prompt_package() auto-selects prompt by tier
+# - Remove any instruction that duplicates what the persona config already says
+# - Add token count logging on first prompt build per session
+# - Few-shot examples must include both EN and AR Q&A pairs
+
+# Rules for prompt authoring:
+# - Never say "you are an AI" — just give the role
+# - Never say "be concise" if persona.response_style already says "brief"
+# - Always include: name, language preference, response style, 1+ example
+# - Arabic examples MUST be Egyptian colloquial, not MSA
+
+# Acceptance: Token count reduced ≥40% on 4b vs current.
+# qwen3:1.7b produces coherent Egyptian Arabic with micro prompt.</code></pre>
+
+<pre><code># Task 2.3: Arabic Streaming Sentence Splitter
+# Context: llm/ollama_client.py splits on English punctuation only
+
+# Create: llm/sentence_buffer.py
+# - Class SentenceBuffer(is_arabic: bool)
+# - add_token(token: str) -> Optional[str]  (returns flushed sentence or None)
+# - flush() -> str  (force flush remaining)
+# - Split triggers for Arabic: ؟ . ! ، ؛ \n
+# - Soft flush: after 50 chars with no punctuation, split at last و/ف/ثم or space
+# - Hard flush: at 100 chars regardless
+# - For English: keep current behavior (split on . ! ? \n)
+# - Configurable: JARVIS_STREAM_AR_SOFT_FLUSH_CHARS, JARVIS_STREAM_AR_HARD_FLUSH_CHARS
+
+# Modify: llm/ollama_client.py ask_llm_streaming()
+# - Use SentenceBuffer instead of regex splitting
+# - Pass is_arabic based on detected language
+
+# Acceptance: Egyptian Arabic responses are spoken in natural clauses.
+# No mid-word splits. No single-word flushes.</code></pre>
+
+<h3>Phase 3 Prompts</h3>
+
+<pre><code># Task 3.1: Native Windows Ops via ctypes
+# Context: os_control/powershell_bridge.py spawns PowerShell for everything (150-400ms)
+
+# Create: os_control/native_ops.py
+# All functions: try ctypes first, fall back to PowerShell on exception.
+
+# Volume control:
+# - Use comtypes + pycaw pattern for IAudioEndpointVolume
+# - get_volume() -> float (0.0-1.0)
+# - set_volume(level: float)
+# - toggle_mute()
+
+# Brightness:
+# - WMI via wmi package: WmiMonitorBrightness / WmiMonitorBrightnessMethods
+# - get_brightness() -> int (0-100)
+# - set_brightness(level: int)
+# - Fallback: screen-brightness-control package (already in requirements)
+
+# Lock screen: ctypes.windll.user32.LockWorkStation()
+# Sleep: ctypes.windll.powrprof.SetSuspendState(0, 1, 0)
+# Screenshot: user32.GetDC + gdi32.BitBlt (save to ~/Pictures/Screenshots/)
+
+# Add @timed_operation decorator that logs latency for ctypes vs PowerShell
+
+# Modify: os_control/system_ops.py to call native_ops first
+
+# Acceptance: Volume/brightness commands complete in <20ms (vs 200-400ms).
+# All ops work without admin privileges. PowerShell fallback verified.</code></pre>
+
+<pre><code># Task 3.2: Auto-Scan Installed Apps
+# Context: os_control/app_ops.py has hardcoded _APP_CATALOG with ~20 apps
+
+# Create: os_control/app_scanner.py
+# - scan_installed_apps() -> dict  (same format as _APP_CATALOG)
+# - Sources:
+#   1. Registry: HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall
+#      and HKLM\SOFTWARE\WOW6432Node\...
+#      Read: DisplayName, InstallLocation, DisplayIcon
+#   2. Start Menu: %ProgramData%\Microsoft\Windows\Start Menu\Programs\**\*.lnk
+#      Parse .lnk files to get target executable (use win32com or ctypes)
+#   3. App Paths: HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths
+# - Auto-generate aliases from DisplayName:
+#   "Adobe Photoshop 2024" → ["photoshop", "adobe photoshop", "photoshop 2024"]
+#   Strip version numbers, company prefixes for short aliases
+# - Merge with _APP_CATALOG (hardcoded entries win for canonical names + AR aliases)
+# - Cache to .jarvis_cache/app_catalog.json with timestamp
+# - Re-scan if cache older than 24 hours or on demand
+
+# Modify: os_control/app_ops.py
+# - On module load, call scan if cache stale
+# - Add "rescan apps" command to command_parser.py
+
+# Acceptance: Running on any Windows PC discovers all installed apps.
+# User can say "open Photoshop" without manual catalog entry.</code></pre>
+
+<h3>Phase 4 Prompts</h3>
+
+<pre><code># Task 4.1: Function-Calling Tier in Intent Cascade
+# Context: core/command_router.py has 4-tier cascade. Add tier 3.5: tool calling.
+
+# Create: llm/tool_caller.py
+# - Define tool schemas as Python dicts matching Ollama's tool format:
+#   tools = [
+#     {"type": "function", "function": {"name": "open_app", "parameters": {"type": "object", "properties": {"app_name": {"type": "string"}}}}},
+#     {"type": "function", "function": {"name": "search_files", "parameters": {...}}},
+#     {"type": "function", "function": {"name": "set_timer", "parameters": {"minutes": {"type": "integer"}}}},
+#     {"type": "function", "function": {"name": "web_search", "parameters": {"query": {"type": "string"}}}},
+#     {"type": "function", "function": {"name": "set_volume", "parameters": {"level": {"type": "integer"}}}},
+#     ... (all action families)
+#   ]
+# - call_with_tools(user_text: str, tools: list) -> (tool_calls: list | None, text: str)
+# - Use Ollama /api/chat endpoint with tools parameter
+# - Map tool call results back to ParsedCommand objects
+
+# Modify: core/command_router.py
+# - Insert between keyword NLP and pure LLM chat
+# - Only enable when model tier >= "medium" (4b+)
+# - If tool call returned, execute. If text returned, pass to LLM chat tier.
+# - Log tool calling latency and success rate
+
+# Acceptance: "search for my report and open the folder" → two tool calls.
+# "set a 5 minute timer and lower the volume" → two tool calls.
+# Simple queries still skip this tier (handled by regex/semantic).</code></pre>
+
+<pre><code># Task 4.2: Mixed-Language Command Support
+# Context: Egyptian users naturally mix Arabic and English: "افتح Chrome"
+
+# Create: nlp/codeswitching.py
+# - normalize_codeswitched(text: str) -> (intent_lang: str, entity_lang: str, entities: dict)
+# - Detect patterns:
+#   Arabic verb + English noun: "افتح Chrome" → intent=open, entity=Chrome
+#   English verb + Arabic noun: "open الملفات" → intent=open, entity=files
+#   Full Arabic: "افتح المتصفح" → intent=open, entity=browser
+#   Full English: "open chrome" → intent=open, entity=chrome
+# - Use Unicode script detection to split Arabic/Latin segments
+# - Feed extracted entities into existing app alias lookup
+
+# Modify: core/command_parser.py
+# - Run codeswitching normalizer before regex matching
+# - Extract entities from mixed input, attempt alias resolution
+
+# Modify: audio/stt.py
+# - When JARVIS_STT_MIXED_TREAT_AS_ARABIC=true, set Whisper language=None
+#   (auto-detect handles mixed input better than forcing a language)
+
+# Test with these 20 patterns:
+# "افتح Chrome", "افتح الكروم", "open chrome", "سكر Chrome"
+# "شغل Spotify", "شغل الموسيقى", "play music", "وقف الموسيقى"
+# "دور على files", "search for ملفات", "ابحث عن report"
+# ... etc
+
+# Acceptance: All 20 test patterns route to correct intent with correct entity.</code></pre>
+
+</section>
+
+<!-- ================================================================ -->
+<section id="testing">
+<h2>Testing Guide</h2>
+<p class="dim">How to verify each feature works — both programmatic tests and voice commands to try.</p>
+
+<h3>Phase 1 Tests: Audio & Wake Word</h3>
+
+<table class="test-table">
+<tr><th>Feature</th><th>Test Method</th><th>Voice Command / Action</th><th>Expected Result</th></tr>
+<tr>
+  <td>Arabic wake word ONNX</td>
+  <td><code>python -c "from audio.wake_word import listen_for_wake_word; print('Listening...'); print(listen_for_wake_word())"</code></td>
+  <td>Say <strong>"جارفيس"</strong> or <strong>"يا جارفيس"</strong></td>
+  <td>Detects within 40ms. Console shows <code>[WakeWord] Wake word detected (arabic).</code> No Whisper model loaded.</td>
+</tr>
+<tr>
+  <td>English wake word</td>
+  <td>Same as above</td>
+  <td>Say <strong>"Jarvis"</strong></td>
+  <td>Detects within 20ms. Console shows <code>[WakeWord] Wake word detected (english).</code></td>
+</tr>
+<tr>
+  <td>Silero VAD</td>
+  <td><code>python -c "from audio.vad import SileroVAD; v=SileroVAD(); print('VAD loaded:', v.is_ready())"</code></td>
+  <td>Say "Jarvis" then speak softly / loudly / with background noise</td>
+  <td>Speech onset detected reliably even with moderate background noise. Energy-only silence is skipped (no Silero inference on silence).</td>
+</tr>
+<tr>
+  <td>Adaptive silence timeout</td>
+  <td>Full pipeline: <code>python main.py</code></td>
+  <td>Say <strong>"Jarvis, open Chrome"</strong> (command) vs <strong>"Jarvis, tell me about the weather"</strong> (conversation)</td>
+  <td>Command: captures in ~0.5s after you stop. Conversation: waits ~1.5s to let you think/continue.</td>
+</tr>
+<tr>
+  <td>Barge-in interrupt</td>
+  <td>Full pipeline: <code>python main.py</code></td>
+  <td>Ask Jarvis a long question. While it's speaking, say <strong>"stop"</strong> or <strong>"Jarvis"</strong> or anything</td>
+  <td>TTS stops within 200ms. No echo/feedback loop. Jarvis enters listening state.</td>
+</tr>
+</table>
+
+<h3>Phase 2 Tests: LLM & Prompt Quality</h3>
+
+<table class="test-table">
+<tr><th>Feature</th><th>Test Method</th><th>Voice Command / Action</th><th>Expected Result</th></tr>
+<tr>
+  <td>Prompt tier selection</td>
+  <td><code>python -c "from llm.prompt_builder import get_prompt_tier; print(get_prompt_tier())"</code></td>
+  <td>N/A (check logs on startup)</td>
+  <td>Logs show <code>Prompt tier: slim (qwen3:4b, ~180 tokens)</code> or similar. Token count visible.</td>
+</tr>
+<tr>
+  <td>Arabic response quality</td>
+  <td>Full pipeline</td>
+  <td>Say <strong>"Jarvis, إيه هي عاصمة فرنسا؟"</strong></td>
+  <td>Response in Egyptian Arabic: "باريس هي عاصمة فرنسا" — not MSA, not English, no refusal.</td>
+</tr>
+<tr>
+  <td>Arabic response quality 2</td>
+  <td>Full pipeline</td>
+  <td>Say <strong>"Jarvis, ازاي اعمل كيكة شوكولاتة؟"</strong></td>
+  <td>Recipe in Egyptian colloquial. Natural sentence boundaries when spoken. No mid-word TTS cuts.</td>
+</tr>
+<tr>
+  <td>Tool instruction quality</td>
+  <td>Full pipeline</td>
+  <td>Say <strong>"Jarvis, what's the weather?"</strong></td>
+  <td>Response includes temperature, conditions, city name. Mentions data freshness implicitly ("right now it's...").</td>
+</tr>
+<tr>
+  <td>Arabic sentence streaming</td>
+  <td>Full pipeline with debug logging</td>
+  <td>Ask a long question in Arabic</td>
+  <td>Logs show sentence chunks of 30-80 chars each. No single-word chunks. TTS speaks full clauses.</td>
+</tr>
+<tr>
+  <td>Language drift detection</td>
+  <td>Full pipeline</td>
+  <td>Ask 5 questions in Arabic in a row</td>
+  <td>All responses stay in Arabic. If model drifts to English, log shows <code>language_drift_detected</code>.</td>
+</tr>
+</table>
+
+<h3>Phase 3 Tests: Desktop Control</h3>
+
+<table class="test-table">
+<tr><th>Feature</th><th>Test Method</th><th>Voice Command / Action</th><th>Expected Result</th></tr>
+<tr>
+  <td>Native volume control</td>
+  <td><code>python -c "from os_control.native_ops import set_volume; set_volume(0.5); print('OK')"</code></td>
+  <td>Say <strong>"Jarvis, set volume to 50"</strong> or <strong>"Jarvis, ارفع الصوت"</strong></td>
+  <td>Volume changes in <20ms. Logs show <code>native_ops latency: 3ms</code> (not 200ms PowerShell).</td>
+</tr>
+<tr>
+  <td>Native brightness</td>
+  <td><code>python -c "from os_control.native_ops import set_brightness; set_brightness(70)"</code></td>
+  <td>Say <strong>"Jarvis, brightness 70"</strong> or <strong>"Jarvis, نور الشاشة"</strong></td>
+  <td>Brightness changes immediately. Works on laptops without admin.</td>
+</tr>
+<tr>
+  <td>App auto-scan</td>
+  <td><code>python -c "from os_control.app_scanner import scan_installed_apps; apps=scan_installed_apps(); print(f'Found {len(apps)} apps'); print(list(apps.keys())[:10])"</code></td>
+  <td>Say <strong>"Jarvis, rescan apps"</strong></td>
+  <td>Discovers all installed apps. Output shows apps not in hardcoded catalog (Photoshop, Slack, Discord, etc.).</td>
+</tr>
+<tr>
+  <td>Open scanned app</td>
+  <td>Full pipeline (after app scan)</td>
+  <td>Say <strong>"Jarvis, open [any app on your PC not in hardcoded catalog]"</strong></td>
+  <td>App opens. Jarvis says "Opening [app name]."</td>
+</tr>
+<tr>
+  <td>File search → visual result</td>
+  <td>Full pipeline</td>
+  <td>Say <strong>"Jarvis, find my resume"</strong> or <strong>"Jarvis, دور على الـ report"</strong></td>
+  <td>Jarvis speaks result AND opens Explorer folder with file selected or search results window.</td>
+</tr>
+<tr>
+  <td>Settings deep link</td>
+  <td>Full pipeline</td>
+  <td>Say <strong>"Jarvis, open WiFi settings"</strong> or <strong>"Jarvis, افتح إعدادات الواي فاي"</strong></td>
+  <td>Windows Settings opens directly to WiFi page.</td>
+</tr>
+<tr>
+  <td>Timer with Clock app</td>
+  <td>Full pipeline</td>
+  <td>Say <strong>"Jarvis, set a 5 minute timer"</strong> or <strong>"Jarvis, حط تايمر ٥ دقايق"</strong></td>
+  <td>Windows Clock app opens to timer tab. Background timer also starts (alarm will sound even if Clock app is closed).</td>
+</tr>
+<tr>
+  <td>PIN confirmation</td>
+  <td>Full pipeline</td>
+  <td>Say <strong>"Jarvis, shut down"</strong></td>
+  <td>Jarvis asks for PIN. Say your PIN digits. If correct → shuts down. If wrong 3 times → 60s lockout.</td>
+</tr>
+</table>
+
+<h3>Phase 4 Tests: Intent Routing</h3>
+
+<table class="test-table">
+<tr><th>Feature</th><th>Test Method</th><th>Voice Command / Action</th><th>Expected Result</th></tr>
+<tr>
+  <td>Function calling (single tool)</td>
+  <td>Full pipeline</td>
+  <td>Say <strong>"Jarvis, search for documents about machine learning"</strong></td>
+  <td>Routed via function calling tier (not regex). Logs show <code>tier=tool_calling, tool=search_files</code>.</td>
+</tr>
+<tr>
+  <td>Function calling (multi tool)</td>
+  <td>Full pipeline</td>
+  <td>Say <strong>"Jarvis, set a timer for 10 minutes and lower the volume to 30"</strong></td>
+  <td>Both actions execute. Logs show two tool calls in sequence.</td>
+</tr>
+<tr>
+  <td>Mixed language command</td>
+  <td>Full pipeline</td>
+  <td>Say <strong>"افتح Chrome"</strong> (Arabic verb + English noun)</td>
+  <td>Chrome opens. Intent parsed correctly despite code-switching.</td>
+</tr>
+<tr>
+  <td>Mixed language command 2</td>
+  <td>Full pipeline</td>
+  <td>Say <strong>"سكر Notepad"</strong></td>
+  <td>Notepad closes. Arabic close verb + English app name resolved.</td>
+</tr>
+<tr>
+  <td>Mixed language command 3</td>
+  <td>Full pipeline</td>
+  <td>Say <strong>"Jarvis, دور على ملف report"</strong></td>
+  <td>File search executes with "report" as query. Arabic search verb handled.</td>
+</tr>
+<tr>
+  <td>Routing metrics</td>
+  <td><code>python main.py</code> then say <strong>"show metrics"</strong></td>
+  <td>Say <strong>"Jarvis, show metrics"</strong></td>
+  <td>Shows per-tier hit rates. Regex/semantic/keyword should handle ~70% of commands.</td>
+</tr>
+</table>
+
+<h3>Smoke Test Script</h3>
+
+<p>Run this sequence to verify the full pipeline after each phase:</p>
+
+<pre><code># Full smoke test sequence — say these in order:
+
+# 1. Wake word (both languages)
+"Jarvis"                          → Should activate
+"جارفيس"                         → Should activate
+
+# 2. Basic commands (Phase 3)
+"Jarvis, what time is it?"        → Speaks current time
+"Jarvis, set volume to 50"        → Volume changes instantly
+"Jarvis, open Chrome"             → Chrome opens
+"Jarvis, close Chrome"            → Chrome closes
+
+# 3. Arabic commands (Phase 2+4)
+"جارفيس، إيه الوقت؟"              → Time in Arabic
+"جارفيس، ارفع الصوت"              → Volume up
+"افتح Chrome"                     → Chrome opens (mixed language)
+
+# 4. LLM quality (Phase 2)
+"Jarvis, what's the weather?"     → Weather with real data
+"جارفيس، ازاي اعمل شاي؟"          → Egyptian Arabic recipe
+
+# 5. Complex intents (Phase 4)
+"Jarvis, find my documents and open the folder"  → Search + Explorer opens
+"Jarvis, set a 3 minute timer"    → Clock app + background timer
+
+# 6. Safety (Phase 3)
+"Jarvis, shut down"               → Asks for PIN
+"1234"                            → If correct PIN, shuts down
+
+# 7. Interrupt (Phase 1)
+Ask a long question, then say anything while Jarvis speaks → TTS stops
+</code></pre>
+
+<h3>Automated Unit Test Commands</h3>
+
+<pre><code># Run these to verify individual components without voice:
+
+# Wake word model loading
+python -c "
+from audio.wake_word import _get_model
+m = _get_model()
+print('EN wake model loaded:', m is not None)
+"
+
+# VAD
+python -c "
+from audio.vad import SileroVAD
+v = SileroVAD()
+import numpy as np
+silence = np.zeros(512, dtype=np.int16)
+print('Silence is speech:', v.is_speech(silence))  # Should be False
+"
+
+# Native ops
+python -c "
+from os_control.native_ops import get_volume, get_brightness
+print('Volume:', get_volume())
+print('Brightness:', get_brightness())
+"
+
+# App scanner
+python -c "
+from os_control.app_scanner import scan_installed_apps
+apps = scan_installed_apps()
+print(f'Discovered {len(apps)} apps')
+for exe, info in list(apps.items())[:5]:
+    print(f'  {info[\"canonical_name\"]} ({exe})')
+"
+
+# Sentence buffer
+python -c "
+from llm.sentence_buffer import SentenceBuffer
+buf = SentenceBuffer(is_arabic=True)
+test = 'أنا بحب الأكل المصري وخصوصا الكشري والفول والطعمية'
+for char in test:
+    result = buf.add_token(char)
+    if result:
+        print(f'Flushed: \"{result}\"')
+remaining = buf.flush()
+if remaining:
+    print(f'Final: \"{remaining}\"')
+"
+
+# Tool calling
+python -c "
+from llm.tool_caller import call_with_tools, TOOL_SCHEMAS
+print(f'{len(TOOL_SCHEMAS)} tools defined')
+for t in TOOL_SCHEMAS:
+    print(f'  {t[\"function\"][\"name\"]}')
+"
+
+# Doctor check (comprehensive)
+python core/doctor.py
+</code></pre>
+
+</section>
+
+<!-- ================================================================ -->
+<section>
+<h2>Timeline Estimate</h2>
+
+<div class="summary-grid">
+  <div class="summary-cell" style="border-color:var(--red)"><div class="num" style="color:var(--red)">7–10d</div><div class="label">Phase 1: Audio</div></div>
+  <div class="summary-cell" style="border-color:var(--amber)"><div class="num" style="color:var(--amber)">4–6d</div><div class="label">Phase 2: LLM</div></div>
+  <div class="summary-cell" style="border-color:var(--accent)"><div class="num" style="color:var(--accent)">5–7d</div><div class="label">Phase 3: Desktop</div></div>
+  <div class="summary-cell" style="border-color:var(--blue)"><div class="num" style="color:var(--blue)">4–5d</div><div class="label">Phase 4: Routing</div></div>
+  <div class="summary-cell" style="border-color:var(--purple)"><div class="num" style="color:var(--purple)">4–6d</div><div class="label">Phase 5: Polish</div></div>
+</div>
+
+<p><strong>Total estimated effort: 24–34 working days</strong> (5–7 weeks with one developer). Phases 2 and 3 can run in parallel since they touch different files. Phase 4 depends on Phase 2 (prompt builder) and Phase 3 (native ops). Phase 5 is optional polish.</p>
+
+<p><strong>Recommended execution order for Codex/Claude Code:</strong> Run Phase 1 tasks sequentially (audio is sensitive to ordering). Run Phase 2 and Phase 3 tasks in parallel on separate branches. Merge both, then start Phase 4. Phase 5 whenever you have time.</p>
+</section>
+
+</body>
+</html>
