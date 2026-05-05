@@ -18,55 +18,18 @@ from os_control.adapter_result import (
 from os_control.confirmation import confirmation_manager
 from os_control.native_ops import (
     adjust_system_volume_percent,
+    adjust_system_brightness_percent,
     capture_primary_screen_screenshot,
+    get_system_brightness_percent,
     lock_workstation,
     set_system_volume_percent,
+    set_system_brightness_percent,
     sleep_system,
     toggle_system_mute,
 )
 from os_control.policy import policy_engine
 from os_control.powershell_bridge import run_template
 from os_control.risk_policy import risk_tier_for_system
-
-try:
-    import screen_brightness_control as _sbc
-
-    _SBC_AVAILABLE = True
-except ImportError:
-    _sbc = None
-    _SBC_AVAILABLE = False
-
-
-def _python_brightness_set(level):
-    """Try setting brightness via screen-brightness-control. Returns True on success."""
-    if not _SBC_AVAILABLE:
-        return False
-    try:
-        _sbc.set_brightness(int(level))
-        return True
-    except Exception as exc:
-        logger.debug("screen-brightness-control set failed: %s", exc)
-        return False
-
-
-def _python_brightness_get():
-    """Try getting brightness via screen-brightness-control. Returns int or None."""
-    if not _SBC_AVAILABLE:
-        return None
-    try:
-        values = _sbc.get_brightness()
-        return values[0] if values else None
-    except Exception:
-        return None
-
-
-def _python_brightness_adjust(delta):
-    """Adjust brightness by delta percent. Returns True on success."""
-    current = _python_brightness_get()
-    if current is None:
-        return False
-    new_level = max(0, min(100, current + delta))
-    return _python_brightness_set(new_level)
 
 
 SYSTEM_COMMANDS = {
@@ -465,6 +428,76 @@ ALIASES = {
     "\u0627\u0631\u062c\u0639 \u0648\u0631\u0627": "browser_back",
     "\u0627\u0631\u062c\u0639 \u0644\u0648\u0631\u0627": "browser_back",
     "\u0631\u0648\u062d \u0644\u0642\u062f\u0627\u0645": "browser_forward",
+    # --- Egyptian Arabic dialect additions ---
+    # Shutdown
+    "\u0627\u0637\u0641\u064a\u0647": "shutdown",
+    "\u0627\u0642\u0641\u0644\u0647": "shutdown",
+    "\u0648\u0642\u0641\u0647": "shutdown",
+    # Restart
+    "\u0627\u0639\u064a\u062f\u0647": "restart",
+    "\u0627\u0639\u064a\u062f \u062a\u0634\u063a\u064a\u0644\u0647": "restart",
+    "\u0631\u064a\u0633\u062a\u0627\u0631\u062a\u0647": "restart",
+    # Sleep
+    "\u0646\u064a\u0645\u0647": "sleep",
+    "\u062e\u0644\u064a\u0647 \u064a\u0646\u0627\u0645": "sleep",
+    "\u062d\u0637\u0647 \u064a\u0646\u0627\u0645": "sleep",
+    "\u0646\u0648\u0645 \u0627\u0644\u062c\u0647\u0627\u0632": "sleep",
+    # Lock
+    "\u0642\u0641\u0644 \u0627\u0644\u0634\u0627\u0634\u0629": "lock",
+    "\u0642\u0641\u0644\u064a \u0627\u0644\u0634\u0627\u0634\u0629": "lock",
+    "\u0642\u0641\u0644\u064a \u0627\u0644\u0643\u0645\u0628\u064a\u0648\u062a\u0631": "lock",
+    "\u0644\u0648\u0643 \u0627\u0644\u0634\u0627\u0634\u0629": "lock",
+    # Volume
+    "\u0627\u0631\u0641\u0639\u0644\u064a \u0627\u0644\u0635\u0648\u062a": "volume_up",
+    "\u0632\u0648\u062f\u0647": "volume_up",
+    "\u0632\u0648\u062f\u0644\u064a \u0627\u0644\u0635\u0648\u062a": "volume_up",
+    "\u0648\u0637\u064a\u0644\u064a \u0627\u0644\u0635\u0648\u062a": "volume_down",
+    "\u0648\u0637\u064a\u0647": "volume_down",
+    "\u0635\u0648\u062a \u0648\u0627\u0637\u064a": "volume_down",
+    "\u0627\u0635\u0645\u062a\u0644\u064a": "volume_mute",
+    "\u0627\u0633\u0643\u062a\u0644\u064a": "volume_mute",
+    "\u0627\u0644\u0635\u0648\u062a \u0632\u064a\u0627\u062f\u0647": "volume_down",
+    # Brightness
+    "\u0631\u0641\u0639\u0644\u064a \u0627\u0644\u0633\u0637\u0648\u0639": "brightness_up",
+    "\u0632\u0648\u062f\u0644\u064a \u0627\u0644\u0646\u0648\u0631": "brightness_up",
+    "\u0646\u0648\u0631 \u0627\u0643\u062a\u0631": "brightness_up",
+    "\u0648\u0637\u064a\u0644\u064a \u0627\u0644\u0633\u0637\u0648\u0639": "brightness_down",
+    "\u0642\u0644\u0644\u0644\u064a \u0627\u0644\u0646\u0648\u0631": "brightness_down",
+    "\u0646\u0648\u0631 \u0627\u0642\u0644": "brightness_down",
+    # Windows
+    "\u0643\u0628\u0631\u0644\u064a \u0627\u0644\u0634\u0628\u0627\u0643": "window_maximize",
+    "\u0643\u0628\u0631\u0647": "window_maximize",
+    "\u0635\u063a\u0631\u0644\u064a \u0627\u0644\u0634\u0628\u0627\u0643": "window_minimize",
+    "\u0635\u063a\u0631\u0647": "window_minimize",
+    "\u0633\u0643\u0631\u0644\u064a \u0627\u0644\u0634\u0628\u0627\u0643": "window_close_active",
+    "\u0642\u0641\u0644\u064a \u0627\u0644\u0634\u0628\u0627\u0643": "window_close_active",
+    "\u0634\u0628\u0627\u0643 \u062a\u0627\u0646\u064a": "window_next",
+    "\u063a\u064a\u0631 \u0627\u0644\u0634\u0628\u0627\u0643": "window_next",
+    "\u062d\u0631\u0643 \u064a\u0645\u064a\u0646": "window_snap_right",
+    "\u062d\u0631\u0643 \u0634\u0645\u0627\u0644": "window_snap_left",
+    # Media
+    "\u0627\u0648\u0642\u0641 \u0627\u0644\u0645\u0648\u0632\u064a\u0643\u0627": "media_stop",
+    "\u0627\u0648\u0642\u0641 \u0627\u0644\u0645\u0648\u0632\u064a\u0643\u0647": "media_stop",
+    "\u0627\u0648\u0642\u0641 \u0627\u0644\u0645\u064a\u0648\u0632\u064a\u0643": "media_stop",
+    "\u0627\u0644\u0627\u063a\u0646\u064a\u0629 \u0627\u0644\u062c\u0627\u064a\u0629": "media_next_track",
+    "\u0627\u063a\u0646\u064a\u0629 \u062a\u0627\u0646\u064a\u0629": "media_next_track",
+    "\u0627\u0644\u0627\u063a\u0646\u064a\u0629 \u0627\u0644\u0644\u064a \u0641\u0627\u062a\u062a": "media_previous_track",
+    "\u0631\u062c\u0639\u0644\u064a \u0627\u0644\u0627\u063a\u0646\u064a\u0629": "media_previous_track",
+    # Browser
+    "\u062a\u0627\u0628 \u062c\u062f\u064a\u062f": "browser_new_tab",
+    "\u0633\u0643\u0631\u0644\u064a \u0627\u0644\u062a\u0627\u0628": "browser_close_tab",
+    "\u0642\u0641\u0644\u064a \u0627\u0644\u062a\u0627\u0628": "browser_close_tab",
+    "\u0631\u062c\u0639\u0644\u064a \u0648\u0631\u0627": "browser_back",
+    "\u0631\u0648\u062d\u0644\u064a \u0642\u062f\u0627\u0645": "browser_forward",
+    # Screenshot
+    "\u0633\u0643\u0631\u064a\u0646 \u0634\u0648\u062a": "screenshot",
+    "\u0635\u0648\u0631\u0629 \u0644\u0644\u0634\u0627\u0634\u0629": "screenshot",
+    "\u0633\u0643\u0631\u064a\u0646\u0634\u0648\u062a": "screenshot",
+    # Other
+    "\u0641\u0636\u064a\u0644\u064a \u0633\u0644\u0629 \u0627\u0644\u0645\u062d\u0630\u0648\u0641\u0627\u062a": "empty_recycle_bin",
+    "\u0641\u0636\u064a\u0644\u064a \u0627\u0644\u0632\u0628\u0627\u0644\u0647": "empty_recycle_bin",
+    "\u062e\u0631\u0648\u062c": "logoff",
+    "\u0627\u062e\u0631\u062c \u0645\u0646 \u0627\u0644\u062d\u0633\u0627\u0628": "logoff",
 }
 
 _RETRYABLE_NON_DESTRUCTIVE_ERRORS = ("timed out", "temporarily unavailable")
@@ -1007,6 +1040,34 @@ def _run_native_system_command(action_key):
     return False, "", {}
 
 
+def _run_native_brightness_command(action_key, normalized_args):
+    """Try native brightness controls before falling back to PowerShell.
+
+    Returns:
+        tuple[bool, str, dict] - (success, message, debug_info)
+    """
+    if action_key == "brightness_set":
+        level = int(normalized_args.get("brightness_level", 50))
+        ok = set_system_brightness_percent(level)
+        if ok:
+            return True, f"Brightness set to {level}%.", {"method": "native_brightness", "level": level}
+        return False, "", {}
+
+    if action_key == "brightness_up":
+        ok, new_level = adjust_system_brightness_percent(10)
+        if ok and new_level is not None:
+            return True, f"Brightness increased to {new_level}%.", {"method": "native_brightness", "level": new_level}
+        return False, "", {}
+
+    if action_key == "brightness_down":
+        ok, new_level = adjust_system_brightness_percent(-10)
+        if ok and new_level is not None:
+            return True, f"Brightness decreased to {new_level}%.", {"method": "native_brightness", "level": new_level}
+        return False, "", {}
+
+    return False, "", {}
+
+
 def execute_system_command_result(action_key, command_args=None):
     if action_key not in SYSTEM_COMMANDS:
         return failure_result("Unsupported system command.", error_code="unsupported_action")
@@ -1041,23 +1102,11 @@ def execute_system_command_result(action_key, command_args=None):
             log_action("system_command", "success", details={"action": action_key, **native_debug})
             return success_result(native_msg, debug_info={"action": action_key, **native_debug})
 
-    # Python-first brightness control (falls through to PowerShell if unavailable)
-    if action_key in {"brightness_up", "brightness_down", "brightness_set"} and _SBC_AVAILABLE:
-        py_ok = False
-        if action_key == "brightness_set":
-            level = normalized_args.get("brightness_level", 50)
-            py_ok = _python_brightness_set(level)
-            msg = f"Brightness set to {level}%."
-        elif action_key == "brightness_up":
-            py_ok = _python_brightness_adjust(10)
-            msg = "Brightness increased."
-        elif action_key == "brightness_down":
-            py_ok = _python_brightness_adjust(-10)
-            msg = "Brightness decreased."
-        if py_ok:
-            log_action("system_command", "success", details={"action": action_key, "method": "python_sbc"})
-            return success_result(msg, debug_info={"action": action_key, "method": "python_sbc"})
-        logger.debug("Python brightness control failed, falling through to PowerShell")
+    if action_key in {"brightness_up", "brightness_down", "brightness_set"}:
+        native_ok, native_msg, native_debug = _run_native_brightness_command(action_key, normalized_args)
+        if native_ok:
+            log_action("system_command", "success", details={"action": action_key, **native_debug})
+            return success_result(native_msg, debug_info={"action": action_key, **native_debug})
 
     ok, error, output, attempts = _run_system_template_with_safe_retry(
         cfg["template"],

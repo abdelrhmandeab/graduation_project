@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 _ARABIC_CHAR_RE = re.compile(r"[\u0600-\u06FF]")
 _LATIN_CHAR_RE = re.compile(r"[A-Za-z]")
+_CYRILLIC_RE = re.compile(r"[\u0400-\u04FF]")
 _ARABIC_DIACRITICS_RE = re.compile(r"[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]")
 
 SUPPORTED_LANGUAGES = {"ar", "en"}
@@ -25,15 +26,18 @@ class LanguageGateResult:
 def _script_counts(text):
     arabic = 0
     latin = 0
+    cyrillic = 0
     other_alpha = 0
     for char in text or "":
         if _ARABIC_CHAR_RE.match(char):
             arabic += 1
         elif _LATIN_CHAR_RE.match(char):
             latin += 1
+        elif _CYRILLIC_RE.match(char):
+            cyrillic += 1
         elif char.isalpha():
             other_alpha += 1
-    return arabic, latin, other_alpha
+    return arabic, latin, cyrillic, other_alpha
 
 
 def _normalize_arabic(text):
@@ -61,10 +65,20 @@ def detect_supported_language(text, previous_language="en"):
             reason="empty_text",
         )
 
-    arabic, latin, other_alpha = _script_counts(raw)
+    arabic, latin, cyrillic, other_alpha = _script_counts(raw)
     ar_en_total = arabic + latin
 
-    if ar_en_total == 0 and other_alpha > 0:
+    # Any Cyrillic characters are a strong signal the transcript is wrong (Russian
+    # hallucination from Whisper, or the user spoke Russian). Two or more is definitive.
+    if cyrillic >= 2:
+        return LanguageGateResult(
+            supported=False,
+            language="unsupported",
+            normalized_text=raw,
+            reason="cyrillic_script_detected",
+        )
+
+    if ar_en_total == 0 and (other_alpha > 0 or cyrillic > 0):
         return LanguageGateResult(
             supported=False,
             language="unsupported",

@@ -6,7 +6,11 @@ from core.config import POWERSHELL_EXECUTABLE
 # Vetted command templates only; no arbitrary user-provided PowerShell.
 POWER_SHELL_TEMPLATES = {
     "open_app": {
-        "script": "Start-Process -FilePath $env:JARVIS_APP_PATH",
+        "script": (
+            "$p=$env:JARVIS_APP_PATH; "
+            "if ($p -like 'shell:*') { Start-Process $p } "
+            "else { Start-Process -FilePath $p }"
+        ),
         "env_keys": ("JARVIS_APP_PATH",),
     },
     "close_app": {

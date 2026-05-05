@@ -12,6 +12,7 @@ from core.config import (
 )
 from core.logger import logger
 from core.metrics import metrics
+from llm.sentence_buffer import SentenceBuffer
 
 _OLLAMA_BASE_URL = str(LLM_OLLAMA_BASE_URL or "http://localhost:11434").rstrip("/")
 _GENERATE_ENDPOINT = f"{_OLLAMA_BASE_URL}/api/generate"
@@ -182,11 +183,15 @@ def detect_sentence_boundaries(text: str, is_arabic: bool) -> list[str]:
     return []
 
 
-def ask_llm_streaming(prompt, on_sentence=None, num_ctx=None):
+def ask_llm_streaming(prompt, on_sentence=None, num_ctx=None, is_arabic=False):
     """Stream tokens from Ollama; call on_sentence(text) at each sentence boundary.
 
     Returns the complete accumulated response text, or an error string.
     Falls back to non-streaming ask_llm() when on_sentence is None.
+
+    Args:
+        is_arabic: When True, uses Arabic-aware sentence splitting (splits on ؟،؛
+                   and performs soft/hard char-count flushes for un-punctuated text).
     """
     if on_sentence is None:
         return ask_llm(prompt, num_ctx=num_ctx)
@@ -195,7 +200,7 @@ def ask_llm_streaming(prompt, on_sentence=None, num_ctx=None):
     success = False
     model_name = _resolve_model_name()
     accumulated = []
-    sentence_buf = ""
+    sb = SentenceBuffer(is_arabic=bool(is_arabic))
     hard_timeout_seconds = max(5.0, float(LLM_TIMEOUT_SECONDS or 30.0))
     hard_timeout_hit = False
 
@@ -258,26 +263,26 @@ def ask_llm_streaming(prompt, on_sentence=None, num_ctx=None):
                             open_idx = token.find("<think>")
                             if open_idx == -1:
                                 break
-                            # Emit any content before the opening tag, then enter block
                             pre = token[:open_idx]
                             token = token[open_idx + len("<think>"):]
                             inside_think_block = True
                             if pre:
                                 accumulated.append(pre)
-                                sentence_buf += pre
-                                sentence_buf = _flush_sentence_buffer(sentence_buf, on_sentence)
+                                result = sb.add_token(pre)
+                                if result:
+                                    on_sentence(result)
                 if token:
                     accumulated.append(token)
-                    sentence_buf += token
-                    sentence_buf = _flush_sentence_buffer(sentence_buf, on_sentence)
+                    result = sb.add_token(token)
+                    if result:
+                        on_sentence(result)
                 if chunk.get("done"):
                     break
 
         if hard_timeout_hit:
-            remainder = sentence_buf.strip()
+            remainder = sb.flush()
             if remainder:
                 on_sentence(remainder)
-
             partial = "".join(accumulated).strip()
             if partial:
                 success = True
@@ -285,7 +290,7 @@ def ask_llm_streaming(prompt, on_sentence=None, num_ctx=None):
             return "The local model timed out. Try a shorter query."
 
         # Flush any remaining sentence fragment
-        remainder = sentence_buf.strip()
+        remainder = sb.flush()
         if remainder:
             on_sentence(remainder)
 
@@ -304,7 +309,6 @@ def ask_llm_streaming(prompt, on_sentence=None, num_ctx=None):
         logger.error(
             "LLM streaming timeout after %.2fs (model=%s)", latency, model_name
         )
-        # Return whatever we accumulated before the timeout
         partial = "".join(accumulated).strip()
         if partial:
             success = True

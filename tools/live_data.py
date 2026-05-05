@@ -15,6 +15,7 @@ from typing import Dict, Optional
 from core.config import (
     WEATHER_DEFAULT_CITY,
     WEB_SEARCH_MAX_RESULTS,
+    WEB_SEARCH_ENABLED,
 )
 from core.logger import logger
 from tools.weather import get_weather
@@ -146,7 +147,7 @@ def _format_block(tool_kind: str, body: str) -> str:
     return f"{label}\n{text}"
 
 
-def gather_live_data(user_query: str, parallel: bool = True) -> str:
+def gather_live_data(user_query: str, parallel: bool = True, force_search: bool = False) -> str:
     """Fetch weather, search, and other live data in parallel.
 
     Returns formatted context string ready for prompt injection. Each tool's
@@ -159,6 +160,9 @@ def gather_live_data(user_query: str, parallel: bool = True) -> str:
 
     weather_intent = _detect_weather_intent(query)
     search_intent = _detect_web_search_intent(query)
+
+    if not weather_intent and not search_intent and force_search and WEB_SEARCH_ENABLED:
+        search_intent = {"type": "search", "query": query}
 
     if not weather_intent and not search_intent:
         return ""  # No live data needed

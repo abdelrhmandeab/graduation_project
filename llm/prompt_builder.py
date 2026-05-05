@@ -1,8 +1,35 @@
+import pathlib
+
 from core.config import KB_MAX_CONTEXT_CHARS, KB_TOP_K, MEMORY_MAX_CONTEXT_CHARS
 from core.knowledge_base import knowledge_base_service
 from core.logger import logger
 from core.persona import persona_manager
 from core.session_memory import session_memory
+
+_PROMPTS_DIR = pathlib.Path(__file__).parent / "prompts"
+
+_TIER_TO_TEMPLATE = {
+    "minimal": "micro_prompt.txt",
+    "low":     "micro_prompt.txt",
+    "medium":  "slim_prompt.txt",
+    "high":    "full_prompt.txt",
+}
+
+_first_build_logged = False
+
+
+def _log_first_prompt_build(token_count, tier, response_language, builder_name):
+    global _first_build_logged
+    if _first_build_logged:
+        return
+    logger.info(
+        "First prompt build: %d tokens, tier=%s, lang=%s, builder=%s",
+        token_count,
+        tier,
+        response_language,
+        builder_name,
+    )
+    _first_build_logged = True
 
 
 def _normalize_response_language(language):
@@ -41,7 +68,7 @@ ASSISTANT: الأهرامات اتبنت من حوالي 4500 سنة في الج
 # Backward compat: full examples is the default
 _FEW_SHOT_EXAMPLES = _FEW_SHOT_EXAMPLES_FULL
 
-_PROMPT_MEMORY_CONTEXT_MAX_CHARS = 200
+_PROMPT_MEMORY_CONTEXT_MAX_CHARS = 600
 
 
 def _estimate_token_count(text):
@@ -85,43 +112,65 @@ def _get_model_tier(model_name_or_tier):
         return "medium"
 
 
-def _build_system_block(response_language, persona_prompt, include_few_shot=True, tier="medium"):
-    """Build the system prompt, optimized for the given tier.
+def _load_prompt_template(tier: str):
+    """Read a .txt template for the given tier; return None on failure."""
+    filename = _TIER_TO_TEMPLATE.get(str(tier).lower(), "slim_prompt.txt")
+    try:
+        return (_PROMPTS_DIR / filename).read_text(encoding="utf-8")
+    except Exception:
+        return None
 
-    For minimal/low tiers (1.7B–4B): Keep to ~6–8 core lines + minimal few-shot.
-    For medium/high tiers (4B+): Include richer context and full few-shot examples.
 
-    Target: Reduce token count ≥40% vs baseline for small models.
-    
-    Args:
-        response_language: "en" or "ar"
-        persona_prompt: Optional custom persona text
-        include_few_shot: Whether to include few-shot examples
-        tier: One of "minimal", "low", "medium", "high"
-        
-    Returns:
-        List of prompt sections
+def get_prompt_tier() -> str:
+    """Return the current runtime model tier for prompt selection."""
+    from llm.ollama_client import get_runtime_model_tier
+    return get_runtime_model_tier(default="medium")
+
+
+def _build_system_block(response_language, include_few_shot=True, tier="medium"):
+    """Build the system prompt block for the given tier.
+
+    Primary path: loads a .txt template from llm/prompts/ and substitutes
+    {lang} and {ar_rule} placeholders.
+    Fallback: inline prompt (used if template files are missing).
     """
     lang_label = "Arabic (Egyptian dialect)" if response_language == "ar" else "English"
     inferred_tier = _get_model_tier(tier)
+    persona_style = str(persona_manager.get_speech_style() or "neutral").strip().lower() or "neutral"
+    assistant_name = "Jarvis"
+    ar_rule = (
+        "Use Egyptian colloquial only (تمام، دلوقتي، هعمل كده) — not formal MSA."
+        if response_language == "ar"
+        else ""
+    )
 
-    # Core directives (always included)
+    # --- Template path ---
+    if include_few_shot:
+        template = _load_prompt_template(inferred_tier)
+        if template is not None:
+            try:
+                rendered = template.format(
+                    name=assistant_name,
+                    lang=lang_label,
+                    style=persona_style,
+                    ar_rule=ar_rule,
+                ).strip()
+            except (KeyError, ValueError):
+                rendered = None
+            if rendered:
+                lines = [ln for ln in rendered.splitlines() if ln.strip()]
+                return ["SYSTEM:"] + lines
+
+    # --- Inline fallback ---
     sections = [
         "SYSTEM:",
-        f"You are Jarvis, a voice assistant. Reply in {lang_label} only. Be concise (1-3 sentences).",
-        "Answer directly. If you lack live data, say so briefly then give practical advice.",
+        f"Name: {assistant_name}",
+        f"Language: {lang_label} only.",
+        f"Response style: {persona_style}.",
+        "Answer in one language only and keep the wording natural for the user.",
     ]
-
-    if response_language == "ar":
-        sections.append("Use Egyptian colloquial (تمام، دلوقتي، هعمل كده) — not formal MSA.")
-
-    # Inject persona only if the user explicitly customized it (non-default).
-    persona_text = " ".join(str(persona_prompt or "").split()).strip()
-    default_persona_marker = "You are Jarvis, a helpful, friendly"
-    if persona_text and not persona_text.startswith(default_persona_marker):
-        sections.append(persona_text)
-
-    # Few-shot examples: minimal set for small models, full set for large models
+    if ar_rule:
+        sections.append(ar_rule)
     if include_few_shot:
         sections.append("")
         sections.append("Examples:")
@@ -129,14 +178,14 @@ def _build_system_block(response_language, persona_prompt, include_few_shot=True
             sections.append(_FEW_SHOT_EXAMPLES_MINIMAL)
         else:
             sections.append(_FEW_SHOT_EXAMPLES_FULL)
-
     return sections
 
 
 def build_prompt_package(user_text, response_language="en", tier="medium"):
     query = (user_text or "").strip()
     response_language = _normalize_response_language(response_language)
-    persona_prompt = persona_manager.get_system_prompt()
+    # Auto-select tier from runtime when caller uses the default.
+    effective_tier = get_prompt_tier() if tier == "medium" else tier
     memory_context = session_memory.build_context(
         max_chars=min(int(MEMORY_MAX_CONTEXT_CHARS), _PROMPT_MEMORY_CONTEXT_MAX_CHARS),
         language=response_language,
@@ -152,7 +201,7 @@ def build_prompt_package(user_text, response_language="en", tier="medium"):
     compact_memory_context = " ".join(str(memory_context or "").split()).strip()
     compact_kb_context = " ".join(str(kb_context or "").split()).strip()
 
-    sections = _build_system_block(response_language, persona_prompt, tier=tier)
+    sections = _build_system_block(response_language, tier=effective_tier)
 
     if compact_memory_context:
         sections.append(f"MEMORY: {compact_memory_context}")
@@ -179,7 +228,8 @@ def build_prompt_package(user_text, response_language="en", tier="medium"):
 
     prompt_text = "\n".join(sections)
     token_count = _estimate_token_count(prompt_text)
-    
+    _log_first_prompt_build(token_count, effective_tier, response_language, "build_prompt_package")
+
     return {
         "prompt": prompt_text,
         "kb_sources": kb_package["sources"],
@@ -187,7 +237,7 @@ def build_prompt_package(user_text, response_language="en", tier="medium"):
         "kb_context_used": bool(compact_kb_context),
         "memory_used": bool(compact_memory_context),
         "token_count": token_count,
-        "tier": tier,
+        "tier": effective_tier,
     }
 
 
@@ -208,13 +258,12 @@ def build_lightweight_prompt(user_text, response_language="en", tier="medium"):
     """
     query = (user_text or "").strip()
     response_language = _normalize_response_language(response_language)
-    persona_prompt = persona_manager.get_system_prompt()
-
-    sections = _build_system_block(response_language, persona_prompt, tier=tier)
+    sections = _build_system_block(response_language, tier=tier)
     sections.extend(["", "USER:", query, "", "ASSISTANT:"])
 
     prompt_text = "\n".join(sections)
     token_count = _estimate_token_count(prompt_text)
+    _log_first_prompt_build(token_count, tier, response_language, "build_lightweight_prompt")
 
     return {
         "prompt": prompt_text,
@@ -241,20 +290,19 @@ def build_tool_augmented_prompt(user_text, tool_context, response_language="en",
     """
     query = (user_text or "").strip()
     response_language = _normalize_response_language(response_language)
-    persona_prompt = persona_manager.get_system_prompt()
-
-    sections = _build_system_block(response_language, persona_prompt, tier=tier)
+    sections = _build_system_block(response_language, tier=tier)
     # Per-tool framing lives inside ``tool_context`` (each block carries its own
     # [WEATHER]/[WEB_SEARCH] header). Here we add the global rule so the model
     # treats the block as authoritative for facts and never invents numbers.
     if response_language == "ar":
         live_data_rule = (
-            "بيانات حية (استخدمها كمصدر حقائق ولا تخترع أرقام أو تفاصيل غير موجودة):"
+            "بيانات حية (استخدمها كمصدر حقائق ولا تخترع أرقام أو تفاصيل غير موجودة). "
+            "لا تكرر نص الكتل أو العلامات مثل [WEATHER]/[WEB_SEARCH] في الرد النهائي:"
         )
     else:
         live_data_rule = (
             "LIVE DATA (treat as authoritative — quote figures verbatim, "
-            "do not invent missing details):"
+            "do not invent missing details). Do not repeat block labels or raw tool text:" 
         )
     sections.extend([
         "",
@@ -269,6 +317,7 @@ def build_tool_augmented_prompt(user_text, tool_context, response_language="en",
 
     prompt_text = "\n".join(sections)
     token_count = _estimate_token_count(prompt_text)
+    _log_first_prompt_build(token_count, tier, response_language, "build_tool_augmented_prompt")
 
     return {
         "prompt": prompt_text,
@@ -372,8 +421,7 @@ def get_system_prompt_for_model(model_name, response_language="en"):
         System prompt text (without user query)
     """
     tier = _get_model_tier(model_name)
-    persona_prompt = persona_manager.get_system_prompt()
-    sections = _build_system_block(response_language, persona_prompt, include_few_shot=True, tier=tier)
+    sections = _build_system_block(response_language, include_few_shot=True, tier=tier)
     return "\n".join(sections)
 
 
@@ -395,18 +443,12 @@ def build_minimal_prompt(user_text, response_language="en"):
     """
     query = (user_text or "").strip()
     response_language = _normalize_response_language(response_language)
-    persona_prompt = persona_manager.get_system_prompt()
-
-    sections = _build_system_block(response_language, persona_prompt, include_few_shot=True, tier="low")
+    sections = _build_system_block(response_language, include_few_shot=True, tier="low")
     sections.extend(["", "USER:", query, "", "ASSISTANT:"])
 
     prompt_text = "\n".join(sections)
     token_count = _estimate_token_count(prompt_text)
-    
-    logger.debug(
-        "build_minimal_prompt: %d tokens, tier=low (for qwen3:0.6b-1.7b)",
-        token_count,
-    )
+    _log_first_prompt_build(token_count, "low", response_language, "build_minimal_prompt")
 
     return {
         "prompt": prompt_text,
@@ -437,8 +479,6 @@ def build_full_prompt(user_text, response_language="en"):
     """
     query = (user_text or "").strip()
     response_language = _normalize_response_language(response_language)
-    persona_prompt = persona_manager.get_system_prompt()
-    
     memory_context = session_memory.build_context(
         max_chars=min(int(MEMORY_MAX_CONTEXT_CHARS), _PROMPT_MEMORY_CONTEXT_MAX_CHARS),
         language=response_language,
@@ -454,7 +494,7 @@ def build_full_prompt(user_text, response_language="en"):
     compact_memory_context = " ".join(str(memory_context or "").split()).strip()
     compact_kb_context = " ".join(str(kb_context or "").split()).strip()
 
-    sections = _build_system_block(response_language, persona_prompt, include_few_shot=True, tier="high")
+    sections = _build_system_block(response_language, include_few_shot=True, tier="high")
 
     if compact_memory_context:
         sections.append(f"MEMORY: {compact_memory_context}")
@@ -479,13 +519,7 @@ def build_full_prompt(user_text, response_language="en"):
 
     prompt_text = "\n".join(sections)
     token_count = _estimate_token_count(prompt_text)
-    
-    logger.debug(
-        "build_full_prompt: %d tokens, tier=high (for qwen3:8b+), kb=%s, memory=%s",
-        token_count,
-        bool(compact_kb_context),
-        bool(compact_memory_context),
-    )
+    _log_first_prompt_build(token_count, "high", response_language, "build_full_prompt")
 
     return {
         "prompt": prompt_text,

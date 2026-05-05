@@ -547,7 +547,7 @@ def _format_audio_ux_status():
         f"wake_word_cooldown_s: {float(snapshot['wake_word']['detection_cooldown_seconds']):.2f}",
         f"wake_mode: {snapshot['wake_phrase']['mode']}",
         f"wake_arabic_enabled: {snapshot['wake_phrase']['arabic_enabled']}",
-        f"wake_arabic_trigger_count: {len(snapshot['wake_phrase']['arabic_triggers'])}",
+        f"wake_arabic_onnx_path: {snapshot['wake_phrase'].get('arabic_onnx_path') or 'not_set'}",
         f"wake_ignore_while_speaking: {snapshot['wake_behavior']['ignore_while_speaking']}",
         f"wake_barge_in_on_wake: {snapshot['wake_behavior']['barge_in_interrupt_on_wake']}",
         f"voice_quality_mode: {snapshot['voice_quality_mode']}",
@@ -599,27 +599,12 @@ def _format_latency_status():
 
 def _format_wake_status():
     snapshot = wake_word_runtime.get_runtime_wake_word_phrase_settings()
-    triggers = list(snapshot.get("arabic_triggers") or [])
     lines = [
         "Wake Word Status",
         f"wake_mode: {snapshot.get('mode')}",
         f"wake_phrase_enabled: {snapshot.get('arabic_enabled')}",
-        f"wake_phrase_trigger_count: {len(triggers)}",
-        f"wake_phrase_stt_model: {snapshot.get('ar_stt_model')}",
-        f"wake_phrase_window_s: {float(snapshot.get('ar_chunk_seconds') or 0.0):.2f}",
-        f"wake_phrase_interval_s: {float(snapshot.get('ar_check_interval_seconds') or 0.0):.2f}",
-        f"wake_phrase_confirm_hits: {int(snapshot.get('ar_consecutive_hits_required') or 1)}",
-        f"wake_phrase_confirm_window_s: {float(snapshot.get('ar_confirm_window_seconds') or 0.0):.2f}",
+        f"wake_arabic_onnx_path: {snapshot.get('arabic_onnx_path') or 'not_set'}",
     ]
-    if triggers:
-        lines.append("wake_phrase_triggers:")
-        for item in triggers[:12]:
-            lines.append(f"- {item}")
-        if len(triggers) > 12:
-            lines.append(f"- ... (+{len(triggers) - 12} more)")
-    else:
-        lines.append("wake_phrase_triggers: none")
-    snapshot["arabic_triggers"] = triggers
     return "\n".join(lines), snapshot
 
 
@@ -682,7 +667,7 @@ def handle(parsed):
             f"wake_word_threshold: {float(audio_ux['wake_word']['threshold']):.2f}",
             f"wake_word_gain: {float(audio_ux['wake_word']['audio_gain']):.2f}",
             f"wake_mode: {audio_ux['wake_phrase']['mode']}",
-            f"wake_phrase_trigger_count: {len(audio_ux['wake_phrase']['arabic_triggers'])}",
+            f"wake_arabic_onnx_path: {audio_ux['wake_phrase'].get('arabic_onnx_path') or 'not_set'}",
             f"wake_barge_in_on_wake: {audio_ux['wake_behavior']['barge_in_interrupt_on_wake']}",
             f"tts_rate_offset: {int(audio_ux['tts_tuning']['rate_offset'])}",
         ]
@@ -783,38 +768,10 @@ def handle(parsed):
         return True, message, snapshot
 
     if action == "wake_triggers_add":
-        trigger = str(args.get("trigger") or "").strip()
-        if not trigger:
-            return False, "Missing wake trigger text. Example: wake triggers add ya jarvis", {}
-        added, triggers = wake_word_runtime.add_runtime_wake_trigger(trigger)
-        _mark_audio_ux_custom_profile()
-        message, snapshot = _format_wake_status()
-        log_action(
-            "wake_triggers_add",
-            "success" if added else "failed",
-            details={"trigger": trigger, "count": len(triggers)},
-            error=None if added else "duplicate_or_invalid_trigger",
-        )
-        if added:
-            return True, message, snapshot
-        return False, "Wake trigger already exists or is invalid.\n" + message, snapshot
+        return False, "Wake triggers are fixed by the ONNX model and cannot be edited at runtime.", {}
 
     if action == "wake_triggers_remove":
-        trigger = str(args.get("trigger") or "").strip()
-        if not trigger:
-            return False, "Missing wake trigger text. Example: wake triggers remove ya jarvis", {}
-        removed, triggers = wake_word_runtime.remove_runtime_wake_trigger(trigger)
-        _mark_audio_ux_custom_profile()
-        message, snapshot = _format_wake_status()
-        log_action(
-            "wake_triggers_remove",
-            "success" if removed else "failed",
-            details={"trigger": trigger, "count": len(triggers)},
-            error=None if removed else "trigger_not_found",
-        )
-        if removed:
-            return True, message, snapshot
-        return False, "Wake trigger was not found.\n" + message, snapshot
+        return False, "Wake triggers are fixed by the ONNX model and cannot be edited at runtime.", {}
 
     if action == "audio_ux_pause_scale_set":
         value = _parse_float_value(args)

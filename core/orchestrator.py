@@ -91,17 +91,16 @@ def _is_stt_annotation_only(text):
 
 
 def _resolve_stt_language_hint(*, wake_source=None):
-    _ = wake_source
-    # Phase 2.9 — combine explicit user preference with recent persisted language
-    # history so STT picks the right model fast even right after a restart. The
-    # session_memory helper handles the dominance/threshold logic; we only need
-    # to translate ``None`` into "fully automatic" for the STT layer.
-    lang = session_memory.get_stt_language_hint()
-    if lang in {"ar", "en"}:
-        return lang
-    legacy = session_memory.get_preferred_language()
-    if legacy in {"ar", "en"}:
-        return legacy
+    # Prefer auto-detection on every utterance so one Arabic turn does not
+    # lock the next turn into Arabic. Keep a narrow fast-path only when the
+    # wake word itself is Arabic and the runtime has not already been forced.
+    runtime_hint = str(stt_runtime.get_runtime_stt_settings().get("language_hint") or "auto").strip().lower()
+    if runtime_hint in {"ar", "arabic", "ar-eg", "ar_eg"}:
+        return "ar"
+    if runtime_hint in {"en", "english", "en-us", "en_us"}:
+        return "en"
+    if str(wake_source or "").strip().lower() == "arabic":
+        return "ar"
     return None
 
 
@@ -310,6 +309,93 @@ def _precompute_post_stt_routing(text, *, detected_language=None):
     return language_result, parser_candidate
 
 
+_EN_COMPOUND_VERBS = frozenset({
+    "open", "close", "find", "search", "tell", "show", "play", "pause", "stop",
+    "set", "turn", "check", "get", "look", "create", "delete", "move", "copy",
+    "rename", "maximize", "minimize", "snap", "lock", "sleep", "restart",
+    "shut", "take", "launch", "start", "run", "navigate", "go", "scroll",
+    "what", "who", "how", "when", "where", "why",
+})
+
+_AR_COMPOUND_PREFIXES = (
+    "افتح", "اغلق", "أغلق", "ابحث", "دور", "خبرني", "قولي", "شغّل", "شغل",
+    "وقف", "اعمل", "صور", "نزل", "حمل", "اقفل", "ابدأ", "اطفي", "اطفى",
+    "ايه", "مين", "كيف",
+)
+# Matches waw-conjunction prefix attached directly to a command verb, e.g. "وقولي", "وافتح".
+# Stripping the leading "و" from group(1) gives the clean sub-command.
+_AR_WAW_COMPOUND_RE = re.compile(
+    r'\s+(و(?:' + '|'.join(re.escape(p) for p in _AR_COMPOUND_PREFIXES) + r'))'
+)
+
+
+def _split_compound_utterance(text):
+    """Split 'open X and do Y' into ['open X', 'do Y']. Returns [text] if not compound."""
+    text = text.strip()
+    if not text:
+        return [text]
+
+    # Arabic sequential connectors with وـ prefix: وبعدين, وكمان, وبعد كده, وبعد ذلك
+    ar_then = re.search(r'\s*و(?:بعدين|كمان|بعد\s+كده|بعد\s+ذلك)\s+', text)
+    if ar_then:
+        before = text[:ar_then.start()].strip()
+        after = text[ar_then.end():].strip()
+        if before and len(after.split()) >= 2:
+            return [before, after]
+
+    # Arabic standalone sequential: ثم / بعدين / بعد كده / بعد ذلك (no و prefix)
+    ar_standalone = re.search(r'\s+(?:ثم|بعدين|بعد\s+كده|بعد\s+ذلك)\s+', text)
+    if ar_standalone:
+        before = text[:ar_standalone.start()].strip()
+        after = text[ar_standalone.end():].strip()
+        if before and len(after.split()) >= 1:
+            return [before, after]
+
+    # English "and then" / "then"
+    en_then = re.search(r'\s+(?:and\s+)?then\s+', text, re.IGNORECASE)
+    if en_then:
+        before = text[:en_then.start()].strip()
+        after = text[en_then.end():].strip()
+        if before and len(after.split()) >= 2:
+            return [before, after]
+
+    # Arabic waw + command verb: وقولي, وافتح, وابحث, ...
+    # The leading "و" is the conjunction; strip it to get the clean sub-command.
+    ar_waw = _AR_WAW_COMPOUND_RE.search(text)
+    if ar_waw:
+        before = text[:ar_waw.start()].strip()
+        waw_token = ar_waw.group(1)       # e.g. "وقولي"
+        after_verb = waw_token[1:]         # strip "و" → "قولي"
+        after_rest = text[ar_waw.end():]  # remaining text after the token
+        after = (after_verb + after_rest).strip()
+        if before and len(after.split()) >= 1:
+            return [before, after]
+
+    # English "and [command-verb]" — split only when the post-and clause starts a new command
+    and_match = re.search(r'\s+and\s+', text, re.IGNORECASE)
+    if and_match:
+        before = text[:and_match.start()].strip()
+        after = text[and_match.end():].strip()
+        if before and after:
+            after_words = after.split()
+            first_word = after_words[0].lower() if after_words else ""
+            if first_word in _EN_COMPOUND_VERBS and len(after_words) >= 2:
+                return [before, after]
+            # Handle "I want (you) to X", "I need X", "please X" lead-ins
+            filler = re.match(
+                r'^(?:i\s+(?:want|need|would\s+like)(?:\s+you)?\s+(?:to\s+)?|please\s+)',
+                after, re.IGNORECASE,
+            )
+            if filler:
+                remainder = after[filler.end():].strip().split()
+                if remainder and remainder[0].lower() in _EN_COMPOUND_VERBS and len(remainder) >= 2:
+                    return [before, after]
+            if any(after.startswith(ar_prefix) for ar_prefix in _AR_COMPOUND_PREFIXES):
+                return [before, after]
+
+    return [text]
+
+
 def _run_text_fallback_loop():
     print("Jarvis is running in text fallback mode (no wake-word/audio stack).")
     print("Type 'exit' to stop.")
@@ -425,27 +511,55 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_s
             streamed_sentences.append(normalized)
             sentence_queue.put(normalized)
 
+        sub_commands = _split_compound_utterance(text)
         route_started = time.perf_counter()
-        try:
-            response = route_command(
-                text,
-                detected_language=detected_language,
-                realtime=True,
-                on_sentence=_on_sentence_streamed,
-                precomputed_language_result=precomputed_language_result,
-                precomputed_parser_candidate=precomputed_parser_candidate,
-            )
-            route_success = True
-            metrics.record_stage("router", time.perf_counter() - route_started, success=True)
-        except Exception as exc:
-            metrics.record_stage("router", time.perf_counter() - route_started, success=False)
-            logger.error("Command routing failed: %s", exc)
-            response = "Sorry, I had an internal error."
+        is_compound = len(sub_commands) > 1
 
-        print(f"Jarvis: {response}")
+        if is_compound:
+            # Close the streaming queue immediately — compound path speaks the full response at the end
+            sentence_queue.put(None)
+            try:
+                all_responses = []
+                for sub_text in sub_commands:
+                    sub_response = route_command(
+                        sub_text,
+                        detected_language=detected_language,
+                        realtime=True,
+                    )
+                    if sub_response:
+                        all_responses.append(sub_response)
+                        print(f"Jarvis: {sub_response}")
+                response = " ".join(all_responses).strip() or "Done."
+                route_success = True
+                metrics.record_stage("router", time.perf_counter() - route_started, success=True)
+            except Exception as exc:
+                metrics.record_stage("router", time.perf_counter() - route_started, success=False)
+                logger.error("Compound command routing failed: %s", exc)
+                response = "Sorry, I had an internal error."
+        else:
+            try:
+                response = route_command(
+                    text,
+                    detected_language=detected_language,
+                    realtime=True,
+                    on_sentence=_on_sentence_streamed,
+                    precomputed_language_result=precomputed_language_result,
+                    precomputed_parser_candidate=precomputed_parser_candidate,
+                )
+                route_success = True
+                metrics.record_stage("router", time.perf_counter() - route_started, success=True)
+            except Exception as exc:
+                metrics.record_stage("router", time.perf_counter() - route_started, success=False)
+                logger.error("Command routing failed: %s", exc)
+                response = "Sorry, I had an internal error."
+
+        if not is_compound:
+            print(f"Jarvis: {response}")
         if should_speak_response:
             safe_response = _speech_safe_response(response)
-            if sentence_queue_started:
+            if is_compound:
+                speech_engine.speak_async(safe_response, language=tts_language)
+            elif sentence_queue_started:
                 remaining = _remaining_after_streamed_sentences(safe_response, streamed_sentences)
                 if remaining:
                     sentence_queue.put(remaining)
@@ -936,7 +1050,11 @@ def run():
 
             audio_file = _create_utterance_audio_file()
             record_started = time.perf_counter()
-            capture = record_utterance(filename=audio_file, max_duration=MAX_RECORD_DURATION)
+            capture = record_utterance(
+                filename=audio_file,
+                max_duration=MAX_RECORD_DURATION,
+                vad_mode="command",
+            )
             metrics.record_stage(
                 "record_audio",
                 time.perf_counter() - record_started,

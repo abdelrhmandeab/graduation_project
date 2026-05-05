@@ -1,0 +1,1497 @@
+{
+  "timestamp": 1777998750.7400637,
+  "catalog": {
+    "dpinst~1.exe": {
+      "canonical_name": "Windows Driver Package - SEGGER Microcontroller GmbH (WinUSB) USBDevice  (06/14/2019 3.00.00.000)",
+      "aliases": [
+        "windows driver package segger microcontroller gmbh winusb usbdevice 06 14 2019 3 00 00 000",
+        "windows driver package segger microcontroller gmbh winusb usbdevice",
+        "000"
+      ],
+      "path": "C:\\PROGRA~1\\DIFX\\ED3A00~1\\DPINST~1.EXE"
+    },
+    "allinstances": {
+      "canonical_name": "GDR 2165 for SQL Server 2019 (KB5084817) (64-bit)",
+      "aliases": [
+        "gdr 2165 for sql server 2019 kb5084817 64 bit",
+        "gdr for sql server kb5084817 bit",
+        "bit"
+      ],
+      "path": ""
+    },
+    "setuparp.exe": {
+      "canonical_name": "Microsoft SQL Server 2019 (64-bit)",
+      "aliases": [
+        "microsoft sql server 2019 64 bit",
+        "microsoft sql server bit",
+        "sql server 2019 64 bit",
+        "sql server bit",
+        "bit"
+      ],
+      "path": ""
+    },
+    "uninstall-miniconda3.exe": {
+      "canonical_name": "Miniconda3 py313_25.11.1-1 (Python 3.13.11 64-bit)",
+      "aliases": [
+        "miniconda3 py313_25 11 1 1 python 3 13 11 64 bit",
+        "miniconda3 py313_25 python bit",
+        "bit"
+      ],
+      "path": "C:\\ProgramData\\miniconda3\\Uninstall-Miniconda3.exe"
+    },
+    "firefox.exe": {
+      "canonical_name": "firefox",
+      "aliases": [
+        "firefox"
+      ],
+      "path": "C:\\Program Files\\Mozilla Firefox\\firefox.exe"
+    },
+    "uninstall.exe": {
+      "canonical_name": "Uninstall",
+      "aliases": [
+        "uninstall"
+      ],
+      "path": "C:\\Program Files\\HP\\HP LaserJet M1210 MFP Series\\Uninstall.exe"
+    },
+    "netbeans.exe": {
+      "canonical_name": "Apache NetBeans IDE 23",
+      "aliases": [
+        "apache netbeans ide 23",
+        "apache netbeans ide",
+        "23",
+        "netbeans 23"
+      ],
+      "path": ""
+    },
+    "notepad++.exe": {
+      "canonical_name": "notepad++",
+      "aliases": [
+        "notepad"
+      ],
+      "path": "C:\\Program Files\\Notepad++\\notepad++.exe"
+    },
+    "onedrivesetup.exe": {
+      "canonical_name": "Microsoft OneDrive",
+      "aliases": [
+        "microsoft onedrive",
+        "onedrive"
+      ],
+      "path": ""
+    },
+    "officeclicktorun.exe": {
+      "canonical_name": "Microsoft Office Professional Plus 2024 - en-us",
+      "aliases": [
+        "microsoft office professional plus 2024 en us",
+        "microsoft office professional plus en us",
+        "office professional plus 2024 en us",
+        "office professional plus en us",
+        "us",
+        "microsoft office"
+      ],
+      "path": ""
+    },
+    "msiexec.exe": {
+      "canonical_name": "Uninstall Node.js",
+      "aliases": [
+        "uninstall node js",
+        "js",
+        "msiexec"
+      ],
+      "path": "C:\\Windows\\SysWOW64\\msiexec.exe"
+    },
+    "setup.exe": {
+      "canonical_name": "setup",
+      "aliases": [
+        "setup"
+      ],
+      "path": ""
+    },
+    "vmware.exe": {
+      "canonical_name": "vmware",
+      "aliases": [
+        "vmware"
+      ],
+      "path": "C:\\Program Files (x86)\\VMware\\VMware Workstation\\vmware.exe"
+    },
+    "revounin.exe": {
+      "canonical_name": "Revo Uninstaller",
+      "aliases": [
+        "revo uninstaller",
+        "uninstaller",
+        "revounin"
+      ],
+      "path": "C:\\Program Files\\VS Revo Group\\Revo Uninstaller\\RevoUnin.exe"
+    },
+    "ssms.exe": {
+      "canonical_name": "SQL Server Management Studio 21",
+      "aliases": [
+        "sql server management studio 21",
+        "sql server management studio",
+        "21",
+        "release"
+      ],
+      "path": ""
+    },
+    "mscopilot.exe": {
+      "canonical_name": "Copilot",
+      "aliases": [
+        "copilot",
+        "application"
+      ],
+      "path": ""
+    },
+    "msedge.exe": {
+      "canonical_name": "msedge",
+      "aliases": [
+        "msedge"
+      ],
+      "path": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
+    },
+    "msedgewebview2.exe": {
+      "canonical_name": "Microsoft Edge WebView2 Runtime",
+      "aliases": [
+        "microsoft edge webview2 runtime",
+        "edge webview2 runtime",
+        "runtime",
+        "application"
+      ],
+      "path": ""
+    },
+    "tdmu": {
+      "canonical_name": "TDM-GCC",
+      "aliases": [
+        "tdm gcc",
+        "gcc",
+        "tdm gcc 64"
+      ],
+      "path": ""
+    },
+    "vcredist_x64.exe": {
+      "canonical_name": "Microsoft Visual C++ 2013 Redistributable (x64) - 12.0.40660",
+      "aliases": [
+        "microsoft visual c 2013 redistributable x64 12 0 40660",
+        "microsoft visual c redistributable x64",
+        "visual c 2013 redistributable x64 12 0 40660",
+        "visual c redistributable x64",
+        "40660"
+      ],
+      "path": ""
+    },
+    "windowsdesktop-runtime-6.0.36-win-x64.exe": {
+      "canonical_name": "Microsoft Windows Desktop Runtime - 6.0.36 (x64)",
+      "aliases": [
+        "microsoft windows desktop runtime 6 0 36 x64",
+        "microsoft windows desktop runtime x64",
+        "windows desktop runtime 6 0 36 x64",
+        "windows desktop runtime x64",
+        "x64"
+      ],
+      "path": ""
+    },
+    "ttermpro.exe": {
+      "canonical_name": "Tera Term",
+      "aliases": [
+        "tera term",
+        "term",
+        "ttermpro"
+      ],
+      "path": "C:\\Program Files (x86)\\teraterm5\\ttermpro.exe"
+    },
+    "vc_redist.x86.exe": {
+      "canonical_name": "Microsoft Visual C++ v14 Redistributable (x86) - 14.50.35719",
+      "aliases": [
+        "microsoft visual c v14 redistributable x86 14 50 35719",
+        "microsoft visual c redistributable x86",
+        "visual c v14 redistributable x86 14 50 35719",
+        "visual c redistributable x86",
+        "35719"
+      ],
+      "path": ""
+    },
+    "dotnet-sdk-10.0.203-win-x64.exe": {
+      "canonical_name": "Microsoft .NET SDK 10.0.203 (x64)",
+      "aliases": [
+        "microsoft net sdk 10 0 203 x64",
+        "microsoft net sdk x64",
+        "net sdk 10 0 203 x64",
+        "net sdk x64",
+        "x64"
+      ],
+      "path": ""
+    },
+    "vs14-kb3095681.exe": {
+      "canonical_name": "Update for Microsoft Visual Studio 2015 (KB3095681)",
+      "aliases": [
+        "update for microsoft visual studio 2015 kb3095681",
+        "update for microsoft visual studio kb3095681",
+        "kb3095681"
+      ],
+      "path": ""
+    },
+    "vcredist_x86.exe": {
+      "canonical_name": "Microsoft Visual C++ 2013 Redistributable (x86) - 12.0.21005",
+      "aliases": [
+        "microsoft visual c 2013 redistributable x86 12 0 21005",
+        "microsoft visual c redistributable x86",
+        "visual c 2013 redistributable x86 12 0 21005",
+        "visual c redistributable x86",
+        "21005"
+      ],
+      "path": ""
+    },
+    "pbidesktopsetup_x64.exe": {
+      "canonical_name": "Microsoft PowerBI Desktop (x64)",
+      "aliases": [
+        "microsoft powerbi desktop x64",
+        "powerbi desktop x64",
+        "x64"
+      ],
+      "path": ""
+    },
+    "vc_redist.x64.exe": {
+      "canonical_name": "Microsoft Visual C++ v14 Redistributable (x64) - 14.50.35719",
+      "aliases": [
+        "microsoft visual c v14 redistributable x64 14 50 35719",
+        "microsoft visual c redistributable x64",
+        "visual c v14 redistributable x64 14 50 35719",
+        "visual c redistributable x64",
+        "35719"
+      ],
+      "path": ""
+    },
+    "setup.exe\" -runfromtemp -l0x0009 -removeonly": {
+      "canonical_name": "PL-2303 USB-to-Serial",
+      "aliases": [
+        "pl 2303 usb to serial",
+        "pl usb to serial",
+        "serial"
+      ],
+      "path": ""
+    },
+    "windowsdesktop-runtime-6.0.36-win-x86.exe": {
+      "canonical_name": "Microsoft Windows Desktop Runtime - 6.0.36 (x86)",
+      "aliases": [
+        "microsoft windows desktop runtime 6 0 36 x86",
+        "microsoft windows desktop runtime x86",
+        "windows desktop runtime 6 0 36 x86",
+        "windows desktop runtime x86",
+        "x86"
+      ],
+      "path": ""
+    },
+    "windowsdesktop-runtime-8.0.26-win-x64.exe": {
+      "canonical_name": "Microsoft Windows Desktop Runtime - 8.0.26 (x64)",
+      "aliases": [
+        "microsoft windows desktop runtime 8 0 26 x64",
+        "microsoft windows desktop runtime x64",
+        "windows desktop runtime 8 0 26 x64",
+        "windows desktop runtime x64",
+        "x64"
+      ],
+      "path": ""
+    },
+    "vs_isoshell.exe": {
+      "canonical_name": "Microsoft Visual Studio 2015 Shell (Isolated)",
+      "aliases": [
+        "microsoft visual studio 2015 shell isolated",
+        "microsoft visual studio shell isolated",
+        "visual studio 2015 shell isolated",
+        "visual studio shell isolated",
+        "isolated"
+      ],
+      "path": ""
+    },
+    "as-installer-7.0.2594-full.exe": {
+      "canonical_name": "Microchip Studio",
+      "aliases": [
+        "microchip studio",
+        "studio"
+      ],
+      "path": ""
+    },
+    "aspnetcoresharedframeworkbundle-x64.exe": {
+      "canonical_name": "Microsoft ASP.NET Core 8.0.26 - Shared Framework (x64)",
+      "aliases": [
+        "microsoft asp net core 8 0 26 shared framework x64",
+        "microsoft asp net core shared framework x64",
+        "asp net core 8 0 26 shared framework x64",
+        "asp net core shared framework x64",
+        "x64"
+      ],
+      "path": ""
+    },
+    "canva.exe": {
+      "canonical_name": "Canva",
+      "aliases": [
+        "canva"
+      ],
+      "path": "C:\\Users\\abdel\\AppData\\Local\\Programs\\Canva\\Canva.exe"
+    },
+    "update.exe": {
+      "canonical_name": "Discord",
+      "aliases": [
+        "discord"
+      ],
+      "path": "C:\\Users\\abdel\\AppData\\Local\\Discord\\Update.exe"
+    },
+    "utorrent.exe": {
+      "canonical_name": "µTorrent",
+      "aliases": [
+        "µtorrent",
+        "utorrent"
+      ],
+      "path": ""
+    },
+    "zoom.exe": {
+      "canonical_name": "Zoom Workplace",
+      "aliases": [
+        "zoom workplace",
+        "workplace",
+        "bin"
+      ],
+      "path": "C:\\Users\\abdel\\AppData\\Roaming\\Zoom\\bin\\Zoom.exe"
+    },
+    "python-3.13.5-amd64.exe": {
+      "canonical_name": "Python 3.13.5 (64-bit)",
+      "aliases": [
+        "python 3 13 5 64 bit",
+        "python bit",
+        "bit"
+      ],
+      "path": ""
+    },
+    "unins000.exe": {
+      "canonical_name": "Uninstall Tera Term",
+      "aliases": [
+        "uninstall tera term",
+        "term",
+        "unins000"
+      ],
+      "path": "C:\\Program Files (x86)\\teraterm5\\unins000.exe"
+    },
+    "code.exe": {
+      "canonical_name": "code",
+      "aliases": [
+        "code"
+      ],
+      "path": "C:\\Users\\abdel\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe"
+    },
+    "python-3.14.3-amd64.exe": {
+      "canonical_name": "Python 3.14.3 (64-bit)",
+      "aliases": [
+        "python 3 14 3 64 bit",
+        "python bit",
+        "bit"
+      ],
+      "path": ""
+    },
+    "msaccess.exe": {
+      "canonical_name": "MSACCESS",
+      "aliases": [
+        "msaccess"
+      ],
+      "path": "C:\\Program Files\\Microsoft Office\\Root\\Office16\\MSACCESS.EXE"
+    },
+    "acrobat.exe": {
+      "canonical_name": "Acrobat",
+      "aliases": [
+        "acrobat"
+      ],
+      "path": "C:\\Program Files\\Adobe\\Acrobat DC\\Acrobat\\Acrobat.exe"
+    },
+    "excel.exe": {
+      "canonical_name": "excel",
+      "aliases": [
+        "excel"
+      ],
+      "path": "C:\\Program Files\\Microsoft Office\\Root\\Office16\\EXCEL.EXE"
+    },
+    "private_browsing.exe": {
+      "canonical_name": "Firefox Private Browsing",
+      "aliases": [
+        "firefox private browsing",
+        "browsing",
+        "private_browsing"
+      ],
+      "path": "C:\\Program Files\\Mozilla Firefox\\private_browsing.exe"
+    },
+    "onedrive.exe": {
+      "canonical_name": "OneDrive",
+      "aliases": [
+        "onedrive"
+      ],
+      "path": "C:\\Program Files\\Microsoft OneDrive\\OneDrive.exe"
+    },
+    "onenote.exe": {
+      "canonical_name": "OneNote",
+      "aliases": [
+        "onenote"
+      ],
+      "path": "C:\\Program Files\\Microsoft Office\\Root\\Office16\\ONENOTE.EXE"
+    },
+    "outlook.exe": {
+      "canonical_name": "OUTLOOK",
+      "aliases": [
+        "outlook"
+      ],
+      "path": "C:\\Program Files\\Microsoft Office\\Root\\Office16\\OUTLOOK.EXE"
+    },
+    "powerpnt.exe": {
+      "canonical_name": "powerpnt",
+      "aliases": [
+        "powerpnt"
+      ],
+      "path": "C:\\Program Files\\Microsoft Office\\Root\\Office16\\POWERPNT.EXE"
+    },
+    "winword.exe": {
+      "canonical_name": "Winword",
+      "aliases": [
+        "winword"
+      ],
+      "path": "C:\\Program Files\\Microsoft Office\\Root\\Office16\\WINWORD.EXE"
+    },
+    "psr.exe": {
+      "canonical_name": "Steps Recorder",
+      "aliases": [
+        "steps recorder",
+        "recorder",
+        "psr"
+      ],
+      "path": "C:\\WINDOWS\\system32\\psr.exe"
+    },
+    "wmplayer.exe": {
+      "canonical_name": "wmplayer",
+      "aliases": [
+        "wmplayer"
+      ],
+      "path": ""
+    },
+    "dfrgui.exe": {
+      "canonical_name": "dfrgui",
+      "aliases": [
+        "dfrgui"
+      ],
+      "path": "C:\\WINDOWS\\system32\\dfrgui.exe"
+    },
+    "cleanmgr.exe": {
+      "canonical_name": "Disk Cleanup",
+      "aliases": [
+        "disk cleanup",
+        "cleanup",
+        "cleanmgr"
+      ],
+      "path": "C:\\WINDOWS\\system32\\cleanmgr.exe"
+    },
+    "iscsicpl.exe": {
+      "canonical_name": "iSCSI Initiator",
+      "aliases": [
+        "iscsi initiator",
+        "initiator",
+        "iscsicpl"
+      ],
+      "path": "C:\\WINDOWS\\system32\\iscsicpl.exe"
+    },
+    "mdsched.exe": {
+      "canonical_name": "Memory Diagnostics Tool",
+      "aliases": [
+        "memory diagnostics tool",
+        "tool",
+        "mdsched"
+      ],
+      "path": "C:\\WINDOWS\\system32\\MdSched.exe"
+    },
+    "odbcad32.exe": {
+      "canonical_name": "ODBC Data Sources (64-bit)",
+      "aliases": [
+        "odbc data sources 64 bit",
+        "odbc data sources bit",
+        "bit",
+        "odbcad32"
+      ],
+      "path": "C:\\WINDOWS\\system32\\odbcad32.exe"
+    },
+    "recoverydrive.exe": {
+      "canonical_name": "RecoveryDrive",
+      "aliases": [
+        "recoverydrive"
+      ],
+      "path": "C:\\WINDOWS\\system32\\RecoveryDrive.exe"
+    },
+    "regedit.exe": {
+      "canonical_name": "Registry Editor",
+      "aliases": [
+        "registry editor",
+        "editor",
+        "regedit"
+      ],
+      "path": "C:\\WINDOWS\\regedit.exe"
+    },
+    "perfmon.exe": {
+      "canonical_name": "Resource Monitor",
+      "aliases": [
+        "resource monitor",
+        "monitor",
+        "perfmon"
+      ],
+      "path": "C:\\WINDOWS\\system32\\perfmon.exe"
+    },
+    "msconfig.exe": {
+      "canonical_name": "System Configuration",
+      "aliases": [
+        "system configuration",
+        "configuration",
+        "msconfig"
+      ],
+      "path": "C:\\WINDOWS\\system32\\msconfig.exe"
+    },
+    "msinfo32.exe": {
+      "canonical_name": "System Information",
+      "aliases": [
+        "system information",
+        "information",
+        "msinfo32"
+      ],
+      "path": "C:\\WINDOWS\\system32\\msinfo32.exe"
+    },
+    "powershell.exe": {
+      "canonical_name": "PowerShell",
+      "aliases": [
+        "powershell"
+      ],
+      "path": ""
+    },
+    "cmd.exe": {
+      "canonical_name": "Developer Command Prompt for VS",
+      "aliases": [
+        "developer command prompt for vs",
+        "vs",
+        "cmd"
+      ],
+      "path": "C:\\Windows\\System32\\cmd.exe"
+    },
+    "netbeans64.exe": {
+      "canonical_name": "Apache NetBeans IDE 23",
+      "aliases": [
+        "apache netbeans ide 23",
+        "apache netbeans ide",
+        "23",
+        "netbeans64"
+      ],
+      "path": "C:\\Program Files\\NetBeans-23\\netbeans\\bin\\netbeans64.exe"
+    },
+    "acsignapply.exe": {
+      "canonical_name": "Attach Digital Signatures",
+      "aliases": [
+        "attach digital signatures",
+        "signatures",
+        "acsignapply"
+      ],
+      "path": "C:\\Program Files\\Autodesk\\AutoCAD 2026\\AcSignApply.exe"
+    },
+    "acad.exe": {
+      "canonical_name": "AutoCAD 2026 - English",
+      "aliases": [
+        "autocad 2026 english",
+        "autocad english",
+        "english",
+        "acad"
+      ],
+      "path": "C:\\Program Files\\Autodesk\\AutoCAD 2026\\acad.exe"
+    },
+    "dwgcheckstandards.exe": {
+      "canonical_name": "Batch Standards Checker",
+      "aliases": [
+        "batch standards checker",
+        "checker",
+        "dwgcheckstandards"
+      ],
+      "path": "C:\\Program Files\\Autodesk\\AutoCAD 2026\\DwgCheckStandards.exe"
+    },
+    "adrefman.exe": {
+      "canonical_name": "Reference Manager",
+      "aliases": [
+        "reference manager",
+        "manager",
+        "adrefman"
+      ],
+      "path": "C:\\Program Files\\Autodesk\\AutoCAD 2026\\AdRefMan.exe"
+    },
+    "admigrator.exe": {
+      "canonical_name": "Migrate From a Previous Release",
+      "aliases": [
+        "migrate from a previous release",
+        "release",
+        "admigrator"
+      ],
+      "path": "C:\\Program Files\\Autodesk\\AutoCAD 2026\\AdMigrator.exe"
+    },
+    "git-bash.exe": {
+      "canonical_name": "Git Bash",
+      "aliases": [
+        "git bash",
+        "bash"
+      ],
+      "path": "C:\\Program Files\\Git\\git-bash.exe"
+    },
+    "git-cmd.exe": {
+      "canonical_name": "Git CMD",
+      "aliases": [
+        "git cmd",
+        "cmd"
+      ],
+      "path": "C:\\Program Files\\Git\\git-cmd.exe"
+    },
+    "git-gui.exe": {
+      "canonical_name": "Git GUI",
+      "aliases": [
+        "git gui",
+        "gui"
+      ],
+      "path": "C:\\Program Files\\Git\\cmd\\git-gui.exe"
+    },
+    "studiocommandprompt.exe": {
+      "canonical_name": "Microchip Studio Command Prompt",
+      "aliases": [
+        "microchip studio command prompt",
+        "prompt",
+        "studiocommandprompt"
+      ],
+      "path": "C:\\Program Files (x86)\\Atmel\\Studio\\7.0\\Extensions\\Application\\StudioCommandPrompt.exe"
+    },
+    "atmelstudio.exe": {
+      "canonical_name": "atmelstudio",
+      "aliases": [
+        "atmelstudio"
+      ],
+      "path": "C:\\Program Files (x86)\\Atmel\\Studio\\7.0\\atmelstudio.exe"
+    },
+    "appvlp.exe": {
+      "canonical_name": "Spreadsheet Compare",
+      "aliases": [
+        "spreadsheet compare",
+        "compare",
+        "appvlp"
+      ],
+      "path": "C:\\Program Files\\Microsoft Office\\root\\Client\\AppVLP.exe"
+    },
+    "setlang.exe": {
+      "canonical_name": "Office Language Preferences",
+      "aliases": [
+        "office language preferences",
+        "preferences",
+        "setlang"
+      ],
+      "path": "C:\\Program Files\\Microsoft Office\\root\\Office16\\SETLANG.EXE"
+    },
+    "pbidesktop.exe": {
+      "canonical_name": "Power BI Desktop",
+      "aliases": [
+        "power bi desktop",
+        "desktop",
+        "pbidesktop"
+      ],
+      "path": "C:\\Program Files\\Microsoft Power BI Desktop\\bin\\PBIDesktop.exe"
+    },
+    "dtswizard.exe": {
+      "canonical_name": "SQL Server 2019 Import and Export Data (64-bit)",
+      "aliases": [
+        "sql server 2019 import and export data 64 bit",
+        "sql server import and export data bit",
+        "bit",
+        "dtswizard"
+      ],
+      "path": "C:\\Program Files\\Microsoft SQL Server\\150\\DTS\\Binn\\DTSWizard.exe"
+    },
+    "node.exe": {
+      "canonical_name": "Node.js",
+      "aliases": [
+        "node js",
+        "js",
+        "node"
+      ],
+      "path": "C:\\Program Files\\nodejs\\node.exe"
+    },
+    "licence.exe": {
+      "canonical_name": "Licence Manager",
+      "aliases": [
+        "licence manager",
+        "manager",
+        "licence"
+      ],
+      "path": "C:\\Program Files (x86)\\Labcenter Electronics\\Proteus 8 Professional\\BIN\\LICENCE.EXE"
+    },
+    "pds.exe": {
+      "canonical_name": "Proteus 8 Professional",
+      "aliases": [
+        "proteus 8 professional",
+        "proteus professional",
+        "professional",
+        "pds"
+      ],
+      "path": "C:\\Program Files (x86)\\Labcenter Electronics\\Proteus 8 Professional\\BIN\\PDS.EXE"
+    },
+    "pythonw.exe": {
+      "canonical_name": "IDLE (Python 3.14 64-bit)",
+      "aliases": [
+        "idle python 3 14 64 bit",
+        "idle python bit",
+        "bit",
+        "pythonw"
+      ],
+      "path": "C:\\Python314\\pythonw.exe"
+    },
+    "python.exe": {
+      "canonical_name": "Python 3.14 Module Docs (64-bit)",
+      "aliases": [
+        "python 3 14 module docs 64 bit",
+        "python module docs bit",
+        "bit",
+        "python"
+      ],
+      "path": "C:\\Python314\\python.exe"
+    },
+    "taskmgr.exe": {
+      "canonical_name": "Task Manager",
+      "aliases": [
+        "task manager",
+        "manager",
+        "taskmgr"
+      ],
+      "path": "C:\\WINDOWS\\system32\\taskmgr.exe"
+    },
+    "tdm64-gcc-10.3.0-2.exe": {
+      "canonical_name": "Modify or Remove MinGW",
+      "aliases": [
+        "modify or remove mingw",
+        "mingw",
+        "tdm64 gcc 10 3 0 2"
+      ],
+      "path": "C:\\TDM-GCC-64\\__installer\\tdm64-gcc-10.3.0-2.exe"
+    },
+    "cyglaunch.exe": {
+      "canonical_name": "cyglaunch",
+      "aliases": [
+        "cyglaunch"
+      ],
+      "path": "C:\\Program Files (x86)\\teraterm5\\cyglaunch.exe"
+    },
+    "vmnetcfg.exe": {
+      "canonical_name": "Virtual Network Editor",
+      "aliases": [
+        "virtual network editor",
+        "editor",
+        "vmnetcfg"
+      ],
+      "path": "C:\\Program Files (x86)\\VMware\\VMware Workstation\\vmnetcfg.exe"
+    },
+    "vmplayer.exe": {
+      "canonical_name": "vmplayer",
+      "aliases": [
+        "vmplayer"
+      ],
+      "path": "C:\\Program Files (x86)\\VMware\\VMware Workstation\\vmplayer.exe"
+    },
+    "powershell_ise.exe": {
+      "canonical_name": "Windows PowerShell ISE",
+      "aliases": [
+        "windows powershell ise",
+        "ise",
+        "powershell_ise"
+      ],
+      "path": "C:\\WINDOWS\\system32\\WindowsPowerShell\\v1.0\\PowerShell_ISE.exe"
+    },
+    "winrar.exe": {
+      "canonical_name": "WinRAR",
+      "aliases": [
+        "winrar"
+      ],
+      "path": "C:\\Program Files\\WinRAR\\WinRAR.exe"
+    },
+    "gpuview.exe": {
+      "canonical_name": "GPUView",
+      "aliases": [
+        "gpuview"
+      ],
+      "path": "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\gpuview\\GPUView.exe"
+    },
+    "wpa.exe": {
+      "canonical_name": "Windows Performance Analyzer",
+      "aliases": [
+        "windows performance analyzer",
+        "analyzer",
+        "wpa"
+      ],
+      "path": "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\wpa.exe"
+    },
+    "wprui.exe": {
+      "canonical_name": "Windows Performance Recorder",
+      "aliases": [
+        "windows performance recorder",
+        "recorder",
+        "wprui"
+      ],
+      "path": "C:\\Program Files (x86)\\Windows Kits\\10\\Windows Performance Toolkit\\WPRUI.exe"
+    },
+    "dpinst-amd64.exe": {
+      "canonical_name": "Install drivers for Arduino (x64)",
+      "aliases": [
+        "install drivers for arduino x64",
+        "x64",
+        "dpinst amd64"
+      ],
+      "path": "C:\\Program Files (x86)\\Labcenter Electronics\\Proteus 8 Professional\\Tools\\ARDUINO\\drivers\\dpinst-amd64.exe"
+    },
+    "dpinst-x86.exe": {
+      "canonical_name": "Install drivers for Arduino",
+      "aliases": [
+        "install drivers for arduino",
+        "arduino",
+        "dpinst x86"
+      ],
+      "path": "C:\\Program Files (x86)\\Labcenter Electronics\\Proteus 8 Professional\\Tools\\ARDUINO\\drivers\\dpinst-x86.exe"
+    },
+    "virtualnetworkdriver.exe": {
+      "canonical_name": "Install or Uninstall virtual network driver",
+      "aliases": [
+        "install or uninstall virtual network driver",
+        "driver",
+        "virtualnetworkdriver"
+      ],
+      "path": "C:\\Program Files (x86)\\Labcenter Electronics\\Proteus 8 Professional\\DRIVERS\\VirtualNetworkDriver.exe"
+    },
+    "dtashell.exe": {
+      "canonical_name": "Database Engine Tuning Advisor 21",
+      "aliases": [
+        "database engine tuning advisor 21",
+        "database engine tuning advisor",
+        "21",
+        "dtashell"
+      ],
+      "path": "C:\\Program Files\\Microsoft SQL Server Management Studio 21\\Release\\Common7\\DTASHELL.exe"
+    },
+    "profiler.exe": {
+      "canonical_name": "SQL Server Profiler 21",
+      "aliases": [
+        "sql server profiler 21",
+        "sql server profiler",
+        "21",
+        "profiler"
+      ],
+      "path": "C:\\Program Files\\Microsoft SQL Server Management Studio 21\\Release\\Common7\\PROFILER.exe"
+    },
+    "sqlwtsn.exe": {
+      "canonical_name": "SQL Server 2019 Error and Usage Reporting",
+      "aliases": [
+        "sql server 2019 error and usage reporting",
+        "sql server error and usage reporting",
+        "reporting",
+        "sqlwtsn"
+      ],
+      "path": "C:\\Program Files\\Microsoft SQL Server\\150\\Shared\\SqlWtsn.exe"
+    },
+    "landingpage.exe": {
+      "canonical_name": "SQL Server 2019 Installation Center (64-bit)",
+      "aliases": [
+        "sql server 2019 installation center 64 bit",
+        "sql server installation center bit",
+        "bit",
+        "landingpage"
+      ],
+      "path": "C:\\Program Files\\Microsoft SQL Server\\150\\Setup Bootstrap\\SQL2019\\x64\\LandingPage.exe"
+    },
+    "uninstall-xc8-v2.36.exe": {
+      "canonical_name": "Uninstall MPLAB XC8 C Compiler",
+      "aliases": [
+        "uninstall mplab xc8 c compiler",
+        "compiler",
+        "uninstall xc8 v2 36"
+      ],
+      "path": "C:\\Program Files\\Microchip\\xc8\\v2.36\\Uninstall-xc8-v2.36.exe"
+    },
+    "help.exe": {
+      "canonical_name": "HP LaserJet Guide",
+      "aliases": [
+        "hp laserjet guide",
+        "guide",
+        "help"
+      ],
+      "path": "C:\\Program Files\\HP\\HP LaserJet M1210 MFP Series\\T3_help\\Help.exe"
+    },
+    "hppscan0.exe": {
+      "canonical_name": "Scan To",
+      "aliases": [
+        "scan to",
+        "to",
+        "hppscan0"
+      ],
+      "path": "C:\\Program Files\\HP\\HP LaserJet M1210 MFP Series\\Scan To\\hppscan0.exe"
+    },
+    "charmap.exe": {
+      "canonical_name": "Character Map",
+      "aliases": [
+        "character map",
+        "map",
+        "charmap"
+      ],
+      "path": "C:\\WINDOWS\\system32\\charmap.exe"
+    },
+    "acrobatinfo.exe": {
+      "canonical_name": "AcrobatInfo",
+      "aliases": [
+        "acrobatinfo"
+      ],
+      "path": "C:\\Program Files\\Adobe\\Acrobat DC\\Acrobat\\AcrobatInfo.exe"
+    },
+    "cmmgr32.exe": {
+      "canonical_name": "cmmgr32",
+      "aliases": [
+        "cmmgr32"
+      ],
+      "path": ""
+    },
+    "fsquirt.exe": {
+      "canonical_name": "fsquirt",
+      "aliases": [
+        "fsquirt"
+      ],
+      "path": ""
+    },
+    "iediagcmd.exe": {
+      "canonical_name": "IEDIAGCMD",
+      "aliases": [
+        "iediagcmd"
+      ],
+      "path": "C:\\Program Files\\Internet Explorer\\IEDIAGCMD.EXE"
+    },
+    "iexplore.exe": {
+      "canonical_name": "IEXPLORE",
+      "aliases": [
+        "iexplore"
+      ],
+      "path": "C:\\Program Files\\Internet Explorer\\IEXPLORE.EXE"
+    },
+    "install.exe": {
+      "canonical_name": "install",
+      "aliases": [
+        "install"
+      ],
+      "path": ""
+    },
+    "licensemanagershellext.exe": {
+      "canonical_name": "licensemanagershellext",
+      "aliases": [
+        "licensemanagershellext"
+      ],
+      "path": ""
+    },
+    "mplayer2.exe": {
+      "canonical_name": "mplayer2",
+      "aliases": [
+        "mplayer2"
+      ],
+      "path": ""
+    },
+    "msoadfsb.exe": {
+      "canonical_name": "msoadfsb",
+      "aliases": [
+        "msoadfsb"
+      ],
+      "path": "C:\\Program Files\\Microsoft Office\\Root\\Office16\\msoadfsb.exe"
+    },
+    "msoasb.exe": {
+      "canonical_name": "msoasb",
+      "aliases": [
+        "msoasb"
+      ],
+      "path": "C:\\Program Files\\Microsoft Office\\Root\\Office16\\msoasb.exe"
+    },
+    "msohtmed.exe": {
+      "canonical_name": "MsoHtmEd",
+      "aliases": [
+        "msohtmed"
+      ],
+      "path": ""
+    },
+    "msoxmled.exe": {
+      "canonical_name": "msoxmled",
+      "aliases": [
+        "msoxmled"
+      ],
+      "path": "C:\\Program Files\\Microsoft Office\\Root\\VFS\\ProgramFilesCommonX64\\Microsoft Shared\\OFFICE16\\MSOXMLED.EXE"
+    },
+    "onedrivefilelauncher.exe": {
+      "canonical_name": "OneDriveFileLauncher",
+      "aliases": [
+        "onedrivefilelauncher"
+      ],
+      "path": ""
+    },
+    "pl-2303 gps driver installer.exe": {
+      "canonical_name": "PL-2303 GPS Driver Installer",
+      "aliases": [
+        "pl 2303 gps driver installer",
+        "pl gps driver installer",
+        "installer"
+      ],
+      "path": "C:\\Program Files (x86)\\Prolific Technology INC\\PL-2303 USB-to-Serial\\PL-2303 GPS Driver Installer.exe"
+    },
+    "sdxhelper.exe": {
+      "canonical_name": "sdxhelper",
+      "aliases": [
+        "sdxhelper"
+      ],
+      "path": "C:\\Program Files\\Microsoft Office\\Root\\Office16\\SDXHelper.exe"
+    },
+    "skypeserver.exe": {
+      "canonical_name": "SKYPESERVER",
+      "aliases": [
+        "skypeserver"
+      ],
+      "path": "C:\\Program Files\\Microsoft Office\\Root\\Office16\\SkypeSrv\\SKYPESERVER.EXE"
+    },
+    "table30.exe": {
+      "canonical_name": "table30",
+      "aliases": [
+        "table30"
+      ],
+      "path": ""
+    },
+    "tabtip.exe": {
+      "canonical_name": "TabTip",
+      "aliases": [
+        "tabtip"
+      ],
+      "path": ""
+    },
+    "tunecable spotify downloader.exe": {
+      "canonical_name": "TuneCable Spotify Downloader",
+      "aliases": [
+        "tunecable spotify downloader",
+        "downloader"
+      ],
+      "path": ""
+    },
+    "wab.exe": {
+      "canonical_name": "wab",
+      "aliases": [
+        "wab"
+      ],
+      "path": ""
+    },
+    "wabmig.exe": {
+      "canonical_name": "wabmig",
+      "aliases": [
+        "wabmig"
+      ],
+      "path": ""
+    },
+    "c \"start lenovo-companion:param?featureid=a191bf9f-60be-4843-b4ba-441dd0aeb12e&page=terms": {
+      "canonical_name": "warrantyviewer",
+      "aliases": [
+        "warrantyviewer",
+        "c start lenovo companion param featureid a191bf9f 60be 4843 b4ba 441dd0aeb12e page terms"
+      ],
+      "path": ""
+    },
+    "gethelp.exe": {
+      "canonical_name": "GetHelp",
+      "aliases": [
+        "gethelp"
+      ],
+      "path": "C:\\Program Files\\WindowsApps\\Microsoft.GetHelp_10.2409.41132.0_x64__8wekyb3d8bbwe\\GetHelp.exe"
+    },
+    "itunes.exe": {
+      "canonical_name": "iTunes",
+      "aliases": [
+        "itunes"
+      ],
+      "path": "C:\\Program Files\\WindowsApps\\AppleInc.iTunes_12139.10003.61011.0_x64__nzyj5cx40ttqa\\iTunes.exe"
+    },
+    "ms-teams.exe": {
+      "canonical_name": "ms-teams",
+      "aliases": [
+        "ms teams",
+        "teams"
+      ],
+      "path": "C:\\Program Files\\WindowsApps\\MSTeams_26093.415.4620.1935_x64__8wekyb3d8bbwe\\ms-teams.exe"
+    },
+    "ms-teamsupdate.exe": {
+      "canonical_name": "ms-teamsupdate",
+      "aliases": [
+        "ms teamsupdate",
+        "teamsupdate"
+      ],
+      "path": "C:\\Program Files\\WindowsApps\\MSTeams_26093.415.4620.1935_x64__8wekyb3d8bbwe\\ms-teamsupdate.exe"
+    },
+    "mspaint.exe": {
+      "canonical_name": "mspaint",
+      "aliases": [
+        "mspaint"
+      ],
+      "path": "C:\\Program Files\\WindowsApps\\Microsoft.Paint_11.2601.441.0_x64__8wekyb3d8bbwe\\PaintApp\\mspaint.exe"
+    },
+    "notepad.exe": {
+      "canonical_name": "notepad",
+      "aliases": [
+        "notepad"
+      ],
+      "path": "C:\\Program Files\\WindowsApps\\Microsoft.WindowsNotepad_11.2512.29.0_x64__8wekyb3d8bbwe\\Notepad\\Notepad.exe"
+    },
+    "olk.exe": {
+      "canonical_name": "olk",
+      "aliases": [
+        "olk"
+      ],
+      "path": "C:\\Program Files\\WindowsApps\\Microsoft.OutlookForWindows_1.2026.120.300_x64__8wekyb3d8bbwe\\olk.exe"
+    },
+    "snippingtool.exe": {
+      "canonical_name": "SnippingTool",
+      "aliases": [
+        "snippingtool"
+      ],
+      "path": "C:\\Program Files\\WindowsApps\\Microsoft.ScreenSketch_11.2602.47.0_x64__8wekyb3d8bbwe\\SnippingTool\\SnippingTool.exe"
+    },
+    "store.exe": {
+      "canonical_name": "store",
+      "aliases": [
+        "store"
+      ],
+      "path": "C:\\Program Files\\WindowsApps\\Microsoft.WindowsStore_22603.1401.15.0_x64__8wekyb3d8bbwe\\store.exe"
+    },
+    "windowspackagemanagerserver.exe": {
+      "canonical_name": "WindowsPackageManagerServer",
+      "aliases": [
+        "windowspackagemanagerserver"
+      ],
+      "path": "C:\\Program Files\\WindowsApps\\Microsoft.DesktopAppInstaller_1.28.240.0_x64__8wekyb3d8bbwe\\WindowsPackageManagerServer.exe"
+    },
+    "winget.exe": {
+      "canonical_name": "winget",
+      "aliases": [
+        "winget"
+      ],
+      "path": "C:\\Program Files\\WindowsApps\\Microsoft.DesktopAppInstaller_1.28.240.0_x64__8wekyb3d8bbwe\\winget.exe"
+    },
+    "wt.exe": {
+      "canonical_name": "wt",
+      "aliases": [
+        "wt"
+      ],
+      "path": "C:\\Program Files\\WindowsApps\\Microsoft.WindowsTerminal_1.24.10921.0_x64__8wekyb3d8bbwe\\wt.exe"
+    },
+    "windowscalculator.uwp": {
+      "canonical_name": "Calculator",
+      "aliases": [
+        "calculator",
+        "windowscalculator"
+      ],
+      "path": "shell:AppsFolder\\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"
+    },
+    "windowscamera.uwp": {
+      "canonical_name": "Camera",
+      "aliases": [
+        "camera",
+        "windowscamera"
+      ],
+      "path": "shell:AppsFolder\\Microsoft.WindowsCamera_8wekyb3d8bbwe!App"
+    },
+    "claude.uwp": {
+      "canonical_name": "Claude",
+      "aliases": [
+        "claude"
+      ],
+      "path": "shell:AppsFolder\\Claude_pzs8sxrjxfjjc!Claude"
+    },
+    "coreai.uwp": {
+      "canonical_name": "Click to Do",
+      "aliases": [
+        "click to do",
+        "do",
+        "coreai"
+      ],
+      "path": "shell:AppsFolder\\MicrosoftWindows.Client.CoreAI_cw5n1h2txyewy!ClickToDoApp"
+    },
+    "windowsalarms.uwp": {
+      "canonical_name": "Clock",
+      "aliases": [
+        "clock",
+        "windowsalarms"
+      ],
+      "path": "shell:AppsFolder\\Microsoft.WindowsAlarms_8wekyb3d8bbwe!App"
+    },
+    "copilot.uwp": {
+      "canonical_name": "Copilot",
+      "aliases": [
+        "copilot"
+      ],
+      "path": "shell:AppsFolder\\Microsoft.Copilot_8wekyb3d8bbwe!App"
+    },
+    "dolbyaccess.uwp": {
+      "canonical_name": "Dolby Access",
+      "aliases": [
+        "dolby access",
+        "access",
+        "dolbyaccess"
+      ],
+      "path": "shell:AppsFolder\\DolbyLaboratories.DolbyAccess_rz1tebttyb220!App"
+    },
+    "xboxgamingoverlay.uwp": {
+      "canonical_name": "Game Bar",
+      "aliases": [
+        "game bar",
+        "bar",
+        "xboxgamingoverlay"
+      ],
+      "path": "shell:AppsFolder\\Microsoft.XboxGamingOverlay_8wekyb3d8bbwe!App"
+    },
+    "gethelp.uwp": {
+      "canonical_name": "Get Help",
+      "aliases": [
+        "get help",
+        "help",
+        "gethelp"
+      ],
+      "path": "shell:AppsFolder\\Microsoft.GetHelp_8wekyb3d8bbwe!App"
+    },
+    "cbs.uwp": {
+      "canonical_name": "Windows Backup",
+      "aliases": [
+        "windows backup",
+        "backup",
+        "cbs"
+      ],
+      "path": "shell:AppsFolder\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy!WindowsBackup"
+    },
+    "intelgraphicsexperience.uwp": {
+      "canonical_name": "Intelr Graphics Command Center",
+      "aliases": [
+        "intelr graphics command center",
+        "center",
+        "intelgraphicsexperience"
+      ],
+      "path": "shell:AppsFolder\\AppUp.IntelGraphicsExperience_8j3eq9eme6ctt!App"
+    },
+    "intelarcsoftware.uwp": {
+      "canonical_name": "Intelr Graphics Software",
+      "aliases": [
+        "intelr graphics software",
+        "software",
+        "intelarcsoftware"
+      ],
+      "path": "shell:AppsFolder\\AppUp.IntelArcSoftware_8j3eq9eme6ctt!INTELGRAPHICSSOFTWARE"
+    },
+    "itunes.uwp": {
+      "canonical_name": "iTunes",
+      "aliases": [
+        "itunes"
+      ],
+      "path": "shell:AppsFolder\\AppleInc.iTunes_nzyj5cx40ttqa!iTunes"
+    },
+    "lenovoutility.uwp": {
+      "canonical_name": "Lenovo Hotkeys",
+      "aliases": [
+        "lenovo hotkeys",
+        "hotkeys",
+        "lenovoutility"
+      ],
+      "path": "shell:AppsFolder\\E0469640.LenovoUtility_5grkq8ppsgwt4!LenovoUtility"
+    },
+    "smartappearance.uwp": {
+      "canonical_name": "Lenovo Smart Appearance",
+      "aliases": [
+        "lenovo smart appearance",
+        "appearance",
+        "smartappearance"
+      ],
+      "path": "shell:AppsFolder\\E0469640.SmartAppearance_5grkq8ppsgwt4!App"
+    },
+    "lenovocompanion.uwp": {
+      "canonical_name": "Lenovo Vantage",
+      "aliases": [
+        "lenovo vantage",
+        "vantage",
+        "lenovocompanion"
+      ],
+      "path": "shell:AppsFolder\\E046963F.LenovoCompanion_k1h2ywk1493x8!App"
+    },
+    "zunemusic.uwp": {
+      "canonical_name": "Media Player",
+      "aliases": [
+        "media player",
+        "player",
+        "zunemusic"
+      ],
+      "path": "shell:AppsFolder\\Microsoft.ZuneMusic_8wekyb3d8bbwe!Microsoft.ZuneMusic"
+    },
+    "microsoftofficehub.uwp": {
+      "canonical_name": "Microsoft 365 Copilot",
+      "aliases": [
+        "microsoft 365 copilot",
+        "microsoft copilot",
+        "365 copilot",
+        "copilot",
+        "microsoftofficehub"
+      ],
+      "path": "shell:AppsFolder\\Microsoft.MicrosoftOfficeHub_8wekyb3d8bbwe!Microsoft.MicrosoftOfficeHub"
+    },
+    "clipchamp.uwp": {
+      "canonical_name": "Microsoft Clipchamp",
+      "aliases": [
+        "microsoft clipchamp",
+        "clipchamp"
+      ],
+      "path": "shell:AppsFolder\\Clipchamp.Clipchamp_yxz26nhyzhsrt!App"
+    },
+    "windowsstore.uwp": {
+      "canonical_name": "Microsoft Store",
+      "aliases": [
+        "microsoft store",
+        "store",
+        "windowsstore"
+      ],
+      "path": "shell:AppsFolder\\Microsoft.WindowsStore_8wekyb3d8bbwe!App"
+    },
+    "msteams.uwp": {
+      "canonical_name": "Microsoft Teams",
+      "aliases": [
+        "microsoft teams",
+        "teams",
+        "msteams"
+      ],
+      "path": "shell:AppsFolder\\MSTeams_8wekyb3d8bbwe!MSTeams"
+    },
+    "windowsnotepad.uwp": {
+      "canonical_name": "Notepad",
+      "aliases": [
+        "notepad",
+        "windowsnotepad"
+      ],
+      "path": "shell:AppsFolder\\Microsoft.WindowsNotepad_8wekyb3d8bbwe!App"
+    },
+    "readernotificationclient.uwp": {
+      "canonical_name": "Notification Manager for Acrobat Reader",
+      "aliases": [
+        "notification manager for acrobat reader",
+        "reader",
+        "readernotificationclient"
+      ],
+      "path": "shell:AppsFolder\\ReaderNotificationClient_e1rzdqpraam7r!App"
+    },
+    "outlookforwindows.uwp": {
+      "canonical_name": "Outlook",
+      "aliases": [
+        "outlook",
+        "outlookforwindows"
+      ],
+      "path": "shell:AppsFolder\\Microsoft.OutlookForWindows_8wekyb3d8bbwe!Microsoft.OutlookforWindows"
+    },
+    "paint.uwp": {
+      "canonical_name": "Paint",
+      "aliases": [
+        "paint"
+      ],
+      "path": "shell:AppsFolder\\Microsoft.Paint_8wekyb3d8bbwe!App"
+    },
+    "yourphone.uwp": {
+      "canonical_name": "Phone Link",
+      "aliases": [
+        "phone link",
+        "link",
+        "yourphone"
+      ],
+      "path": "shell:AppsFolder\\Microsoft.YourPhone_8wekyb3d8bbwe!App"
+    },
+    "photos.uwp": {
+      "canonical_name": "Photos",
+      "aliases": [
+        "photos"
+      ],
+      "path": "shell:AppsFolder\\Microsoft.Windows.Photos_8wekyb3d8bbwe!App"
+    },
+    "immersivecontrolpanel.uwp": {
+      "canonical_name": "Settings",
+      "aliases": [
+        "settings",
+        "immersivecontrolpanel"
+      ],
+      "path": "shell:AppsFolder\\windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel"
+    },
+    "screensketch.uwp": {
+      "canonical_name": "Snipping Tool",
+      "aliases": [
+        "snipping tool",
+        "tool",
+        "screensketch"
+      ],
+      "path": "shell:AppsFolder\\Microsoft.ScreenSketch_8wekyb3d8bbwe!App"
+    },
+    "windowssoundrecorder.uwp": {
+      "canonical_name": "Sound Recorder",
+      "aliases": [
+        "sound recorder",
+        "recorder",
+        "windowssoundrecorder"
+      ],
+      "path": "shell:AppsFolder\\Microsoft.WindowsSoundRecorder_8wekyb3d8bbwe!App"
+    },
+    "spotifymusic.uwp": {
+      "canonical_name": "Spotify",
+      "aliases": [
+        "spotify",
+        "spotifymusic"
+      ],
+      "path": "shell:AppsFolder\\SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify"
+    },
+    "microsoftstickynotes.uwp": {
+      "canonical_name": "Sticky Notes",
+      "aliases": [
+        "sticky notes",
+        "notes",
+        "microsoftstickynotes"
+      ],
+      "path": "shell:AppsFolder\\Microsoft.MicrosoftStickyNotes_8wekyb3d8bbwe!App"
+    },
+    "telegramdesktop.uwp": {
+      "canonical_name": "Telegram Desktop",
+      "aliases": [
+        "telegram desktop",
+        "desktop",
+        "telegramdesktop"
+      ],
+      "path": "shell:AppsFolder\\TelegramMessengerLLP.TelegramDesktop_t4vj0pshhgkwm!Telegram.TelegramDesktop.Store"
+    },
+    "windowsterminal.uwp": {
+      "canonical_name": "Terminal",
+      "aliases": [
+        "terminal",
+        "windowsterminal"
+      ],
+      "path": "shell:AppsFolder\\Microsoft.WindowsTerminal_8wekyb3d8bbwe!App"
+    },
+    "bingweather.uwp": {
+      "canonical_name": "Weather",
+      "aliases": [
+        "weather",
+        "bingweather"
+      ],
+      "path": "shell:AppsFolder\\Microsoft.BingWeather_8wekyb3d8bbwe!App"
+    },
+    "whatsappdesktop.uwp": {
+      "canonical_name": "WhatsApp",
+      "aliases": [
+        "whatsapp",
+        "whatsappdesktop"
+      ],
+      "path": "shell:AppsFolder\\5319275A.WhatsAppDesktop_cv1g1gvanyjgm!App"
+    },
+    "sechealthui.uwp": {
+      "canonical_name": "Windows Security",
+      "aliases": [
+        "windows security",
+        "security",
+        "sechealthui"
+      ],
+      "path": "shell:AppsFolder\\Microsoft.SecHealthUI_8wekyb3d8bbwe!SecHealthUI"
+    }
+  }
+}

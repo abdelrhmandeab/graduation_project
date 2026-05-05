@@ -75,16 +75,37 @@ def _parse_alarm_datetime(alarm_time_text, now=None):
     return target
 
 
+def _speak_timer_alert(label):
+    """Announce the timer via Windows SAPI speech (no Jarvis TTS dependency)."""
+    try:
+        import subprocess
+
+        text = f"{label} is done!" if label and label.lower() != "timer" else "Timer is done!"
+        ps_cmd = (
+            "Add-Type -AssemblyName System.Speech; "
+            "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+            f"$s.Speak('{text}')"
+        )
+        subprocess.Popen(
+            ["powershell", "-NonInteractive", "-Command", ps_cmd],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception as exc:
+        logger.debug("Timer SAPI speech failed: %s", exc)
+
+
 def _fire_timer(timer_id, label):
-    """Play a beep sequence when the timer fires."""
+    """Beep and announce via speech when the timer fires."""
     logger.info("Timer fired: %s (%s)", timer_id, label)
     if _WINSOUND_AVAILABLE:
-        for _ in range(5):
+        for _ in range(3):
             try:
                 winsound.Beep(1000, 500)
-                time.sleep(0.3)
+                time.sleep(0.2)
             except Exception:
                 break
+    _speak_timer_alert(label)
     with _lock:
         _active_timers.pop(timer_id, None)
 

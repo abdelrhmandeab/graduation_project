@@ -16,22 +16,29 @@ from core.config import (
     AUDIO_CHUNK_SIZE,
     MAX_RECORD_DURATION,
     SAMPLE_RATE,
+    VAD_CHAT_SILENCE_SECONDS,
+    VAD_COMMAND_SILENCE_SECONDS,
     VAD_ENERGY_THRESHOLD,
     VAD_MIN_SPEECH_SECONDS,
     VAD_PREROLL_SECONDS,
     VAD_SILENCE_SECONDS,
     VAD_START_TIMEOUT_SECONDS,
 )
+from audio.vad import SileroVAD
 
 
 _runtime_vad_settings = {
     "energy_threshold": float(VAD_ENERGY_THRESHOLD),
+    "command_silence_seconds": float(VAD_COMMAND_SILENCE_SECONDS),
+    "chat_silence_seconds": float(VAD_CHAT_SILENCE_SECONDS),
     "silence_seconds": float(VAD_SILENCE_SECONDS),
     "min_speech_seconds": float(VAD_MIN_SPEECH_SECONDS),
     "pre_roll_seconds": float(VAD_PREROLL_SECONDS),
     "start_timeout_seconds": float(VAD_START_TIMEOUT_SECONDS),
     "max_speech_seconds": max(1.5, float(MAX_RECORD_DURATION) * 0.65),
 }
+
+_runtime_vad_detector = None
 
 
 def get_runtime_vad_settings():
@@ -41,6 +48,8 @@ def get_runtime_vad_settings():
 def set_runtime_vad_settings(
     *,
     energy_threshold=None,
+    command_silence_seconds=None,
+    chat_silence_seconds=None,
     silence_seconds=None,
     min_speech_seconds=None,
     pre_roll_seconds=None,
@@ -49,6 +58,10 @@ def set_runtime_vad_settings(
 ):
     if energy_threshold is not None:
         _runtime_vad_settings["energy_threshold"] = max(0.001, float(energy_threshold))
+    if command_silence_seconds is not None:
+        _runtime_vad_settings["command_silence_seconds"] = max(0.05, float(command_silence_seconds))
+    if chat_silence_seconds is not None:
+        _runtime_vad_settings["chat_silence_seconds"] = max(0.05, float(chat_silence_seconds))
     if silence_seconds is not None:
         _runtime_vad_settings["silence_seconds"] = max(0.05, float(silence_seconds))
     if min_speech_seconds is not None:
@@ -60,6 +73,40 @@ def set_runtime_vad_settings(
     if max_speech_seconds is not None:
         _runtime_vad_settings["max_speech_seconds"] = max(0.5, float(max_speech_seconds))
     return get_runtime_vad_settings()
+
+
+def _resolve_vad_mode(vad_mode):
+    mode = str(vad_mode or "command").strip().lower()
+    if mode in {"chat", "conversation", "dialog", "turn"}:
+        return "chat"
+    return "command"
+
+
+def _resolve_silence_seconds(vad_mode, explicit_silence_seconds=None):
+    if explicit_silence_seconds is not None:
+        return max(0.05, float(explicit_silence_seconds))
+
+    runtime = get_runtime_vad_settings()
+    mode = _resolve_vad_mode(vad_mode)
+    if mode == "chat":
+        return float(runtime.get("chat_silence_seconds") or runtime.get("silence_seconds") or VAD_CHAT_SILENCE_SECONDS)
+    return float(runtime.get("command_silence_seconds") or runtime.get("silence_seconds") or VAD_COMMAND_SILENCE_SECONDS)
+
+
+def _adaptive_silence_seconds(base_seconds, speech_seconds, max_seconds):
+    """Scale silence threshold up with accumulated speech so long utterances get more grace."""
+    fraction = min(1.0, speech_seconds / 3.0)
+    return base_seconds + (max_seconds - base_seconds) * fraction
+
+
+def _get_runtime_vad_detector():
+    global _runtime_vad_detector
+    if _runtime_vad_detector is None:
+        runtime = get_runtime_vad_settings()
+        _runtime_vad_detector = SileroVAD(
+            energy_threshold=runtime["energy_threshold"],
+        )
+    return _runtime_vad_detector
 
 
 def _seconds_to_chunks(seconds):
@@ -85,6 +132,7 @@ def _write_wav_file(filename, sample_rate, audio_int16):
 def record_utterance(
     filename="input.wav",
     max_duration=MAX_RECORD_DURATION,
+    vad_mode="command",
     energy_threshold=None,
     silence_seconds=None,
     min_speech_seconds=None,
@@ -103,8 +151,6 @@ def record_utterance(
     runtime = get_runtime_vad_settings()
     if energy_threshold is None:
         energy_threshold = runtime["energy_threshold"]
-    if silence_seconds is None:
-        silence_seconds = runtime["silence_seconds"]
     if min_speech_seconds is None:
         min_speech_seconds = runtime["min_speech_seconds"]
     if pre_roll_seconds is None:
@@ -113,6 +159,15 @@ def record_utterance(
         start_timeout_seconds = runtime["start_timeout_seconds"]
     if max_speech_seconds is None:
         max_speech_seconds = runtime.get("max_speech_seconds", max_duration)
+    base_silence_seconds = _resolve_silence_seconds(vad_mode, silence_seconds)
+    max_silence_seconds = max(
+        base_silence_seconds,
+        float(runtime.get("chat_silence_seconds") or VAD_CHAT_SILENCE_SECONDS),
+    )
+
+    vad_detector = _get_runtime_vad_detector()
+    if vad_detector is not None:
+        vad_detector.reset()
 
     pre_roll = deque(maxlen=_seconds_to_chunks(pre_roll_seconds))
     captured_chunks = []
@@ -122,7 +177,6 @@ def record_utterance(
     speech_samples = 0
     max_chunks = _seconds_to_chunks(max_duration)
     max_speech_chunks = _seconds_to_chunks(min(max_duration, max(0.5, float(max_speech_seconds))))
-    silence_chunks_target = _seconds_to_chunks(silence_seconds)
     min_speech_samples = int(max(1, min_speech_seconds * SAMPLE_RATE))
     start_timeout_chunks = _seconds_to_chunks(min(start_timeout_seconds, max_duration))
     speech_started_index = -1
@@ -141,7 +195,10 @@ def record_utterance(
                     continue
 
                 rms = _chunk_rms(chunk)
-                is_voice = rms >= float(energy_threshold)
+                if vad_detector is not None:
+                    is_voice = bool(vad_detector.is_speech(chunk))
+                else:
+                    is_voice = rms >= float(energy_threshold)
 
                 if not speech_detected:
                     pre_roll.append(chunk.copy())
@@ -162,7 +219,14 @@ def record_utterance(
                     else:
                         silence_chunks += 1
 
-                    if speech_samples >= min_speech_samples and silence_chunks >= silence_chunks_target:
+                    silence_target = _seconds_to_chunks(
+                        _adaptive_silence_seconds(
+                            base_silence_seconds,
+                            speech_samples / float(SAMPLE_RATE),
+                            max_silence_seconds,
+                        )
+                    )
+                    if speech_samples >= min_speech_samples and silence_chunks >= silence_target:
                         break
                     if speech_started_index >= 0 and (index - speech_started_index + 1) >= max_speech_chunks:
                         break
@@ -191,5 +255,5 @@ def record_utterance(
     }
 
 
-def record_until_silence(filename="input.wav", max_duration=MAX_RECORD_DURATION):
-    return record_utterance(filename=filename, max_duration=max_duration)
+def record_until_silence(filename="input.wav", max_duration=MAX_RECORD_DURATION, vad_mode="command"):
+    return record_utterance(filename=filename, max_duration=max_duration, vad_mode=vad_mode)

@@ -1124,33 +1124,39 @@ class SessionMemory:
             if not allowed_intents:
                 allowed_intents = None
 
-        lines = []
-        chars = 0
-        line_number = 0
-        for row in rows:
-            user_text = (row.get("user") or "").strip()
-            assistant_text = _sanitize_assistant_text(row.get("assistant"))
-            if _is_low_value_assistant_text(assistant_text):
-                continue
+        def _collect_context(filter_language):
+            lines = []
+            chars = 0
+            line_number = 0
+            for row in rows:
+                user_text = (row.get("user") or "").strip()
+                assistant_text = _sanitize_assistant_text(row.get("assistant"))
+                if _is_low_value_assistant_text(assistant_text):
+                    continue
 
-            row_intent = _normalize_intent_tag(row.get("intent"))
-            if allowed_intents is not None and row_intent not in allowed_intents:
-                continue
+                row_intent = _normalize_intent_tag(row.get("intent"))
+                if allowed_intents is not None and row_intent not in allowed_intents:
+                    continue
 
-            row_language = str(row.get("language") or "").strip().lower()
-            if row_language not in _SUPPORTED_LANGUAGES:
-                row_language = _infer_turn_language(user_text, assistant_text, fallback="")
-            if target_language and row_language != target_language:
-                continue
+                row_language = str(row.get("language") or "").strip().lower()
+                if row_language not in _SUPPORTED_LANGUAGES:
+                    row_language = _infer_turn_language(user_text, assistant_text, fallback="")
+                if filter_language and target_language and row_language != target_language:
+                    continue
 
-            line_number += 1
-            user_line = f"[{line_number}] user: {user_text}"
-            assistant_line = f"[{line_number}] assistant: {assistant_text}"
-            chunk = user_line + "\n" + assistant_line
-            if chars + len(chunk) > max_chars:
-                break
-            lines.append(chunk)
-            chars += len(chunk)
+                line_number += 1
+                user_line = f"[{line_number}] user: {user_text}"
+                assistant_line = f"[{line_number}] assistant: {assistant_text}"
+                chunk = user_line + "\n" + assistant_line
+                if chars + len(chunk) > max_chars:
+                    break
+                lines.append(chunk)
+                chars += len(chunk)
+            return lines
+
+        lines = _collect_context(filter_language=True)
+        if not lines and target_language:
+            lines = _collect_context(filter_language=False)
         return "\n".join(lines)
 
     def status(self):

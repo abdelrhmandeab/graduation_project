@@ -2,6 +2,7 @@ import ctypes
 import os
 import re
 import shutil
+import time
 import uuid
 
 from core.config import (
@@ -519,6 +520,33 @@ def get_file_metadata_result(path):
         )
 
 
+_FILE_EXTENSION_RE = re.compile(
+    r"^(pdf|docx?|xlsx?|pptx?|txt|csv|json|xml|html?|jpg|jpeg|png|gif|bmp|mp3|mp4|wav|zip|rar|7z|exe|py|js|ts|md)$",
+    re.IGNORECASE,
+)
+
+
+def _split_file_query(query: str):
+    """Split query into (name_tokens, extension_tokens).
+
+    e.g. "cv pdf" -> (["cv"], ["pdf"])
+    """
+    tokens = (query or "").lower().split()
+    exts = [t for t in tokens if _FILE_EXTENSION_RE.match(t)]
+    names = [t for t in tokens if not _FILE_EXTENSION_RE.match(t)]
+    return names, exts
+
+
+def _file_matches_query(filename: str, name_tokens: list, ext_tokens: list) -> bool:
+    name_lower = filename.lower()
+    stem, ext = os.path.splitext(name_lower)
+    if name_tokens and not all(tok in name_lower for tok in name_tokens):
+        return False
+    if ext_tokens and not any(ext == f".{e}" or stem.endswith(e) for e in ext_tokens):
+        return False
+    return True
+
+
 def search_windows_index(query, max_results=10):
     """Search using Windows Search Index via ADODB (built into Windows).
 
@@ -535,12 +563,24 @@ def search_windows_index(query, max_results=10):
             "Provider=Search.CollatorDSO;"
             "Extended Properties='Application=Windows';"
         )
-        # Escape single quotes in query to prevent injection
-        safe_query = str(query).replace("'", "''")
+        name_tokens, ext_tokens = _split_file_query(query)
+        conditions = []
+        for tok in name_tokens:
+            safe_tok = tok.replace("'", "''")
+            conditions.append(f"System.FileName LIKE '%{safe_tok}%'")
+        if ext_tokens:
+            ext_conds = " OR ".join(
+                f"System.FileExtension = '.{e.replace(chr(39), chr(39)*2)}'" for e in ext_tokens
+            )
+            conditions.append(f"({ext_conds})")
+        if not conditions:
+            safe_query = str(query).replace("'", "''")
+            conditions.append(f"System.FileName LIKE '%{safe_query}%'")
+        where_clause = " AND ".join(conditions)
         sql = (
             f"SELECT TOP {int(max_results)} System.ItemPathDisplay "
             f"FROM SystemIndex "
-            f"WHERE System.FileName LIKE '%{safe_query}%'"
+            f"WHERE {where_clause}"
         )
         rs = conn.Execute(sql)[0]
         results = []
@@ -607,28 +647,33 @@ def find_files(filename, search_path=None):
                 )
                 return filtered
 
-        needle = filename.lower()
+        name_tokens, ext_tokens = _split_file_query(filename)
         matches = []
+        deadline = time.monotonic() + 15  # max 15 seconds for walk
         for current_root, _, files in os.walk(root):
+            if time.monotonic() > deadline:
+                logger.warning("File walk timed out after 15s searching for '%s'", filename)
+                break
             for name in files:
-                if needle in name.lower():
-                    path = os.path.join(current_root, name)
-                    path_ok, _ = _check_path_policy(path, write=False)
-                    if not path_ok:
-                        continue
-                    matches.append(path)
-                    if len(matches) >= MAX_FILE_RESULTS:
-                        log_action(
-                            "find_files",
-                            "success",
-                            details={
-                                "query": filename,
-                                "root": root,
-                                "count": len(matches),
-                                "method": "directory_walk",
-                            },
-                        )
-                        return matches
+                if not _file_matches_query(name, name_tokens, ext_tokens):
+                    continue
+                path = os.path.join(current_root, name)
+                path_ok, _ = _check_path_policy(path, write=False)
+                if not path_ok:
+                    continue
+                matches.append(path)
+                if len(matches) >= MAX_FILE_RESULTS:
+                    log_action(
+                        "find_files",
+                        "success",
+                        details={
+                            "query": filename,
+                            "root": root,
+                            "count": len(matches),
+                            "method": "directory_walk",
+                        },
+                    )
+                    return matches
         log_action(
             "find_files",
             "success",

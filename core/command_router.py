@@ -36,6 +36,7 @@ from core.config import (
     NLU_INTENT_THRESHOLD_BY_FAMILY,
     SEMANTIC_ROUTER_ENABLED,
     SEMANTIC_ROUTER_CONFIDENCE_THRESHOLD,
+    LIVE_DATA_FORCE_QUESTIONS,
     WEB_SEARCH_ENABLED,
     WEB_SEARCH_MAX_RESULTS,
     PERSONA_LENGTH_TARGET_ENABLED,
@@ -60,7 +61,7 @@ from core.metrics import metrics
 from core.persona import persona_manager
 from core.response_templates import anti_repetition_prefixes, detect_language_hint, normalize_language, render_template
 from core.session_memory import session_memory
-from llm.ollama_client import ask_llm_streaming, get_runtime_lightweight_num_ctx, get_runtime_model_tier
+from llm.ollama_client import ask_llm, ask_llm_streaming, get_runtime_lightweight_num_ctx, get_runtime_model_tier
 from llm.prompt_builder import build_prompt_package, build_lightweight_prompt, build_tool_augmented_prompt
 from tools.live_data import gather_live_data
 try:
@@ -73,7 +74,13 @@ except Exception:
     _classify_semantic = None
 from os_control.action_log import log_action, read_recent_actions
 from os_control.adapter_result import to_router_tuple
-from os_control.app_ops import execute_confirmed_app_operation, open_app_result, request_close_app_result, resolve_app_request
+from os_control.app_ops import (
+    execute_confirmed_app_operation,
+    open_app_result,
+    refresh_app_catalog_result,
+    request_close_app_result,
+    resolve_app_request,
+)
 from os_control.confirmation import confirmation_manager
 from os_control.file_ops import (
     execute_confirmed_file_operation,
@@ -91,6 +98,7 @@ from os_control.sysinfo_ops import get_battery_status, get_system_info
 from os_control.email_ops import draft_email
 from os_control.calendar_ops import create_calendar_event
 from os_control.settings_ops import open_settings_page
+from llm.tool_caller import call_tool_tier, tool_calls_to_parsed_commands
 
 
 _JOB_QUEUE_EXECUTOR_READY = False
@@ -182,6 +190,30 @@ def _select_parser_fastpath_assessment(source_text, parser_candidate, language):
 def _should_skip_nlu_llm_query(parser_candidate):
     intent = str(getattr(parser_candidate, "intent", "") or "").strip().upper()
     return intent == "LLM_QUERY" and not NLU_LLM_QUERY_EXTRACTION_ENABLED
+
+
+def _should_try_tool_tier(original_text, parser_candidate):
+    intent = str(getattr(parser_candidate, "intent", "") or "").strip().upper()
+    if intent and intent != "LLM_QUERY":
+        return False
+
+    tier = get_runtime_model_tier()
+    if tier not in {"medium", "high"}:
+        return False
+
+    normalized = " ".join(str(original_text or "").lower().split()).strip()
+    if not normalized:
+        return False
+
+    words = normalized.split()
+    if len(words) <= 3:
+        return False
+
+    multi_step_cues = (" and ", " then ", " and then ", " و ", " وبعدها ", " وبعدين ")
+    if any(cue in f" {normalized} " for cue in multi_step_cues):
+        return True
+
+    return len(words) >= 6
 
 
 _APP_NAME_LOOKUP_CACHE = None
@@ -763,6 +795,37 @@ _OPEN_FOLLOWUP_TEXTS = {
     "افتحها الان",
     "شغله",
     "شغلها",
+}
+
+_CONTINUE_FOLLOWUP_TEXTS = {
+    "continue",
+    "continue please",
+    "keep going",
+    "keep going please",
+    "go on",
+    "go on please",
+    "resume",
+    "resume it",
+    "continue the answer",
+    "continue the topic",
+    "continue the conversation",
+    "continue previous",
+    "continue previous conversation",
+    "continue on the same topic",
+    "keep talking",
+    "proceed",
+    "تابع",
+    "تابع الكلام",
+    "تابع الشرح",
+    "كمل",
+    "كمّل",
+    "كمل على نفس الموضوع",
+    "كمل على نفس الكلام",
+    "كمل الموضوع",
+    "ماشي كمل",
+    "استمر",
+    "استمر في الكلام",
+    "استمر على نفس الموضوع",
 }
 
 _CLOSE_FOLLOWUP_TEXTS = {
@@ -1360,6 +1423,60 @@ _SEARCH_QUERY_MARKERS = {
     "النهارده", "النهاردة", "اليوم", "دلوقتي",
 }
 
+_LIVE_DATA_FORCE_MARKERS = {
+    # Recency/time-sensitive cues
+    "latest", "recent", "current", "today", "now", "currently",
+    "آخر", "أحدث", "حالي", "النهارده", "النهاردة", "اليوم", "دلوقتي",
+    # Price/market cues
+    "price of", "cost of", "how much", "exchange rate", "stock",
+    "سعر", "اسعار", "أسعار", "تكلفة", "بكام", "كام",
+    # Commodity/currency cues
+    "gold", "silver", "bitcoin", "crypto", "دولار", "يورو", "ذهب", "دهب", "فضة", "عملة",
+}
+
+_QUESTION_PREFIXES_EN = (
+    "what",
+    "what's",
+    "whats",
+    "who",
+    "when",
+    "where",
+    "why",
+    "how",
+    "which",
+    "is",
+    "are",
+    "do",
+    "does",
+    "did",
+    "can",
+    "could",
+    "should",
+    "will",
+    "would",
+)
+
+_QUESTION_PREFIXES_AR = (
+    "ايه",
+    "اية",
+    "اي",
+    "مين",
+    "امتى",
+    "فين",
+    "ازاي",
+    "ليه",
+    "هل",
+    "كام",
+    "قد ايه",
+    "كم",
+    "متى",
+    "اين",
+    "أين",
+    "كيف",
+    "لماذا",
+    "ماذا",
+)
+
 _ASSIST_FIRST_REWRITE_BLOCK_MARKERS = {
     "hack",
     "exploit",
@@ -1427,13 +1544,68 @@ def _looks_search_worthy_query(text):
     return any(marker in normalized for marker in _SEARCH_QUERY_MARKERS)
 
 
+def _looks_live_data_trigger_query(text):
+    normalized = _normalize_quality_text(text)
+    if not normalized:
+        return False
+    if _looks_news_query(normalized):
+        return True
+    return any(marker in normalized for marker in _LIVE_DATA_FORCE_MARKERS)
+
+
+def _looks_like_question(text):
+    normalized = _normalize_quality_text(text)
+    if not normalized:
+        return False
+    if normalized.endswith("?") or normalized.endswith("؟"):
+        return True
+    lowered = normalized.lower()
+    for prefix in _QUESTION_PREFIXES_EN:
+        if lowered == prefix or lowered.startswith(prefix + " "):
+            return True
+    for prefix in _QUESTION_PREFIXES_AR:
+        if lowered == prefix or lowered.startswith(prefix + " "):
+            return True
+    return False
+
+
+def _previous_turn_looks_live_data():
+    recent = session_memory.recent(limit=2)
+    if not recent:
+        return False
+    last_turn = recent[-1] if recent else {}
+    last_user = str(last_turn.get("user") or "").strip()
+    if not last_user:
+        return False
+    if _looks_weather_or_clothing_query(last_user):
+        return True
+    if _looks_news_query(last_user):
+        return True
+    return _looks_search_worthy_query(last_user)
+
+
 def _fetch_live_tool_context(query_text):
     """Try to fetch live data (weather + web search) for the query.
     
     Returns context string or empty. Uses Phase 2 live data pipeline.
     """
     # Phase 2.1: Unified live data gathering (weather + web search)
-    live_context = gather_live_data(query_text, parallel=True)
+    force_search = False
+    if WEB_SEARCH_ENABLED:
+        if _looks_live_data_trigger_query(query_text):
+            force_search = True
+        elif _looks_search_worthy_query(query_text) and not _looks_like_question(query_text):
+            # Explicit search phrasing ("search for", "look up", etc.).
+            force_search = True
+        elif _looks_like_question(query_text):
+            if LIVE_DATA_FORCE_QUESTIONS and _looks_live_data_trigger_query(query_text):
+                force_search = True
+            else:
+                short_followup = len(str(query_text or "").split()) <= 4
+                if short_followup and _previous_turn_looks_live_data():
+                    force_search = True
+
+    live_context = gather_live_data(query_text, parallel=True, force_search=force_search)
     if live_context:
         return live_context
     
@@ -1447,15 +1619,88 @@ def _fetch_live_tool_context(query_text):
     return ""
 
 
+def _extract_tool_block(tool_context: str, label: str) -> str:
+    text = str(tool_context or "").strip()
+    if not text:
+        return ""
+    blocks = [block.strip() for block in text.split("\n\n") if block.strip()]
+    target = f"[{label}]"
+    for block in blocks:
+        if block.startswith(target):
+            lines = block.splitlines()
+            if len(lines) <= 1:
+                return ""
+            return "\n".join(lines[1:]).strip()
+    return ""
+
+
+def _format_news_from_search(search_block: str, language: str) -> str:
+    lines = [line.strip() for line in str(search_block or "").splitlines() if line.strip()]
+    bullets = [line for line in lines if line.startswith("-")]
+    if not bullets:
+        return ""
+    top = bullets[:3]
+    if normalize_language(language) == "ar":
+        return "اهم العناوين حاليا:\n" + "\n".join(top)
+    return "Top headlines right now:\n" + "\n".join(top)
+
+
+def _rewrite_live_data_answer(query_text, tool_context, language):
+    context = str(tool_context or "").strip()
+    if not context:
+        return ""
+
+    target_language = normalize_language(language)
+    target_label = "Arabic" if target_language == "ar" else "English"
+    rewrite_prompt = (
+        f"Rewrite the live-data answer below into a natural {target_label} assistant reply.\n"
+        "- Keep the facts accurate.\n"
+        "- Do not copy the source wording or bullet formatting.\n"
+        "- Sound like a helpful human assistant speaking directly to the user.\n"
+        "- If Arabic, use Egyptian colloquial only.\n"
+        "- Return only the rewritten answer.\n\n"
+        f"User request: {query_text}\n"
+        f"Live data:\n{context}"
+    )
+    rewritten = (
+        ask_llm(
+            rewrite_prompt,
+            num_ctx=get_runtime_lightweight_num_ctx(default=LLM_LIGHTWEIGHT_NUM_CTX),
+        )
+        or ""
+    ).strip()
+    if not rewritten:
+        return ""
+
+    rewritten_language = detect_language_hint(rewritten, fallback=target_language)
+    if rewritten_language != target_language:
+        return ""
+    return rewritten
+
+
 def _direct_live_data_answer(query_text, tool_context, language):
     context = str(tool_context or "").strip()
     if not context:
         return ""
 
     if _looks_weather_or_clothing_query(query_text):
+        weather_block = _extract_tool_block(context, "WEATHER")
+        clean_weather = weather_block or context
+        rewritten = _rewrite_live_data_answer(query_text, clean_weather, language)
+        if rewritten:
+            return rewritten
         if normalize_language(language) == "ar":
-            return f"حالة الطقس الحالية: {context}"
-        return context
+            return f"حالة الطقس الحالية باختصار: {clean_weather}"
+        return f"Current weather summary: {clean_weather}"
+
+    if _looks_news_query(query_text):
+        search_block = _extract_tool_block(context, "WEB_SEARCH")
+        news_text = _format_news_from_search(search_block, language)
+        if news_text:
+            rewritten = _rewrite_live_data_answer(query_text, news_text, language)
+            if rewritten:
+                return rewritten
+            return news_text
 
     return ""
 
@@ -2009,6 +2254,14 @@ def _rewrite_followup_command(text, language="en"):
             "followup_blocked": True,
             "followup_message": render_template("missing_pending_confirmation", language),
         }
+
+    if normalized in _CONTINUE_FOLLOWUP_TEXTS:
+        has_recent_llm_context = session_memory.has_recent_context(language=language, intents={"LLM_QUERY"})
+        if has_recent_llm_context:
+            return raw, {
+                "followup_rewrite": "continue_previous_topic",
+                "followup_continue_previous": True,
+            }
 
     last_file = session_memory.get_last_file()
     last_file_ts = session_memory.get_last_file_timestamp()
@@ -2630,26 +2883,39 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
 
     if parsed.intent == "OS_SYSTEM_COMMAND":
         action_key = parsed.args.get("action_key")
+        if action_key == "rescan_apps":
+            return to_router_tuple(refresh_app_catalog_result(force=True))
         return to_router_tuple(request_system_command_result(action_key, command_args=dict(parsed.args or {})))
 
     if parsed.intent == "OS_TIMER":
-        if parsed.action == "set":
+        action = parsed.action or ""
+        # Semantic router may match OS_TIMER but leave action empty; re-parse the
+        # raw text to extract the structured action and duration.
+        if not action and parsed.raw:
+            _reparsed = parse_command(parsed.raw)
+            if _reparsed.intent == "OS_TIMER" and _reparsed.action:
+                action = _reparsed.action
+                parsed = _reparsed
+        if action == "set":
             seconds = parsed.args.get("seconds")
             if seconds is None:
                 return False, "Could not parse timer duration.", {}
             label = parsed.args.get("label", "Timer")
             return True, set_timer(seconds, label=label), {}
-        if parsed.action == "set_alarm":
+        if action == "set_alarm":
             alarm_time = str(parsed.args.get("alarm_time") or "").strip()
             if not alarm_time:
                 return False, "Could not parse alarm time.", {}
             label = parsed.args.get("label", "Alarm")
             return True, set_alarm_at(alarm_time, label=label), {}
-        if parsed.action == "cancel":
+        if action == "cancel":
             return True, cancel_timer(), {}
-        if parsed.action == "list":
+        if action == "list":
             return True, list_timers(), {}
-        return False, "Unknown timer action.", {}
+        # Last resort: open Windows Clock so the user can set the timer manually.
+        import subprocess
+        subprocess.Popen(["cmd", "/c", "start", "", "ms-clock:"], shell=False)
+        return True, "Opening Windows Clock — please set your timer there.", {}
 
     if parsed.intent == "OS_CLIPBOARD":
         if parsed.action == "read":
@@ -2828,6 +3094,7 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
                 package["prompt"],
                 on_sentence=_stream_callback,
                 num_ctx=llm_num_ctx,
+                is_arabic=(language == "ar"),
             )
             or ""
         ).strip()
@@ -3250,6 +3517,15 @@ def route_command(
     if followup_meta.get("followup_blocked"):
         return str(followup_meta.get("followup_message") or "")
 
+    if followup_meta.get("followup_continue_previous"):
+        forced_parsed = ParsedCommand(
+            intent="LLM_QUERY",
+            raw=original_text,
+            normalized=" ".join(effective_text.lower().split()).strip(),
+            action="",
+            args={},
+        )
+
     parsed = forced_parsed
     parser_candidate = forced_parsed or precomputed_parser_candidate or parse_command(effective_text)
     parser_candidate.raw = original_text
@@ -3298,6 +3574,30 @@ def route_command(
         nlu_meta.update(keyword_nlp_meta)
         if keyword_nlp_parsed is not None:
             parsed = keyword_nlp_parsed
+
+    if parsed is None and _should_try_tool_tier(original_text, parser_candidate):
+        tool_result = call_tool_tier(original_text, model_name=None)
+        parsed_tool_commands = tool_calls_to_parsed_commands(tool_result.get("tool_calls") or [], original_text)
+        if parsed_tool_commands:
+            tool_messages = []
+            tool_meta = {
+                "tool_tier_used": True,
+                "tool_tier_tool_calls": list(tool_result.get("tool_calls") or []),
+            }
+            success = True
+            for tool_parsed in parsed_tool_commands:
+                tool_success, tool_message, dispatch_meta = _dispatch(
+                    tool_parsed,
+                    allow_batch=False,
+                    allow_job_queue=False,
+                    allow_llm=False,
+                )
+                success = success and bool(tool_success)
+                if tool_message:
+                    tool_messages.append(str(tool_message))
+                if dispatch_meta:
+                    tool_meta.update(dispatch_meta)
+            return success, "\n".join(message for message in tool_messages if message).strip(), tool_meta
 
     if parsed is None:
         # Tier 4: Fall through to parser candidate (LLM_QUERY → LLM fallback)

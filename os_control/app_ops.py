@@ -19,6 +19,7 @@ from os_control.action_log import log_action
 from os_control.adapter_result import confirmation_result, failure_result, success_result, to_legacy_pair
 from os_control.confirmation import confirmation_manager
 from os_control.policy import policy_engine
+from os_control.app_scanner import scan_installed_apps
 from os_control.powershell_bridge import run_template
 from os_control.risk_policy import risk_tier_for_app_operation
 
@@ -259,10 +260,18 @@ _APP_CATALOG = {
     },
 }
 
-_EXECUTABLE_TO_CANONICAL = {
-    executable: payload["canonical_name"]
-    for executable, payload in _APP_CATALOG.items()
-}
+_BASE_APP_CATALOG = dict(_APP_CATALOG)
+
+
+def _apply_app_catalog(app_catalog):
+    global _APP_CATALOG, _EXECUTABLE_TO_CANONICAL, KNOWN_APPS
+
+    _APP_CATALOG = app_catalog or {}
+    _EXECUTABLE_TO_CANONICAL = {
+        executable: payload.get("canonical_name", executable)
+        for executable, payload in _APP_CATALOG.items()
+    }
+    KNOWN_APPS = _build_known_apps_alias_map()
 
 
 def _normalize_alias(text):
@@ -300,6 +309,7 @@ def _build_known_apps_alias_map():
 
 
 KNOWN_APPS = _build_known_apps_alias_map()
+_apply_app_catalog(scan_installed_apps(_BASE_APP_CATALOG))
 _RETRYABLE_OPEN_ERRORS = ("timed out", "temporarily unavailable")
 _RETRYABLE_CLOSE_ERRORS = ("timed out", "temporarily unavailable")
 _PROCESS_NAME_OVERRIDES = {
@@ -702,7 +712,12 @@ def open_app_result(app_name):
         )
 
     if resolution["status"] in {"exact", "high_confidence", "likely"} and resolution["candidates"]:
-        target = resolution["candidates"][0]["executable"]
+        executable = resolution["candidates"][0]["executable"]
+        # Use the full path stored by the scanner when available; otherwise fall
+        # back to the bare executable name (works for apps registered in App Paths
+        # or on the system PATH, e.g. the hardcoded catalog entries).
+        catalog_entry = _APP_CATALOG.get(executable) or {}
+        target = str(catalog_entry.get("path") or "").strip() or executable
     else:
         target = app_name
 
@@ -881,3 +896,26 @@ def open_app(app_name):
 
 def close_app(app_name):
     return to_legacy_pair(close_app_result(app_name))
+
+
+def refresh_app_catalog_result(force=False):
+    try:
+        refreshed_catalog = scan_installed_apps(_BASE_APP_CATALOG, force=bool(force))
+        _apply_app_catalog(refreshed_catalog)
+        log_action(
+            "app_catalog_refresh",
+            "success",
+            details={"force": bool(force), "app_count": len(_APP_CATALOG)},
+        )
+        return success_result(
+            f"Rescanned installed apps and found {len(_APP_CATALOG)} entries.",
+            debug_info={"force": bool(force), "app_count": len(_APP_CATALOG)},
+        )
+    except Exception as exc:
+        logger.error("App catalog rescan failed: %s", exc)
+        log_action("app_catalog_refresh", "failed", details={"force": bool(force)}, error=exc)
+        return failure_result(
+            "I could not rescan installed apps.",
+            error_code="execution_failed",
+            debug_info={"force": bool(force)},
+        )

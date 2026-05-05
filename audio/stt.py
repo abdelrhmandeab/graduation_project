@@ -277,9 +277,9 @@ def _transcribe_with_faster_whisper(
 
     hint = _normalize_detected_language(language_hint or _runtime_language_hint())
     whisper_language = None
-    # Keep Arabic pinning for better dialect stability, but do not hard-pin
-    # English: allowing auto language detection prevents Arabic speech from
-    # being forced into incorrect English transcripts.
+    # Pin Arabic to keep dialect-stable transcription; leave English unpinned
+    # so that Arabic speech misdetected as English by the tiny detection model
+    # is not forcibly transcribed in English (which produces garbage).
     if hint == "ar":
         whisper_language = hint
 
@@ -328,6 +328,7 @@ def _detect_audio_language_with_whisper(audio_file: str, language_hint: Optional
     model = _get_language_detector_whisper_model()
     preview_parts: List[str] = []
     detected = ""
+    confidence = 0.0
 
     try:
         segments, info = model.transcribe(
@@ -338,6 +339,7 @@ def _detect_audio_language_with_whisper(audio_file: str, language_hint: Optional
             condition_on_previous_text=False,
         )
         detected = _normalize_detected_language(str(getattr(info, "language", "") or ""))
+        confidence = float(getattr(info, "language_probability", 0.0) or 0.0)
         for segment in segments:
             piece = str(getattr(segment, "text", "") or "").strip()
             if not piece:
@@ -349,22 +351,34 @@ def _detect_audio_language_with_whisper(audio_file: str, language_hint: Optional
         logger.warning("Whisper language detection failed: %s", exc)
 
     if detected in {"ar", "en"}:
+        preview_text = " ".join(preview_parts).strip()
+        script_guess = _classify_language_by_script(preview_text)
+        if script_guess == "ar":
+            return "ar"
+        if script_guess == "en" and detected == "en" and confidence >= 0.85:
+            return "en"
+        if bool(STT_MIXED_TREAT_AS_ARABIC) and script_guess in {"", "mixed"} and confidence < 0.85:
+            return "auto"
         return detected
 
     preview_text = " ".join(preview_parts).strip()
     script_guess = _classify_language_by_script(preview_text)
     if script_guess in {"ar", "en"}:
+        if script_guess == "en" and bool(STT_MIXED_TREAT_AS_ARABIC) and detected != "ar" and confidence < 0.85:
+            return "auto"
         return script_guess
 
     if preview_text:
         detected_text_language = _normalize_detected_language(detect_language(preview_text))
         if detected_text_language in {"ar", "en"}:
+            if detected_text_language == "en" and bool(STT_MIXED_TREAT_AS_ARABIC) and confidence < 0.85:
+                return "auto"
             return detected_text_language
 
     if hint in {"ar", "en"}:
         return hint
 
-    return "en"
+    return "auto"
 
 
 def _transcribe_with_elevenlabs(
@@ -453,11 +467,14 @@ def _transcribe_with_hybrid_elevenlabs(
         try:
             primary = _transcribe_with_elevenlabs(
                 audio_file,
-                language_hint="ar",
+                language_hint=detected_language,
                 on_partial=on_partial,
             )
             if not _is_weak_transcript(str(primary.get("text", ""))):
-                primary["language"] = _normalize_detected_language(primary.get("language") or "ar") or "ar"
+                primary["language"] = (
+                    _normalize_detected_language(primary.get("language") or detected_language)
+                    or detected_language
+                )
                 primary["backend"] = _HYBRID_BACKEND
                 primary["method"] = _ELEVENLABS_METHOD
                 return primary
