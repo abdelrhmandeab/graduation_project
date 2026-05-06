@@ -433,6 +433,10 @@ class SpeechEngine:
         """
         logger.info("Barge-in: stopping TTS so the user can speak.")
         self.interrupt()
+        try:
+            metrics.record_stage("barge_in_interrupt", 0.0, success=True)
+        except Exception:
+            pass
 
     def _start_barge_in_monitor(self):
         if not BARGE_IN_VAD_ENABLED:
@@ -1381,13 +1385,24 @@ class SpeechEngine:
 
         playback_rate = max(8000, int(sample_rate or 0))
 
+        # Report TTS RMS to the barge-in monitor so it can gate out speaker echo.
+        try:
+            import numpy as _np
+            _flat = _np.asarray(samples, dtype=_np.float32).reshape(-1)
+            _tts_rms = float(_np.sqrt(_np.mean(_np.square(_flat)))) if _flat.size else 0.0
+            self._barge_in_monitor.set_tts_rms(_tts_rms)
+        except Exception:
+            pass
+
         try:
             sd.stop()
             if blocking:
                 if self._stop_event.is_set():
                     sd.stop()
+                    self._barge_in_monitor.set_tts_rms(0.0)
                     return False
                 sd.play(samples, samplerate=playback_rate, blocking=True)
+                self._barge_in_monitor.set_tts_rms(0.0)
                 return True
 
             sd.play(samples, samplerate=playback_rate, blocking=False)
@@ -1397,6 +1412,7 @@ class SpeechEngine:
             while True:
                 if self._stop_event.is_set():
                     sd.stop()
+                    self._barge_in_monitor.set_tts_rms(0.0)
                     return False
                 if time.perf_counter() >= playback_deadline:
                     logger.warning("TTS playback watchdog reached; forcing stream stop")
@@ -1409,8 +1425,10 @@ class SpeechEngine:
                 if not stream or not getattr(stream, "active", False):
                     break
                 time.sleep(0.05)
+            self._barge_in_monitor.set_tts_rms(0.0)
             return True
         except Exception as exc:
+            self._barge_in_monitor.set_tts_rms(0.0)
             logger.error("Waveform playback failed: %s", exc)
             try:
                 sd.stop()

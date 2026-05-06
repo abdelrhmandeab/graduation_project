@@ -587,6 +587,17 @@ def _map_keyword_nlp_intent_to_command(source_text, nlp_result):
     if action_key:
         if _looks_keyword_nlp_informational_query(source_text):
             return None
+        # Require higher confidence for system commands via keyword NLP
+        # to prevent false positives like "RISK" fuzzy-matching to "raise" → volume_up
+        if confidence < 0.65:
+            logger.debug(
+                "Fuzzy keyword match for system command too low (%.2f < 0.65): '%s' (intent=%s, keywords=%s)",
+                confidence,
+                str(source_text)[:50],
+                intent_name,
+                matched_keywords
+            )
+            return None
         return ParsedCommand(
             intent="OS_SYSTEM_COMMAND",
             raw=source_text,
@@ -2882,10 +2893,29 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
         return to_router_tuple(request_close_app_result(app_name))
 
     if parsed.intent == "OS_SYSTEM_COMMAND":
-        action_key = parsed.args.get("action_key")
-        if action_key == "rescan_apps":
+        action_key = str(parsed.args.get("action_key") or "").strip()
+        
+        # Validate: if action_key is empty, this is likely a false positive from semantic routing
+        # (e.g., "RISK AND EPS" incorrectly matched to OS_SYSTEM_COMMAND).
+        # Demote to LLM_QUERY for safety.
+        if not action_key:
+            logger.warning(
+                "OS_SYSTEM_COMMAND with empty action_key: '%s' — demoting to LLM_QUERY",
+                str(parsed.raw)[:100]
+            )
+            # Re-parse or demote to LLM_QUERY
+            parsed = ParsedCommand(
+                intent="LLM_QUERY",
+                raw=parsed.raw,
+                normalized=parsed.normalized,
+                action="",
+                args={},
+            )
+            # Continue to LLM handling below instead of returning error
+        elif action_key == "rescan_apps":
             return to_router_tuple(refresh_app_catalog_result(force=True))
-        return to_router_tuple(request_system_command_result(action_key, command_args=dict(parsed.args or {})))
+        else:
+            return to_router_tuple(request_system_command_result(action_key, command_args=dict(parsed.args or {})))
 
     if parsed.intent == "OS_TIMER":
         action = parsed.action or ""

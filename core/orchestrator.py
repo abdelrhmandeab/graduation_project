@@ -92,15 +92,19 @@ def _is_stt_annotation_only(text):
 
 def _resolve_stt_language_hint(*, wake_source=None):
     # Prefer auto-detection on every utterance so one Arabic turn does not
-    # lock the next turn into Arabic. Keep a narrow fast-path only when the
-    # wake word itself is Arabic and the runtime has not already been forced.
+    # lock the next turn into Arabic. Keep a narrow fast-path when the wake
+    # word itself is Arabic or English and the runtime has not already been
+    # forced to a specific language.
     runtime_hint = str(stt_runtime.get_runtime_stt_settings().get("language_hint") or "auto").strip().lower()
     if runtime_hint in {"ar", "arabic", "ar-eg", "ar_eg"}:
         return "ar"
     if runtime_hint in {"en", "english", "en-us", "en_us"}:
         return "en"
-    if str(wake_source or "").strip().lower() == "arabic":
+    wake_source_value = str(wake_source or "").strip().lower()
+    if wake_source_value == "arabic":
         return "ar"
+    if wake_source_value == "english":
+        return "en"
     return None
 
 
@@ -1037,6 +1041,7 @@ def run():
             if wake_behavior.get("barge_in_interrupt_on_wake") and speech_engine.is_speaking():
                 speech_engine.interrupt()
                 logger.info("Speech interrupted due to wake-word barge-in.")
+                metrics.record_stage("barge_in_interrupt", 0.0, success=True)
 
             logger.info("Wake word detected via %s", wake_source or "unknown")
             pipeline_started = time.perf_counter()

@@ -355,11 +355,14 @@ def _detect_audio_language_with_whisper(audio_file: str, language_hint: Optional
         script_guess = _classify_language_by_script(preview_text)
         if script_guess == "ar":
             return "ar"
-        if script_guess == "en" and detected == "en" and confidence >= 0.85:
+        if script_guess == "en" and detected == "en" and confidence >= 0.80:
             return "en"
-        if bool(STT_MIXED_TREAT_AS_ARABIC) and script_guess in {"", "mixed"} and confidence < 0.85:
+        if bool(STT_MIXED_TREAT_AS_ARABIC) and script_guess in {"", "mixed"} and confidence < 0.80:
             return "auto"
-        return detected
+        # Low confidence on detected language: fall back to script-based detection
+        if confidence < 0.70 and script_guess in {"ar", "en"}:
+            return script_guess
+        return detected if confidence >= 0.80 else "auto"
 
     preview_text = " ".join(preview_parts).strip()
     script_guess = _classify_language_by_script(preview_text)
@@ -452,7 +455,13 @@ def _transcribe_with_elevenlabs(
 
 def _is_weak_transcript(text: str) -> bool:
     normalized = " ".join(str(text or "").split()).strip()
-    return len(normalized) < int(STT_ELEVENLABS_WEAK_TEXT_MIN_CHARS)
+    if len(normalized) < int(STT_ELEVENLABS_WEAK_TEXT_MIN_CHARS):
+        return True
+    # Also reject transcripts that are mostly diacritics or non-Latin gibberish
+    latin_chars = sum(1 for c in normalized if 'a' <= c.lower() <= 'z')
+    if latin_chars == 0:
+        return True
+    return False
 
 
 def _transcribe_with_hybrid_elevenlabs(
@@ -489,9 +498,24 @@ def _transcribe_with_hybrid_elevenlabs(
         language_hint=detected_language,
         on_partial=on_partial,
     )
+    local_text = str(local.get("text", "")).strip()
+    local_lang = _normalize_detected_language(local.get("language") or detected_language)
+    local_confidence = float(local.get("confidence") or 0.0)
+    
+    # Reject weak transcripts or those with very low confidence language detection
+    if _is_weak_transcript(local_text) or (local_confidence > 0.0 and local_confidence < 0.65):
+        logger.warning(
+            "Local STT returned weak/uncertain result (text_len=%d, lang_conf=%.2f); falling back",
+            len(local_text),
+            local_confidence,
+        )
+        errors.append("local:weak_or_uncertain")
+        if detected_language != local_lang:
+            local["language"] = detected_language
+    
     local["backend"] = _HYBRID_BACKEND
     local["method"] = _LOCAL_BACKEND
-    local["language"] = _normalize_detected_language(local.get("language") or detected_language)
+    local["language"] = local_lang
     if errors:
         local["fallback_used"] = True
         local["errors"] = errors

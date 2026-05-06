@@ -50,17 +50,29 @@ def fuzzy_score(text: str, keyword: str) -> int:
     if not normalized_text or not normalized_keyword:
         return 0
 
-    if normalized_keyword in normalized_text:
+    text_tokens = normalized_text.split()
+    keyword_tokens = normalized_keyword.split()
+    compact_text = normalized_text.replace(" ", "")
+    compact_keyword = normalized_keyword.replace(" ", "")
+
+    if normalized_keyword in normalized_text or (compact_keyword and compact_keyword in compact_text):
         return 100
 
-    if fuzz is not None:
-        score = fuzz.partial_ratio(normalized_text, normalized_keyword)
-        return int(round(score))
+    def _best_token_score(source_tokens, target_token):
+        if not source_tokens:
+            return 0
+        if fuzz is not None:
+            return max(int(round(fuzz.ratio(token, target_token))) for token in source_tokens)
+        return max(int(round(SequenceMatcher(None, token, target_token).ratio() * 100)) for token in source_tokens)
 
-    # Lightweight fallback when rapidfuzz is unavailable.
-    baseline = SequenceMatcher(None, normalized_text, normalized_keyword).ratio()
-    token_scores = [SequenceMatcher(None, token, normalized_keyword).ratio() for token in normalized_text.split()]
-    return int(round(max([baseline] + token_scores) * 100))
+    if len(keyword_tokens) == 1:
+        score = _best_token_score(text_tokens, keyword_tokens[0])
+        return score if score >= 90 else 0
+
+    token_scores = [_best_token_score(text_tokens, token) for token in keyword_tokens]
+    if not token_scores or min(token_scores) < 90:
+        return 0
+    return int(round(sum(token_scores) / float(len(token_scores) or 1)))
 
 
 def fuzzy_contains(text: str, keyword: str, threshold: int = 70) -> bool:
