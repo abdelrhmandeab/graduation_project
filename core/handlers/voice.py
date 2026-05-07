@@ -4,7 +4,7 @@ from audio import vad as vad_runtime
 from audio import wake_word as wake_word_runtime
 from audio.tts import speech_engine
 from core.logger import logger
-from core.metrics import metrics
+from core.metrics import latency_tracker, metrics
 from core.persona import persona_manager
 from core.session_memory import session_memory
 from os_control.action_log import log_action
@@ -593,8 +593,26 @@ def _format_latency_status():
                 )
             )
 
+    lt_report = latency_tracker.report()
+    if lt_report:
+        lines.append("budget_stage_metrics:")
+        for stage_name, stat in lt_report.items():
+            budget_ms = float(stat.get("budget_ms") or 0.0)
+            avg_ms = float(stat.get("avg_ms") or 0.0)
+            over = budget_ms > 0 and avg_ms > budget_ms
+            suffix = " [OVER BUDGET]" if over else ""
+            lines.append(
+                (
+                    f"- {stage_name}: count={stat['count']}, "
+                    f"avg={avg_ms:.0f}ms, "
+                    f"p50={float(stat.get('p50_ms') or 0.0):.0f}ms, "
+                    f"p95={float(stat.get('p95_ms') or 0.0):.0f}ms, "
+                    f"budget={budget_ms:.0f}ms{suffix}"
+                )
+            )
+
     lines.append("Hint: use 'latency mode fast' for lower endpoint and phase transition delay.")
-    return "\n".join(lines), {"audio_ux_profile": _ACTIVE_AUDIO_UX_PROFILE, "stages": stages}
+    return "\n".join(lines), {"audio_ux_profile": _ACTIVE_AUDIO_UX_PROFILE, "stages": stages, "budget_stages": lt_report}
 
 
 def _format_wake_status():

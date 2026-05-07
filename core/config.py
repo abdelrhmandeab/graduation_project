@@ -63,6 +63,13 @@ MAX_RECORD_DURATION = max(3.0, min(20.0, _env_float("JARVIS_MAX_RECORD_DURATION"
 AUDIO_CHUNK_SIZE = 1024
 INPUT_AUDIO_FILE = _project_path("input.wav")
 VAD_ENERGY_THRESHOLD = _env_float("JARVIS_VAD_ENERGY_THRESHOLD", 0.014)
+VAD_BACKEND = _env("JARVIS_VAD_BACKEND", "silero")  # "silero" | "energy"
+VAD_SILERO_THRESHOLD = _env_float("JARVIS_VAD_SILERO_THRESHOLD", 0.5)
+# Minimum intent confidence (0–1) before a partial transcript is eligible for
+# early execution.  The system's assess_intent_confidence typically scores
+# well-formed commands in the 0.80–0.88 range, so 0.82 is a practical floor
+# that still rejects ambiguous partials while letting clear commands fire early.
+EARLY_EXEC_CONFIDENCE_THRESHOLD = _env_float("JARVIS_EARLY_EXEC_CONFIDENCE_THRESHOLD", 0.78)
 VAD_COMMAND_SILENCE_SECONDS = _env_float("JARVIS_VAD_COMMAND_SILENCE_SECONDS", 0.50)
 VAD_CHAT_SILENCE_SECONDS = _env_float("JARVIS_VAD_CHAT_SILENCE_SECONDS", 1.50)
 VAD_SILENCE_SECONDS = _env_float("JARVIS_VAD_SILENCE_SECONDS", VAD_COMMAND_SILENCE_SECONDS)
@@ -133,7 +140,7 @@ if STT_BACKEND not in {"hybrid_elevenlabs", "faster_whisper"}:
 ELEVENLABS_BASE_URL = _env("ELEVENLABS_BASE_URL", "https://api.elevenlabs.io").strip() or "https://api.elevenlabs.io"
 ELEVENLABS_API_KEY = _env("ELEVENLABS_API_KEY", "").strip()
 
-STT_LANGUAGE_DETECT_MODEL = _env("JARVIS_STT_LANGUAGE_DETECT_MODEL", "base").strip() or "base"
+STT_LANGUAGE_DETECT_MODEL = _env("JARVIS_STT_LANGUAGE_DETECT_MODEL", "tiny").strip() or "tiny"
 STT_MIXED_TREAT_AS_ARABIC = _env_bool("JARVIS_STT_MIXED_TREAT_AS_ARABIC", True)
 
 STT_ELEVENLABS_ENABLED = _env_bool("JARVIS_STT_ELEVENLABS_ENABLED", True)
@@ -173,8 +180,10 @@ LLM_CPU_UPGRADE_MAX_LATENCY_SECONDS = max(0.5, _env_float("JARVIS_LLM_CPU_UPGRAD
 LLM_REALTIME_REWRITE_ENABLED = _env_bool("JARVIS_LLM_REALTIME_REWRITE_ENABLED", False)
 LLM_APPEND_SOURCE_CITATIONS = True
 
-# NLU (Phase 1)
+# NLU (Phase 1 + Phase 2)
 NLU_INTENT_ROUTING_ENABLED = _env_bool("JARVIS_NLU_INTENT_ROUTING_ENABLED", True)
+NLU_ENTITY_EXTRACTION_ENABLED = _env_bool("JARVIS_NLU_ENTITY_EXTRACTION_ENABLED", True)
+RESPONSE_SHAPER_ENABLED = _env_bool("JARVIS_RESPONSE_SHAPER_ENABLED", True)
 NLU_INTENT_CONFIDENCE_THRESHOLD = _env_float("JARVIS_NLU_INTENT_CONFIDENCE_THRESHOLD", 0.75)
 NLU_PARSER_FASTPATH_ENABLED = _env_bool("JARVIS_NLU_PARSER_FASTPATH_ENABLED", True)
 NLU_PARSER_FASTPATH_CONFIDENCE_FLOOR = _env_float("JARVIS_NLU_PARSER_FASTPATH_CONFIDENCE_FLOOR", 0.55)
@@ -283,6 +292,28 @@ BARGE_IN_VAD_GRACE_SECONDS = max(
     0.0,
     _env_float("JARVIS_BARGE_IN_VAD_GRACE_SECONDS", 0.6),
 )
+# Echo-rejection ratio: mic_rms must exceed (tts_rms * ratio) to be counted as
+# real speech rather than speaker echo.  1.8 works well in typical rooms;
+# increase toward 2.5 in very echoey spaces.
+BARGE_IN_ENERGY_RATIO = max(1.0, _env_float("JARVIS_BARGE_IN_ENERGY_RATIO", 1.8))
+# Post-interrupt cooldown (seconds). The monitor stays silent for this period
+# after firing so echo decay cannot re-trigger a second barge-in.
+BARGE_IN_COOLDOWN_SECONDS = max(0.1, _env_float("JARVIS_BARGE_IN_COOLDOWN_SECONDS", 0.5))
+# Noise suppression via noisereduce (optional, adds ~50 ms per utterance).
+# Set JARVIS_NOISE_REDUCE_ENABLED=true in noisy environments (office, coffee shop).
+NOISE_REDUCE_ENABLED = _env_bool("JARVIS_NOISE_REDUCE_ENABLED", False)
+# Duration (seconds) of ambient silence recorded on startup to establish the
+# noise floor used in the echo-rejection formula.
+BASELINE_NOISE_CALIBRATION_SECONDS = max(0.5, _env_float("JARVIS_BASELINE_NOISE_CALIBRATION_SECONDS", 2.0))
+
+# Dialogue state machine — follow-up window
+# When enabled, Jarvis enters a FOLLOW_UP window after each response.  Within
+# that window the user can speak again without repeating the wake word.
+FOLLOWUP_ENABLED = _env_bool("JARVIS_FOLLOWUP_ENABLED", True)
+FOLLOWUP_WINDOW_SECONDS = max(3.0, _env_float("JARVIS_FOLLOWUP_WINDOW_SECONDS", 10.0))
+# Optional: play a short chime when Jarvis enters the follow-up window so the
+# user knows they can speak freely.  Disabled by default.
+FOLLOWUP_CHIME_ENABLED = _env_bool("JARVIS_FOLLOWUP_CHIME_ENABLED", False)
 
 # Persona
 PERSONA_DEFAULT = "assistant"

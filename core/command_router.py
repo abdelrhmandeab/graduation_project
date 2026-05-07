@@ -1,5 +1,6 @@
 import os
 import re
+import threading
 import time
 from collections import OrderedDict
 
@@ -28,7 +29,9 @@ from core.config import (
     LLM_RESPONSE_CACHE_MAX_QUERY_WORDS,
     LLM_RESPONSE_CACHE_MAX_SIZE,
     LLM_RESPONSE_CACHE_TTL_SECONDS,
+    NLU_ENTITY_EXTRACTION_ENABLED,
     NLU_LLM_QUERY_EXTRACTION_ENABLED,
+    RESPONSE_SHAPER_ENABLED,
     NLU_PARSER_FASTPATH_CONFIDENCE_FLOOR,
     NLU_PARSER_FASTPATH_ENABLED,
     NLU_INTENT_CONFIDENCE_THRESHOLD,
@@ -60,6 +63,7 @@ from core.logger import logger, log_structured
 from core.metrics import metrics
 from core.persona import persona_manager
 from core.response_templates import anti_repetition_prefixes, detect_language_hint, normalize_language, render_template
+from core.response_shaper import response_shaper
 from core.session_memory import session_memory
 from llm.ollama_client import ask_llm, ask_llm_streaming, get_runtime_lightweight_num_ctx, get_runtime_model_tier
 from llm.prompt_builder import build_prompt_package, build_lightweight_prompt, build_tool_augmented_prompt
@@ -72,6 +76,10 @@ try:
     from nlp.semantic_router import classify_semantic as _classify_semantic
 except Exception:
     _classify_semantic = None
+try:
+    from nlp.nlu import understand as _nlu_understand
+except Exception:
+    _nlu_understand = None
 from os_control.action_log import log_action, read_recent_actions
 from os_control.adapter_result import to_router_tuple
 from os_control.app_ops import (
@@ -147,6 +155,8 @@ _PARSER_FASTPATH_INTENTS = {
     "OS_FILE_SEARCH",
     "OS_FILE_NAVIGATION",
     "OS_SYSTEM_COMMAND",
+    "OS_TIMER",
+    "OS_REMINDER",
     "JOB_QUEUE_COMMAND",
     "VOICE_COMMAND",
     "MEMORY_COMMAND",
@@ -244,6 +254,26 @@ def _build_app_alias_lookup():
     pairs.sort(key=lambda p: -len(p[0]))
     _APP_NAME_LOOKUP_CACHE = pairs
     return _APP_NAME_LOOKUP_CACHE
+
+
+_SLOT_QUESTIONS: dict = {
+    ("OS_APP_OPEN", "app_name", "en"): "Which app would you like to open?",
+    ("OS_APP_OPEN", "app_name", "ar"): "أي تطبيق تريد تفتحه؟",
+    ("OS_APP_CLOSE", "app_name", "en"): "Which app would you like to close?",
+    ("OS_APP_CLOSE", "app_name", "ar"): "أي تطبيق تريد تقفله؟",
+    ("OS_TIMER", "seconds", "en"): "How long should the timer run?",
+    ("OS_TIMER", "seconds", "ar"): "التايمر على كام؟",
+    ("OS_FILE_SEARCH", "filename", "en"): "What file are you looking for?",
+    ("OS_FILE_SEARCH", "filename", "ar"): "بتدور على أي ملف؟",
+}
+
+
+def _build_slot_question(intent: str, slot: str, language: str) -> str:
+    lang = str(language or "").strip().lower()[:2]
+    key = (str(intent or "").strip().upper(), str(slot or "").strip().lower(), lang)
+    if key in _SLOT_QUESTIONS:
+        return _SLOT_QUESTIONS[key]
+    return "Could you clarify?" if lang != "ar" else "ممكن توضح أكتر؟"
 
 
 def _extract_app_name_from_text(source_text):
@@ -1595,11 +1625,37 @@ def _previous_turn_looks_live_data():
     return _looks_search_worthy_query(last_user)
 
 
+_pipeline_thread_local = threading.local()
+
+
+def inject_precomputed_live_context(context: str) -> None:
+    """Set pre-fetched live data for the current thread (called by ConcurrentPipeline)."""
+    _pipeline_thread_local.live_context = str(context or "")
+
+
+def clear_precomputed_live_context() -> None:
+    """Remove pre-fetched live data for the current thread after routing completes."""
+    try:
+        del _pipeline_thread_local.live_context
+    except AttributeError:
+        pass
+
+
+def looks_like_live_data_query(text: str) -> bool:
+    """Public wrapper so the orchestrator can detect live-data queries without importing private helpers."""
+    return bool(_looks_live_data_trigger_query(text))
+
+
 def _fetch_live_tool_context(query_text):
     """Try to fetch live data (weather + web search) for the query.
-    
+
     Returns context string or empty. Uses Phase 2 live data pipeline.
     """
+    # Use pre-fetched context injected by ConcurrentPipeline if available
+    precomputed = getattr(_pipeline_thread_local, "live_context", None)
+    if precomputed is not None:
+        return precomputed
+
     # Phase 2.1: Unified live data gathering (weather + web search)
     force_search = False
     if WEB_SEARCH_ENABLED:
@@ -2017,8 +2073,29 @@ def _finalize_success_response(response_text, parsed, language, original_text, t
     """
     _ = tone_meta, realtime
     text = str(response_text or "").strip()
+
+    intent_upper = str(getattr(parsed, "intent", "") or "").strip().upper()
+    action_lower = str(getattr(parsed, "action", "") or "").strip().lower()
+
+    if RESPONSE_SHAPER_ENABLED and intent_upper != "LLM_QUERY":
+        # Action intent: replace with bilingual template if one exists.
+        shaped = response_shaper.shape(
+            intent_upper,
+            action_lower,
+            dict(getattr(parsed, "args", None) or {}),
+            language,
+            llm_response=None,
+        )
+        if shaped:
+            text = shaped
+
     text = _repair_low_value_llm_response(text, parsed, language, original_text)
     text = _apply_egyptian_dialect_style(text, parsed, language)
+
+    if RESPONSE_SHAPER_ENABLED and intent_upper == "LLM_QUERY":
+        # LLM response: strip any residual markdown and cap sentence count.
+        text = response_shaper._trim_for_voice(text, language, max_sentences=4)
+
     text = _apply_persona_length_target(text, parsed)
     _record_response_quality(text, language, original_text)
     return text
@@ -2947,6 +3024,20 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
         subprocess.Popen(["cmd", "/c", "start", "", "ms-clock:"], shell=False)
         return True, "Opening Windows Clock — please set your timer there.", {}
 
+    if parsed.intent == "OS_REMINDER":
+        from os_control.reminder_ops import create_reminder, list_reminders, cancel_reminder
+        _rlang = "ar" if re.search(r"[؀-ۿ]", str(parsed.raw or "")) else "en"
+        if parsed.action == "create":
+            _msg = str(parsed.args.get("message") or "").strip()
+            _ts = str(parsed.args.get("time_str") or "").strip()
+            return True, create_reminder(_msg, _ts, language=_rlang), {}
+        if parsed.action == "list":
+            return True, list_reminders(language=_rlang), {}
+        if parsed.action == "cancel":
+            _rid = str(parsed.args.get("reminder_id") or "").strip()
+            return True, cancel_reminder(_rid, language=_rlang), {}
+        return False, "Unknown reminder action.", {}
+
     if parsed.intent == "OS_CLIPBOARD":
         if parsed.action == "read":
             return True, read_clipboard(), {}
@@ -3088,6 +3179,13 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
         and not bool(package.get("kb_context_used"))
         and not bool(package.get("memory_used"))
     )
+
+    # Inject voice constraint suffix before the ASSISTANT: marker.
+    # This steers the LLM toward 1-4 natural spoken sentences with no markdown.
+    if RESPONSE_SHAPER_ENABLED:
+        _voice_suffix = response_shaper.get_prompt_suffix(parsed.intent, tool_augmented, language)
+        if _voice_suffix:
+            package = {**package, "prompt": response_shaper.inject_suffix_into_prompt(package["prompt"], _voice_suffix)}
 
     cache_hit = False
     response = ""
@@ -3318,6 +3416,52 @@ def route_command(
 
     forced_parsed = None
     pending = session_memory.get_pending_clarification()
+
+    # Slot-fill handler: if the previous turn asked a missing-slot question,
+    # treat the current utterance as the slot value and re-dispatch.
+    if pending and pending.get("reason") == "missing_slot":
+        session_memory.clear_pending_clarification()
+        missing_slot = str(pending.get("missing_slot") or "")
+        saved_intent = str(pending.get("intent") or "LLM_QUERY")
+        saved_action = str(pending.get("action") or "")
+        saved_args = dict(pending.get("args") or {})
+        # Fill the slot with the current utterance, enriching via NLU first
+        if missing_slot and _nlu_understand is not None:
+            _slot_result = _nlu_understand(
+                effective_text,
+                language_result.language,
+                intent=saved_intent,
+                existing_args=saved_args,
+            )
+            saved_args.update(_slot_result.entities)
+        if missing_slot and not saved_args.get(missing_slot):
+            saved_args[missing_slot] = effective_text.strip()
+        filled_parsed = ParsedCommand(
+            intent=saved_intent,
+            raw=original_text,
+            normalized=" ".join(effective_text.lower().split()).strip(),
+            action=saved_action,
+            args=saved_args,
+        )
+        try:
+            success, response, dispatch_meta = _dispatch(filled_parsed, on_sentence=on_sentence)
+        except Exception as exc:
+            logger.error("Slot-fill dispatch failed: %s", exc)
+            success, response, dispatch_meta = False, "Sorry, I had an internal error.", {}
+        latency = time.perf_counter() - start
+        meta = {"language": language_result.language, "slot_fill_resolved": True}
+        if dispatch_meta:
+            meta.update(dispatch_meta)
+        metrics.record_command(filled_parsed.intent, success, latency, language=language_result.language)
+        _update_short_term_context(filled_parsed, success, response, meta)
+        if success:
+            response = _finalize_success_response(
+                response, filled_parsed, language_result.language, original_text, tone_meta, realtime=realtime,
+            )
+            if _should_store_turn(filled_parsed, response):
+                session_memory.add_turn(original_text, response, language=language_result.language, intent=filled_parsed.intent)
+        return _format_demo_output(filled_parsed, success, response, meta)
+
     if not pending:
         recent_resolution = session_memory.recent_clarification_resolution(
             max_age_seconds=CLARIFICATION_CORRECTION_WINDOW_SECONDS
@@ -3559,6 +3703,26 @@ def route_command(
     parsed = forced_parsed
     parser_candidate = forced_parsed or precomputed_parser_candidate or parse_command(effective_text)
     parser_candidate.raw = original_text
+
+    # Quick-calc fast path: resolve math expressions before any routing tier or LLM.
+    # Only runs when the parser didn't recognise a structured command (LLM_QUERY).
+    if parsed is None and str(getattr(parser_candidate, "intent", "") or "") in ("LLM_QUERY", ""):
+        try:
+            from tools.calculator import quick_calc, to_arabic_numerals
+            _calc_result = quick_calc(effective_text)
+            if _calc_result is not None:
+                _lang = language_result.language
+                if _lang == "ar":
+                    _ar = to_arabic_numerals(_calc_result)
+                    _calc_response = f"الإجابة هي {_ar}."
+                else:
+                    _calc_response = f"The answer is {_calc_result}."
+                latency = time.perf_counter() - start
+                metrics.record_command("QUICK_CALC", True, latency, language=_lang)
+                return _calc_response
+        except Exception:
+            pass
+
     parser_fastpath_assessment = None
     nlu_meta = {
         "nlu_fastpath": False,
@@ -3607,31 +3771,96 @@ def route_command(
 
     if parsed is None and _should_try_tool_tier(original_text, parser_candidate):
         tool_result = call_tool_tier(original_text, model_name=None)
-        parsed_tool_commands = tool_calls_to_parsed_commands(tool_result.get("tool_calls") or [], original_text)
+        raw_tool_calls = tool_result.get("tool_calls") or []
+        parsed_tool_commands = tool_calls_to_parsed_commands(raw_tool_calls, original_text)
         if parsed_tool_commands:
-            tool_messages = []
             tool_meta = {
                 "tool_tier_used": True,
-                "tool_tier_tool_calls": list(tool_result.get("tool_calls") or []),
+                "tool_tier_tool_calls": list(raw_tool_calls),
             }
-            success = True
-            for tool_parsed in parsed_tool_commands:
+            if len(raw_tool_calls) > 1:
+                # Multi-step: ActionPlanner resolves {result_N} references so
+                # the output of one step can flow into the next (e.g. search a
+                # file then open its folder).
+                from core.action_planner import ActionPlanner
+                planner = ActionPlanner(
+                    executor=lambda p: _dispatch(
+                        p,
+                        allow_batch=False,
+                        allow_job_queue=False,
+                        allow_llm=False,
+                    )
+                )
+                success, response, _ = planner.plan_and_execute(
+                    raw_tool_calls, original_text, language
+                )
+                return success, response, tool_meta
+            else:
+                # Single tool call — direct dispatch, no planner overhead.
                 tool_success, tool_message, dispatch_meta = _dispatch(
-                    tool_parsed,
+                    parsed_tool_commands[0],
                     allow_batch=False,
                     allow_job_queue=False,
                     allow_llm=False,
                 )
-                success = success and bool(tool_success)
-                if tool_message:
-                    tool_messages.append(str(tool_message))
                 if dispatch_meta:
                     tool_meta.update(dispatch_meta)
-            return success, "\n".join(message for message in tool_messages if message).strip(), tool_meta
+                return bool(tool_success), str(tool_message or ""), tool_meta
 
     if parsed is None:
         # Tier 4: Fall through to parser candidate (LLM_QUERY → LLM fallback)
         parsed = parser_candidate
+
+    # NLU entity enrichment: fill missing entities and detect unfilled required slots.
+    # Only runs for non-LLM intents where entity extraction is meaningful.
+    _nlu_intent = str(getattr(parsed, "intent", "") or "").strip().upper()
+    if (
+        NLU_ENTITY_EXTRACTION_ENABLED
+        and _nlu_understand is not None
+        and _nlu_intent not in ("LLM_QUERY", "")
+    ):
+        try:
+            _nlu_result = _nlu_understand(
+                original_text,
+                language_result.language,
+                intent=_nlu_intent,
+                existing_args=dict(parsed.args or {}),
+            )
+            # Enrich parsed.args with any newly extracted entities
+            for _slot_key, _slot_val in _nlu_result.entities.items():
+                if _slot_key not in parsed.args or not parsed.args[_slot_key]:
+                    parsed.args[_slot_key] = _slot_val
+            nlu_meta["nlu_entities"] = dict(_nlu_result.entities)
+            nlu_meta["nlu_missing_slots"] = list(_nlu_result.missing_slots)
+            # Missing required slot → ask a targeted follow-up question
+            if _nlu_result.missing_slots:
+                _first_missing = _nlu_result.missing_slots[0]
+                _slot_q = _build_slot_question(_nlu_intent, _first_missing, language_result.language)
+                session_memory.set_pending_clarification({
+                    "reason": "missing_slot",
+                    "intent": _nlu_intent,
+                    "action": str(getattr(parsed, "action", "") or ""),
+                    "source_text": original_text,
+                    "missing_slot": _first_missing,
+                    "args": dict(parsed.args or {}),
+                    "prompt": _slot_q,
+                    "options": [],
+                    "attempts": 0,
+                })
+                latency = time.perf_counter() - start
+                metrics.record_command("SLOT_FILLING", False, latency, language=language_result.language)
+                log_structured(
+                    "route_slot_fill_requested",
+                    level="info",
+                    language=language_result.language,
+                    intent=_nlu_intent,
+                    missing_slot=_first_missing,
+                    latency_ms=latency * 1000.0,
+                    user_text=_truncate_text(original_text),
+                )
+                return _slot_q
+        except Exception as _nlu_exc:
+            logger.warning("NLU entity enrichment failed: %s", _nlu_exc)
 
     assessment = (
         parser_fastpath_assessment

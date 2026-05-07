@@ -272,23 +272,27 @@ def _transcribe_with_faster_whisper(
     audio_file: str,
     language_hint: Optional[str] = None,
     on_partial: Optional[Callable[[str], None]] = None,
+    *,
+    whisper_kwargs: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     model = _get_local_whisper_model()
 
     hint = _normalize_detected_language(language_hint or _runtime_language_hint())
     whisper_language = None
-    # Pin Arabic to keep dialect-stable transcription; leave English unpinned
-    # so that Arabic speech misdetected as English by the tiny detection model
-    # is not forcibly transcribed in English (which produces garbage).
-    if hint == "ar":
+    # Pin the detected language when we have a strong signal. This improves
+    # English quality significantly versus leaving faster-whisper in auto mode.
+    if hint in {"ar", "en"}:
         whisper_language = hint
 
+    extra: Dict[str, Any] = dict(whisper_kwargs or {})
     segments, info = model.transcribe(
         str(audio_file),
-        beam_size=5,
-        vad_filter=True,
-        language=whisper_language,
+        beam_size=extra.pop("beam_size", 5),
+        vad_filter=extra.pop("vad_filter", True),
+        language=extra.pop("language", whisper_language),
+        initial_prompt=extra.pop("initial_prompt", None),
         condition_on_previous_text=False,
+        **extra,
     )
 
     parts: List[str] = []
@@ -527,12 +531,16 @@ def transcribe_backend_direct_with_meta(
     backend: str,
     language_hint: Optional[str] = None,
     on_partial: Optional[Callable[[str], None]] = None,
+    *,
+    whisper_kwargs: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     normalized_backend = _normalize_backend_name(backend)
     start = time.perf_counter()
 
     if normalized_backend == _LOCAL_BACKEND:
-        result = _transcribe_with_faster_whisper(audio_file, language_hint=language_hint, on_partial=on_partial)
+        result = _transcribe_with_faster_whisper(
+            audio_file, language_hint=language_hint, on_partial=on_partial, whisper_kwargs=whisper_kwargs
+        )
     else:
         result = _transcribe_with_hybrid_elevenlabs(audio_file, language_hint=language_hint, on_partial=on_partial)
 
@@ -546,6 +554,8 @@ def transcribe_streaming_with_meta(
     audio_file: str,
     on_partial: Optional[Callable[[str], None]] = None,
     language_hint: Optional[str] = None,
+    *,
+    whisper_kwargs: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     global _LAST_TRANSCRIPTION_META
 
@@ -563,6 +573,7 @@ def transcribe_streaming_with_meta(
                 backend,
                 language_hint=language_hint,
                 on_partial=on_partial,
+                whisper_kwargs=whisper_kwargs,
             )
             if backend != preferred_backend:
                 result["fallback_used"] = True
@@ -613,5 +624,15 @@ def transcribe(audio_file: str, language_hint: Optional[str] = None) -> str:
     return transcribe_streaming(audio_file, on_partial=None, language_hint=language_hint)
 
 
+import re as _re  # noqa: E402 – module-level import kept at bottom for minimal diff
+
+_ARABIC_DIACRITICS_RE = _re.compile(r"[ً-ٰٟ]")
+_ALEF_VARIANTS_RE = _re.compile(r"[أإآٱ]")
+
+
 def normalize_arabic_post_transcript(text: str) -> str:
-    return " ".join(str(text or "").split()).strip()
+    """Strip tashkeel, normalize alef variants, collapse whitespace."""
+    t = str(text or "")
+    t = _ARABIC_DIACRITICS_RE.sub("", t)   # remove harakat / tashkeel
+    t = _ALEF_VARIANTS_RE.sub("ا", t)      # أ إ آ ٱ → ا
+    return " ".join(t.split()).strip()

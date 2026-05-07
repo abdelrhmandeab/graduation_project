@@ -178,7 +178,10 @@ _DURATION_UNIT_SECONDS = {
     "hours": 3600,
     "ساعة": 3600,
     "ساعات": 3600,
+    "ساعه": 3600,
 }
+# Egyptian Arabic fraction words used as duration quantities
+_AR_DURATION_FRACTIONS = {"نص": 0.5, "ربع": 0.25}
 _NUMBER_ONES = {
     "zero": 0,
     "one": 1,
@@ -430,7 +433,8 @@ def _parse_spoken_int(value):
     if isinstance(value, (int, float)):
         return int(float(value))
 
-    text = _normalize_for_match(str(value or ""))
+    from nlp.codeswitching import convert_arabic_numerals
+    text = _normalize_for_match(convert_arabic_numerals(str(value or "")))
     if not text:
         return None
 
@@ -465,7 +469,11 @@ def _parse_spoken_int(value):
 def _duration_to_seconds(number_value, unit_text):
     number = _parse_spoken_int(number_value)
     if number is None:
-        return None
+        frac_key = _normalize_for_match(str(number_value or ""))
+        frac_val = _AR_DURATION_FRACTIONS.get(frac_key)
+        if frac_val is None:
+            return None
+        number = frac_val
     unit = _normalize_for_match(unit_text)
     factor = _DURATION_UNIT_SECONDS.get(unit, 1)
     return max(1, min(86400, int(number * factor)))
@@ -522,10 +530,11 @@ def _normalize_language_value(value: str):
 
 
 def _try_codeswitched_command(raw, normalized):
-    intent_lang, entity_lang, entities = normalize_codeswitched(raw)
-    intent = str((entities or {}).get("intent") or "").strip().lower()
-    entity = str((entities or {}).get("entity") or "").strip()
+    cs = normalize_codeswitched(raw)
+    intent = str((cs or {}).get("intent") or "").strip().lower()
+    entity = str((cs or {}).get("entity") or "").strip()
     entity_normalized = _normalize_for_match(entity)
+    entities = cs  # alias for legacy references below
 
     if not intent or not entity:
         return None
@@ -589,6 +598,36 @@ def _try_codeswitched_command(raw, normalized):
     if intent in {"stop", "mute"} and entity_normalized in {"music", "musiqa", "mزيكا", "الموسيقى", "المزيكا", "media"}:
         return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "media_stop"})
 
+    if intent in {"increase", "decrease", "set"}:
+        _volume_targets = {"volume", "الصوت", "الفوليم", "صوت"}
+        _brightness_targets = {"brightness", "السطوع", "سطوع"}
+        numbers = (cs or {}).get("numbers") or []
+        level = int(numbers[0]) if numbers else None
+        if entity_normalized in _volume_targets or entity in _volume_targets:
+            if intent == "increase":
+                return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized,
+                                     args={"action_key": "volume_up",
+                                           **({} if level is None else {"volume_level": level})})
+            if intent == "decrease":
+                return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized,
+                                     args={"action_key": "volume_down",
+                                           **({} if level is None else {"volume_level": level})})
+            if intent == "set" and level is not None:
+                return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized,
+                                     args={"action_key": "volume_set", "volume_level": level})
+        if entity_normalized in _brightness_targets or entity in _brightness_targets:
+            if intent == "increase":
+                return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized,
+                                     args={"action_key": "brightness_up",
+                                           **({} if level is None else {"brightness_level": level})})
+            if intent == "decrease":
+                return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized,
+                                     args={"action_key": "brightness_down",
+                                           **({} if level is None else {"brightness_level": level})})
+            if intent == "set" and level is not None:
+                return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized,
+                                     args={"action_key": "brightness_set", "brightness_level": level})
+
     return None
 
 
@@ -630,6 +669,9 @@ _KEYWORD_TABLE = [
             "الاستجابة عاملة ايه",
             "التاخير عامل ايه",
             "التأخير عامل ايه",
+            "اظهر الوقت",
+            "وريني الوقت",
+            "وريني التأخير",
         },
         "VOICE_COMMAND",
         "latency_status",
@@ -905,6 +947,39 @@ _KEYWORD_TABLE = [
         },
         "OS_FILE_NAVIGATION",
         "list_drives",
+    ),
+    # Reminders — list
+    (
+        {
+            "show reminders",
+            "list reminders",
+            "my reminders",
+            "active reminders",
+            "وريني التذكيرات",
+            "وريني التذكيرات بتاعتي",
+            "التذكيرات",
+            "التذكيرات النشطة",
+            "ايه التذكيرات",
+            "عندي تذكيرات ايه",
+        },
+        "OS_REMINDER",
+        "list",
+    ),
+    # Reminders — cancel
+    (
+        {
+            "cancel reminder",
+            "cancel the reminder",
+            "delete reminder",
+            "remove reminder",
+            "الغي التذكير",
+            "امسح التذكير",
+            "شيل التذكير",
+            "الغيلي التذكير",
+            "مسح التذكير",
+        },
+        "OS_REMINDER",
+        "cancel",
     ),
 ]
 
@@ -1576,6 +1651,74 @@ _REGEX_TABLE = [
         "set",
         lambda m: {"seconds": _duration_to_seconds(m.group(1), m.group(2)), "label": "Timer"},
     ),
+    # Reminder — English, time before message:
+    #   "remind me at 3pm to call Ahmed", "remind me in 2 hours to take meds",
+    #   "remind me tomorrow at 9 to wake up"
+    (
+        re.compile(
+            r"^(?:remind(?:\s+me)?|set\s+(?:a\s+)?reminder)\s+"
+            r"((?:tomorrow\s+)?(?:at|in|by)\s+.+?)\s+to\s+(.+)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_REMINDER",
+        "create",
+        lambda m: {"time_str": m.group(1).strip(), "message": m.group(2).strip()},
+    ),
+    # Reminder — English, message before time:
+    #   "remind me to call Ahmed at 3pm", "remind me to take meds in 2 hours"
+    (
+        re.compile(
+            r"^(?:remind(?:\s+me)?|set\s+(?:a\s+)?reminder)\s+to\s+(.+?)\s+"
+            r"((?:tomorrow\s+)?(?:at|in)\s+.+)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_REMINDER",
+        "create",
+        lambda m: {"time_str": m.group(2).strip(), "message": m.group(1).strip()},
+    ),
+    # Reminder — English, message only (no time) — dispatcher returns "when?" prompt
+    (
+        re.compile(
+            r"^(?:remind(?:\s+me)?|set\s+(?:a\s+)?reminder)\s+to\s+(.+)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_REMINDER",
+        "create",
+        lambda m: {"time_str": "", "message": m.group(1).strip()},
+    ),
+    # Reminder — Arabic wall-clock time:
+    #   "فكرني الساعة ٣ أكلم أحمد", "فكرني بكرة الساعة ٩ أصحى"
+    (
+        re.compile(
+            r"^(?:فكرني|فكّرني|ذكرني|ذكّرني|نبهني|نبّهني)\s+"
+            r"((?:بكرة\s+|بكره\s+)?(?:الساعة|الساعه|ساعه?)\s+[\d٠-٩]+(?:[:.،,][\d٠-٩]+)?\s*"
+            r"(?:صباحاً|صباحا|صبح|ص|مساءً|مساءا|مساء|م)?)\s+"
+            r"(.+)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_REMINDER",
+        "create",
+        lambda m: {"time_str": m.group(1).strip(), "message": m.group(2).strip()},
+    ),
+    # Reminder — Arabic relative time:
+    #   "فكرني بعد ساعتين أكلم أحمد", "فكرني بعد ٣٠ دقيقة أاخد الدواء"
+    (
+        re.compile(
+            r"^(?:فكرني|فكّرني|ذكرني|ذكّرني|نبهني|نبّهني)\s+"
+            r"(بعد\s+(?:[\d٠-٩]+(?:\.\d+)?|نص|ربع|ساعتين)\s*"
+            r"(?:ثانية|ثواني|دقيقة|دقائق|دقايق|ساعة|ساعات|ساعه)?)\s+"
+            r"(.+)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_REMINDER",
+        "create",
+        lambda m: {"time_str": m.group(1).strip(), "message": m.group(2).strip()},
+    ),
     # Clipboard — "copy this: {text}", "انسخ: {text}"
     (
         re.compile(
@@ -1987,13 +2130,11 @@ def _try_app_catalog_refresh_command(raw, normalized):
 
 
 def _try_natural_schedule_command(raw, normalized):
+    # Note: "remind me in N unit to X" is intentionally excluded here — it is
+    # handled earlier by the OS_REMINDER regex patterns in _REGEX_TABLE.
     patterns = (
         re.compile(
             r"^(?:in|after)\s+(.+?)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)\s+(.+)$",
-            re.IGNORECASE,
-        ),
-        re.compile(
-            r"^remind\s+me\s+in\s+(.+?)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)\s+to\s+(.+)$",
             re.IGNORECASE,
         ),
         re.compile(

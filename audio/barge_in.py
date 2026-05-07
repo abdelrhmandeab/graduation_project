@@ -42,6 +42,7 @@ else:
     _SOUNDDEVICE_IMPORT_ERROR = None
 
 from core.config import (
+    BARGE_IN_COOLDOWN_SECONDS,
     BARGE_IN_VAD_ENABLED,
     BARGE_IN_VAD_ENERGY_THRESHOLD,
     BARGE_IN_VAD_GRACE_SECONDS,
@@ -52,8 +53,25 @@ from core.config import (
 from core.logger import logger
 
 _MONITOR_BLOCK_SAMPLES = 480  # 30 ms @ 16 kHz — small enough for a tight reaction
-_POST_INTERRUPT_COOLDOWN_SECONDS = 0.5
-_ECHO_CANCEL_RATIO = 1.5  # mic_rms must exceed tts_rms * ratio to count as real speech
+_POST_INTERRUPT_COOLDOWN_SECONDS = float(BARGE_IN_COOLDOWN_SECONDS)
+
+# Module-level event used to signal the wake-word listener that a barge-in
+# occurred and it should exit immediately so the orchestrator can start
+# recording the user's utterance without requiring a new wake word.
+_barge_in_wake_event = threading.Event()
+
+
+def notify_barge_in_wake() -> None:
+    """Signal that barge-in fired; wake-word loop should exit and start recording."""
+    _barge_in_wake_event.set()
+
+
+def consume_barge_in_wake() -> bool:
+    """Return True and clear the flag if a barge-in wake signal is pending."""
+    if _barge_in_wake_event.is_set():
+        _barge_in_wake_event.clear()
+        return True
+    return False
 
 
 class BargeInMonitor:
@@ -160,9 +178,18 @@ class BargeInMonitor:
                     rms = float(np.sqrt(np.mean(np.square(samples_float))))
 
                     # Echo cancellation: reject blocks where the mic is just
-                    # mirroring TTS speaker output.
+                    # mirroring TTS speaker output.  Use adaptive ratio +
+                    # baseline noise offset from the echo_cancel module.
                     tts_rms = self._get_tts_rms()
-                    if tts_rms > 0.0 and rms < tts_rms * _ECHO_CANCEL_RATIO:
+                    try:
+                        from audio.echo_cancel import baseline_noise, echo_ratio_adapter
+                        _echo_threshold = baseline_noise.adjusted_echo_threshold(
+                            tts_rms, echo_ratio_adapter.get_current_ratio()
+                        )
+                    except Exception:
+                        from core.config import BARGE_IN_ENERGY_RATIO
+                        _echo_threshold = tts_rms * float(BARGE_IN_ENERGY_RATIO)
+                    if tts_rms > 0.0 and rms < _echo_threshold:
                         voiced_blocks = 0
                         voiced_samples.clear()
                         continue
@@ -188,10 +215,19 @@ class BargeInMonitor:
                                     voiced_blocks,
                                     "silero" if silero_vad is not None else "energy",
                                 )
+                                # Auto-calibrate echo ratio from this real event.
+                                try:
+                                    from audio.echo_cancel import echo_ratio_adapter
+                                    echo_ratio_adapter.record_interrupt_event(rms, tts_rms)
+                                except Exception:
+                                    pass
                                 try:
                                     self._on_barge_in()
                                 except Exception as exc:
                                     logger.warning("Barge-in callback raised: %s", exc)
+                                # Signal the wake-word loop to exit so the
+                                # orchestrator can record the user's utterance.
+                                notify_barge_in_wake()
                                 # Cooldown: hold the thread alive so the monitor
                                 # cannot re-fire during the interrupt tail.
                                 time.sleep(_POST_INTERRUPT_COOLDOWN_SECONDS)

@@ -1,9 +1,10 @@
 import pathlib
+import threading
 import urllib.request
 import wave
 
 import numpy as np
-from core.config import SAMPLE_RATE, VAD_ENERGY_THRESHOLD
+from core.config import SAMPLE_RATE, VAD_BACKEND, VAD_ENERGY_THRESHOLD, VAD_SILERO_THRESHOLD
 from core.logger import logger
 
 try:
@@ -158,6 +159,22 @@ class SileroVAD:
         self._context = np.zeros((1, self.context_size), dtype=np.float32)
         return self
 
+    def is_ready(self) -> bool:
+        return self._session is not None
+
+    def is_speech_chunk(self, audio_chunk_int16: np.ndarray) -> bool:
+        """Process a single streaming chunk (512 int16 samples at 16 kHz → 32 ms)."""
+        chunk = np.asarray(audio_chunk_int16, dtype=np.int16).reshape(-1)
+        if chunk.size == 0:
+            return False
+        audio = chunk.astype(np.float32) / 32768.0
+        if _compute_rms(audio) < float(self.energy_threshold):
+            return False
+        if self._fallback_only or self._session is None:
+            return True
+        result = self._run_silero_window(audio)
+        return bool(result) if result is not None else True
+
     def _run_silero_window(self, window_float):
         if self._session is None:
             return None
@@ -219,5 +236,48 @@ class SileroVAD:
         return detected
 
 
-def is_speech(audio_path):
-    return _energy_fallback_is_speech(audio_path)
+def should_run_vad(audio_chunk: np.ndarray, energy_threshold: float = 0.015) -> bool:
+    """Return True if the chunk has enough energy to warrant Silero inference."""
+    audio = np.asarray(audio_chunk)
+    if audio.size == 0:
+        return False
+    if audio.dtype == np.int16:
+        audio = audio.astype(np.float32) / 32768.0
+    else:
+        audio = audio.astype(np.float32, copy=False)
+    return _compute_rms(audio) >= max(0.001, float(energy_threshold))
+
+
+_batch_vad: "SileroVAD | None" = None
+_batch_vad_lock = threading.Lock()
+
+
+def _get_batch_vad() -> "SileroVAD":
+    global _batch_vad
+    if _batch_vad is None:
+        with _batch_vad_lock:
+            if _batch_vad is None:
+                backend = str(VAD_BACKEND or "silero").strip().lower()
+                if backend == "energy":
+                    _batch_vad = SileroVAD.__new__(SileroVAD)
+                    _batch_vad.sample_rate = int(SAMPLE_RATE or 16000)
+                    _batch_vad.threshold = float(VAD_SILERO_THRESHOLD)
+                    _batch_vad.energy_threshold = _ENERGY_FALLBACK_THRESHOLD
+                    _batch_vad.window_size_samples = 512
+                    _batch_vad.context_size = 64
+                    _batch_vad.model_path = _DEFAULT_SILERO_MODEL_PATH
+                    _batch_vad.model_url = _DEFAULT_SILERO_MODEL_URL
+                    _batch_vad._session = None
+                    _batch_vad._state = np.zeros((2, 1, 128), dtype=np.float32)
+                    _batch_vad._context = np.zeros((1, 64), dtype=np.float32)
+                    _batch_vad._fallback_only = True
+                else:
+                    _batch_vad = SileroVAD(threshold=float(VAD_SILERO_THRESHOLD))
+    return _batch_vad
+
+
+def is_speech(audio_path) -> bool:
+    """Batch speech detection for a WAV file. Uses SileroVAD if available."""
+    vad = _get_batch_vad()
+    vad.reset()
+    return vad.is_speech(audio_path)

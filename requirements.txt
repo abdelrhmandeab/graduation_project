@@ -60,3 +60,7 @@ watchdog>=3.0.0
 
 # Windows COM integrations (Outlook draft/calendar + Search Index acceleration)
 pywin32>=306; platform_system == "Windows"
+
+# --- Optional noise suppression (set JARVIS_NOISE_REDUCE_ENABLED=true to activate) ---
+# noisereduce>=3.0.0  # stationary noise suppression before STT; adds ~50 ms per utterance
+# scipy>=1.13.0       # required by noisereduce

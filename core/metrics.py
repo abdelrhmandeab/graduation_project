@@ -1,6 +1,10 @@
+import logging
 import threading
 import time
 import re
+from collections import OrderedDict
+
+_logger = logging.getLogger("jarvis")
 
 
 def _percentile(values, p):
@@ -851,3 +855,78 @@ class Metrics:
 
 
 metrics = Metrics()
+
+
+class LatencyTracker:
+    """Per-stage latency recorder with budget enforcement.
+
+    Records durations for named pipeline stages and warns when a stage
+    exceeds its budget.  Thread-safe.  Module-level singleton: ``latency_tracker``.
+    """
+
+    _budgets: dict = {
+        "wake_to_stt_start": 0.1,
+        "stt_partial_latency": 0.5,
+        "stt_total": 1.0,
+        "intent_detection": 0.02,
+        "action_execution": 0.1,
+        "llm_first_token": 1.5,
+        "tts_first_word": 0.3,
+        "e2e_command": 1.5,
+        "e2e_llm_query": 4.0,
+    }
+
+    def __init__(self) -> None:
+        self._stages: OrderedDict = OrderedDict()
+        self._lock = threading.Lock()
+
+    def record(self, stage: str, duration_seconds: float) -> None:
+        """Append a duration for *stage*; warn if it exceeds the stage budget."""
+        key = str(stage or "").strip()
+        if not key:
+            return
+        duration = max(0.0, float(duration_seconds))
+        with self._lock:
+            if key not in self._stages:
+                self._stages[key] = []
+            self._stages[key].append(duration)
+        budget = self._budgets.get(key)
+        if budget is not None and duration > budget:
+            _logger.warning(
+                "LatencyTracker: stage '%s' took %.0fms (budget: %.0fms)",
+                key,
+                duration * 1000,
+                budget * 1000,
+            )
+
+    def report(self) -> dict:
+        """Return per-stage stats: count/avg_ms/p50_ms/p95_ms/max_ms/budget_ms."""
+        with self._lock:
+            snapshot = {k: list(v) for k, v in self._stages.items()}
+        result: dict = {}
+        for stage, durations in snapshot.items():
+            if not durations:
+                continue
+            sorted_d = sorted(durations)
+            count = len(sorted_d)
+            avg_ms = (sum(sorted_d) / count) * 1000
+            p50_ms = (_percentile(sorted_d, 50) or 0.0) * 1000
+            p95_ms = (_percentile(sorted_d, 95) or 0.0) * 1000
+            max_ms = sorted_d[-1] * 1000
+            budget_ms = (self._budgets.get(stage) or 0.0) * 1000
+            result[stage] = {
+                "count": count,
+                "avg_ms": round(avg_ms, 1),
+                "p50_ms": round(p50_ms, 1),
+                "p95_ms": round(p95_ms, 1),
+                "max_ms": round(max_ms, 1),
+                "budget_ms": round(budget_ms, 1),
+            }
+        return result
+
+    def reset(self) -> None:
+        with self._lock:
+            self._stages = OrderedDict()
+
+
+latency_tracker = LatencyTracker()

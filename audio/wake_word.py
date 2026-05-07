@@ -15,6 +15,8 @@ except Exception as exc:
 else:
     _SOUNDDEVICE_IMPORT_ERROR = None
 
+from audio.barge_in import consume_barge_in_wake
+from core.dialogue_manager import consume_follow_up_wake
 from core.config import (
     BARGE_IN_INTERRUPT_ON_WAKE,
     SAMPLE_RATE,
@@ -403,6 +405,15 @@ def listen_for_wake_word():
                 maxlen=max(1, int(round((_WAKE_SAMPLE_CAPTURE_SECONDS * SAMPLE_RATE) / float(WAKE_WORD_CHUNK_SIZE)))),
             )
             while True:
+                # Exit immediately when the VAD barge-in monitor already captured
+                # user speech — no need for a new wake word.
+                if consume_barge_in_wake():
+                    return "barge_in"
+                # Exit immediately when the dialogue manager has opened a
+                # follow-up window — the orchestrator will record directly.
+                if consume_follow_up_wake():
+                    return "follow_up"
+
                 audio_chunk, _ = stream.read(WAKE_WORD_CHUNK_SIZE)
                 audio_chunk = np.asarray(audio_chunk).reshape(-1).astype(np.int16, copy=False)
                 recent_audio.append(audio_chunk.copy())
