@@ -866,7 +866,7 @@ class LatencyTracker:
 
     _budgets: dict = {
         "wake_to_stt_start": 0.1,
-        "stt_partial_latency": 0.5,
+        "stt_partial_latency": 3.0,
         "stt_total": 1.0,
         "intent_detection": 0.02,
         "action_execution": 0.1,

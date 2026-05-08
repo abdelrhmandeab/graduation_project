@@ -137,11 +137,12 @@ class BargeInMonitor:
         seconds_per_block = float(_MONITOR_BLOCK_SAMPLES) / float(sample_rate)
         required_blocks = max(1, int(round(min_speech_seconds / max(seconds_per_block, 1e-6))))
 
-        # Lazy-load Silero VAD for double-confirmation; fall back gracefully.
+        # Reuse the shared streaming VAD singleton for double-confirmation.
+        # Creating a new SileroVAD() here loads the ONNX model fresh (~300ms penalty).
         silero_vad = None
         try:
-            from audio.vad import SileroVAD
-            silero_vad = SileroVAD(sample_rate=sample_rate)
+            from audio.streaming_stt import _get_shared_streaming_vad
+            silero_vad = _get_shared_streaming_vad()
         except Exception as exc:
             logger.debug("Barge-in: Silero VAD unavailable, using energy-only detection: %s", exc)
 

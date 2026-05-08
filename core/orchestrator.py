@@ -686,13 +686,13 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_s
     try:
         active_audio_ux_profile = str(session_memory.get_audio_ux_profile() or "").strip().lower()
         skip_post_capture_guard = active_audio_ux_profile in _LOW_LATENCY_AUDIO_UX_PROFILES
-        if not skip_post_capture_guard and bool(SPEECH_GUARD_SKIP_NON_RESPONSIVE_PROFILES):
-            capture_detected_speech = bool((capture_summary or {}).get("speech_detected"))
-            if capture_detected_speech:
-                skip_post_capture_guard = True
+        # If the streaming VAD already confirmed speech during recording, the
+        # redundant batch file-based check is both slow and less reliable — skip it.
+        if not skip_post_capture_guard and bool((capture_summary or {}).get("speech_detected")):
+            skip_post_capture_guard = True
 
         if skip_post_capture_guard:
-            # record_utterance already runs mic VAD; skip duplicate file-based guard in fast profile.
+            # record_utterance already runs mic VAD; skip duplicate file-based guard.
             metrics.record_stage("speech_guard", 0.0, success=True)
         else:
             speech_guard_started = time.perf_counter()
@@ -956,6 +956,35 @@ def _preload_stt_model():
     except Exception as exc:
         logger.warning("STT model preload failed (will load on first use): %s", exc)
 
+
+def _prewarm_streaming_vad():
+    """Pre-load the Silero VAD singleton used by StreamingSTT.
+
+    Without this, the first utterance after wake-word detection pays a
+    100–500 ms ONNX model-load penalty before VAD can classify any chunk.
+    """
+    try:
+        from audio.streaming_stt import prewarm_streaming_vad
+        ready = prewarm_streaming_vad()
+        if ready:
+            logger.info("Streaming VAD prewarmed successfully (Silero ONNX ready).")
+        else:
+            logger.info("Streaming VAD prewarmed (energy-fallback mode; Silero ONNX unavailable).")
+    except Exception as exc:
+        logger.warning("Streaming VAD prewarm failed (will load on first utterance): %s", exc)
+
+
+def _prewarm_batch_vad():
+    """Pre-load the batch Silero VAD singleton used by the speech guard."""
+    try:
+        from audio.vad import prewarm_batch_vad
+        ready = prewarm_batch_vad()
+        if ready:
+            logger.info("Batch VAD prewarmed successfully (Silero ONNX ready).")
+        else:
+            logger.info("Batch VAD prewarmed (energy-fallback mode; Silero ONNX unavailable).")
+    except Exception as exc:
+        logger.warning("Batch VAD prewarm failed (will load on first speech guard): %s", exc)
 
 
 def _is_llm_prewarm_failure(response_text):
@@ -1303,6 +1332,8 @@ def _run_startup_prewarm_blocking():
     tasks = [
         ("wake_word", _preload_wake_word_runtime),
         ("stt", _preload_stt_model),
+        ("streaming_vad", _prewarm_streaming_vad),
+        ("batch_vad", _prewarm_batch_vad),
         ("llm", _prewarm_llm),
     ]
     cpu_cores = max(1, int(os.cpu_count() or 1))

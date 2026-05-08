@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import concurrent.futures
 import queue
 import tempfile
 import threading
@@ -52,6 +53,32 @@ _ARABIC_STREAMING_WHISPER_KWARGS = {
 
 def _is_arabic_text(text: str) -> bool:
     return bool(_ARABIC_CHAR_RE.search(str(text or "")))
+
+
+# ---------------------------------------------------------------------------
+# Shared streaming VAD singleton — loaded once, reused across all utterances.
+# This avoids re-loading the Silero ONNX model (~100-500 ms) on every wake.
+# ---------------------------------------------------------------------------
+_shared_streaming_vad: "SileroVAD | None" = None
+_shared_streaming_vad_lock = threading.Lock()
+
+
+def _get_shared_streaming_vad() -> SileroVAD:
+    global _shared_streaming_vad
+    if _shared_streaming_vad is None:
+        with _shared_streaming_vad_lock:
+            if _shared_streaming_vad is None:
+                _shared_streaming_vad = SileroVAD()
+    return _shared_streaming_vad
+
+
+def prewarm_streaming_vad() -> bool:
+    """Load the streaming Silero VAD model now so first-utterance latency is zero."""
+    try:
+        vad = _get_shared_streaming_vad()
+        return vad.is_ready()
+    except Exception:
+        return False
 
 
 def _seconds_to_chunks(seconds: float) -> int:
@@ -173,11 +200,21 @@ class StreamingSTT:
         self._chunk_queue: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=128)
         self._stop_event = threading.Event()
         self._speech_started = False
-        self._vad_detector = SileroVAD()
+        # Re-use the pre-loaded singleton to avoid reloading the ONNX model
+        # on every utterance (~100–500 ms cold-start penalty otherwise).
+        self._vad_detector = _get_shared_streaming_vad()
         self._vad_detector.reset()
         # Arabic partial stability — emit only after 2 consecutive identical windows
         self._ar_pending_partial: str = ""
         self._ar_pending_count: int = 0
+        # Single-worker executor for non-blocking partial transcription.
+        # Partials run in a daemon thread so the audio capture loop is never blocked
+        # by whisper inference (critical under memory pressure where inference can
+        # take several seconds).
+        self._partial_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="jarvis-partial-stt"
+        )
+        self._partial_future: "Optional[concurrent.futures.Future[str]]" = None
 
     def _audio_callback(self, in_data, frames, time_info, status):  # pragma: no cover - called by sounddevice
         if in_data is None:
@@ -309,13 +346,27 @@ class StreamingSTT:
                         silence_chunks += 1
 
                     now = time.perf_counter()
+
+                    # Harvest completed partial result (non-blocking check).
+                    if self._partial_future is not None and self._partial_future.done():
+                        try:
+                            partial_text = self._partial_future.result()
+                        except Exception:
+                            pass
+                        self._partial_future = None
+
                     should_emit_partial = (
                         speech_samples >= int(0.5 * SAMPLE_RATE)
                         and (now - last_partial_emit) >= self.partial_interval_seconds
+                        and self._partial_future is None  # skip if previous still running
                     )
                     if should_emit_partial:
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as partial_tmp:
-                            partial_text = self._transcribe_partial(captured_chunks, partial_tmp.name, partial_text)
+                        chunks_snapshot = list(captured_chunks)
+                        partial_tmp_path = tempfile.mktemp(suffix=".wav")
+                        prev_text = partial_text
+                        self._partial_future = self._partial_executor.submit(
+                            self._transcribe_partial, chunks_snapshot, partial_tmp_path, prev_text
+                        )
                         last_partial_emit = now
 
                     silence_target = _seconds_to_chunks(
@@ -331,6 +382,11 @@ class StreamingSTT:
                         break
         finally:
             self._stop_event.set()
+            # Cancel any in-flight partial so it doesn't compete with final transcription.
+            if self._partial_future is not None and not self._partial_future.done():
+                self._partial_future.cancel()
+            self._partial_executor.shutdown(wait=False)
+            self._partial_future = None
 
         elapsed = time.perf_counter() - started_at
         if not speech_detected or not captured_chunks:

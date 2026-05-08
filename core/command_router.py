@@ -3791,21 +3791,53 @@ def route_command(
                         allow_llm=False,
                     )
                 )
-                success, response, _ = planner.plan_and_execute(
+                _tool_success, _tool_message, _ = planner.plan_and_execute(
                     raw_tool_calls, original_text, language
                 )
-                return success, response, tool_meta
             else:
                 # Single tool call — direct dispatch, no planner overhead.
-                tool_success, tool_message, dispatch_meta = _dispatch(
+                _tool_success, _tool_message, _dispatch_meta = _dispatch(
                     parsed_tool_commands[0],
                     allow_batch=False,
                     allow_job_queue=False,
                     allow_llm=False,
                 )
-                if dispatch_meta:
-                    tool_meta.update(dispatch_meta)
-                return bool(tool_success), str(tool_message or ""), tool_meta
+                if _dispatch_meta:
+                    tool_meta.update(_dispatch_meta)
+
+            _tool_parsed = parsed_tool_commands[0]
+            _tool_response = str(_tool_message or "")
+            if _tool_success:
+                _tool_response = _finalize_success_response(
+                    _tool_response,
+                    _tool_parsed,
+                    language_result.language,
+                    original_text,
+                    tone_meta,
+                    realtime=realtime,
+                )
+                if _should_store_turn(_tool_parsed, _tool_response):
+                    session_memory.add_turn(
+                        original_text,
+                        _tool_response,
+                        language=language_result.language,
+                        intent=_tool_parsed.intent,
+                    )
+            _latency = time.perf_counter() - start
+            metrics.record_command(_tool_parsed.intent, _tool_success, _latency, language=language_result.language)
+            log_structured(
+                "route_command_result",
+                language=language_result.language,
+                intent=_tool_parsed.intent,
+                action=_tool_parsed.action or "",
+                success=bool(_tool_success),
+                latency_ms=_latency * 1000.0,
+                confidence=float(meta.get("intent_confidence") or 0.0),
+                clarified=False,
+                user_text=_truncate_text(original_text),
+                response_preview=_truncate_text(_tool_response),
+            )
+            return _format_demo_output(_tool_parsed, _tool_success, _tool_response, tool_meta)
 
     if parsed is None:
         # Tier 4: Fall through to parser candidate (LLM_QUERY → LLM fallback)

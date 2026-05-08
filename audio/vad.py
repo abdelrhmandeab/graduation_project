@@ -276,6 +276,15 @@ def _get_batch_vad() -> "SileroVAD":
     return _batch_vad
 
 
+def prewarm_batch_vad() -> bool:
+    """Load the batch VAD singleton now so the first speech-guard check is instant."""
+    try:
+        vad = _get_batch_vad()
+        return vad.is_ready()
+    except Exception:
+        return False
+
+
 def is_speech(audio_path) -> bool:
     """Batch speech detection for a WAV file. Uses SileroVAD if available."""
     vad = _get_batch_vad()
