@@ -888,6 +888,62 @@ def normalize_system_action(text):
     direct = ALIASES.get(phrase)
     if direct:
         return direct
+    if "volume" in phrase or "الصوت" in phrase or "صوت" in phrase or "الفوليم" in phrase:
+        if any(token in phrase for token in (
+            "up",
+            "raise",
+            "increase",
+            "turn up",
+            "louder",
+            "ارفع",
+            "زود",
+            "زوّد",
+            "علي",
+            "عالي",
+        )):
+            return "volume_up"
+        if any(token in phrase for token in (
+            "down",
+            "lower",
+            "decrease",
+            "turn down",
+            "softer",
+            "اخفض",
+            "خفض",
+            "قلل",
+            "وط",
+            "وطي",
+        )):
+            return "volume_down"
+        if any(token in phrase for token in ("mute", "silent", "كتم", "اسكت")):
+            return "volume_mute"
+
+    if "brightness" in phrase or "السطوع" in phrase or "سطوع" in phrase or "اضاءة" in phrase or "الإضاءة" in phrase or "نور" in phrase:
+        if any(token in phrase for token in (
+            "up",
+            "raise",
+            "increase",
+            "brighten",
+            "ارفع",
+            "زود",
+            "زوّد",
+            "علي",
+            "اعلي",
+            "أعلي",
+        )):
+            return "brightness_up"
+        if any(token in phrase for token in (
+            "down",
+            "lower",
+            "decrease",
+            "dim",
+            "اخفض",
+            "خفض",
+            "قلل",
+            "وط",
+            "وطي",
+        )):
+            return "brightness_down"
     return _fuzzy_resolve_system_action(phrase)
 
 

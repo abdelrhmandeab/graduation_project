@@ -7,28 +7,30 @@ no GPU required, no admin needed for everyday commands.
 ## Architecture
 
 ```
-Wake word → STT → 3-tier intent router → Action / LLM → TTS
+Wake word → Streaming capture + STT → 4-tier intent router → Action / LLM → TTS
 ```
 
 - **STT**:
+  - Streaming capture with energy VAD; final transcript after speech end (partials supported but disabled by default)
   - Arabic: ElevenLabs STT (cloud) with local Faster-Whisper (`small`) fallback
   - English: local Faster-Whisper (`small`)
 - **Intent routing** (cascade — earliest tier that hits wins):
   1. **Regex parser** (0 ms) — exact keywords + bilingual patterns
   2. **Semantic router** (~10 ms) — multilingual MiniLM embeddings, handles paraphrases
   3. **Keyword NLP** — fuzzy match (rapidfuzz) for noisy STT
-  4. **LLM fallback** — local Ollama (Qwen3 family) for conversational queries
+  4. **LLM fallback** — local Ollama (Qwen3 by default, Qwen2.5 supported) for conversational queries
 - **Action handlers**: 35+ system commands + timers, clipboard, sysinfo, settings,
   Outlook email/calendar drafts, Windows Search Index, persona, knowledge base.
 - **TTS**:
   - Arabic: ElevenLabs TTS, falling back to edge-tts `ar-EG-SalmaNeural` when offline
   - English: edge-tts `en-US-AriaNeural`
+  - Sentence streaming is supported but disabled by default for stability
 
 ## Hardware-aware model selection
 
 At startup, [core/hardware_detect.py](core/hardware_detect.py) reads RAM + GPU and
-picks the best Qwen3 model that fits. Override via `JARVIS_LLM_MODEL` in `.env`,
-or disable with `JARVIS_LLM_AUTO_SELECT=false`.
+picks the best Qwen3 model that fits. Override via `JARVIS_LLM_MODEL` in `.env`
+(for example `qwen2.5:3b`), or disable with `JARVIS_LLM_AUTO_SELECT=false`.
 
 | RAM    | GPU | Tier      | Model        | num_ctx | lightweight_ctx |
 |--------|-----|-----------|--------------|---------|-----------------|
@@ -87,8 +89,8 @@ the configured / hardware-recommended model on first launch.
 python main.py
 ```
 
-Wake word: say **"Jarvis"** (English wake-word ONNX model) or **"جارفيس"** (Egyptian
-Arabic, Whisper `tiny`-based detection — say it once).
+Wake word: say **"Jarvis"** (English wake-word ONNX model). Arabic wake-word
+support requires a custom ONNX model path via `JARVIS_WAKE_WORD_AR_ONNX_PATH`.
 
 ## Health check
 

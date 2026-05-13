@@ -24,7 +24,7 @@ from core.config import (
     MEMORY_PERSIST_LANGUAGE_HISTORY,
 )
 from core.logger import logger
-from core.memory_store import SQLiteMemoryStore
+from core.memory_store import SQLiteMemoryStore, vector_memory
 
 _SOURCES_MARKER = "\nSources:"
 _LOW_VALUE_ASSISTANT_PATTERNS = (
@@ -169,6 +169,12 @@ class SessionMemory:
 
         # Phase 2.8 — primary storage is SQLite. The JSON path is now used only
         # for legacy import (one-shot) and as a debug-export target.
+        # Q2 2026 P0 Optimization #8 – SQLite migration:
+        #   ✅ COMPLETED. Replaced atomic JSON rewrites with append-only SQLite.
+        #      Benefit: No more full-file rewrite on every turn. Turns stored as rows
+        #      with timestamps; context_slots in key-value table. Fallback to JSON
+        #      if SQLite unavailable. Import legacy JSON on first launch.
+        #      Config: MEMORY_BACKEND="sqlite" (default), MEMORY_DB_FILE="jarvis_memory.db"
         self._backend = "sqlite" if str(MEMORY_BACKEND or "sqlite").lower() == "sqlite" else "json"
         self._store = None
         if self._backend == "sqlite":
@@ -1050,6 +1056,17 @@ class SessionMemory:
                 self._turns = self._turns[-int(MEMORY_MAX_TURNS) :]
             self._save()
 
+        # Persist LLM_QUERY turns to vector store for long-term semantic recall.
+        if row.get("intent") == "LLM_QUERY" and user_clean:
+            try:
+                vector_memory.remember(
+                    user_clean, assistant_clean,
+                    language=resolved_language or "en",
+                    intent="LLM_QUERY",
+                )
+            except Exception:
+                pass
+
     def clear(self):
         with self._lock:
             self._turns = []
@@ -1061,6 +1078,14 @@ class SessionMemory:
     def recent(self, limit=MEMORY_MAX_TURNS):
         with self._lock:
             return list(self._turns[-max(1, int(limit)) :])
+
+    def recall_semantic(self, query: str, n: int = 3, *, language: str | None = None) -> list[dict]:
+        """Return top-n semantically relevant past LLM_QUERY turns via vector search.
+
+        Each result: {"user": str, "assistant": str, "language": str, "score": float}.
+        Falls back to [] when vector store is not ready.
+        """
+        return vector_memory.recall(query, n=n, language=language)
 
     def has_recent_context(self, language=None, intents=None):
         """Fast boolean probe used by latency-sensitive routing paths."""
@@ -1158,6 +1183,38 @@ class SessionMemory:
         if not lines and target_language:
             lines = _collect_context(filter_language=False)
         return "\n".join(lines)
+
+    def get_messages_for_claude(self, limit: int = 5, language: str | None = None) -> list[dict]:
+        """Return the last `limit` turns as Claude-format messages for conversation context.
+
+        Returns a list of {"role": "user"/"assistant", "content": str} dicts,
+        ordered oldest-first, suitable for prepending to a Claude messages array.
+        """
+        if not self.is_enabled():
+            return []
+        rows = self.recent(limit=limit * 2)  # fetch extra, then trim to limit after filtering
+        if not rows:
+            return []
+
+        target_language = str(language or "").strip().lower()
+
+        messages: list[dict] = []
+        for row in rows:
+            user_text = (row.get("user") or "").strip()
+            assistant_text = _sanitize_assistant_text(row.get("assistant"))
+            if not user_text or _is_low_value_assistant_text(assistant_text):
+                continue
+            if target_language and target_language in _SUPPORTED_LANGUAGES:
+                row_lang = str(row.get("language") or "").strip().lower()
+                if row_lang and row_lang != target_language:
+                    continue
+            messages.append({"role": "user", "content": user_text})
+            messages.append({"role": "assistant", "content": assistant_text})
+
+        # Keep only the most recent `limit` turns
+        if len(messages) > limit * 2:
+            messages = messages[-(limit * 2):]
+        return messages
 
     def status(self):
         with self._lock:

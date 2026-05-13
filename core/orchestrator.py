@@ -38,6 +38,7 @@ from core.command_router import (
 from core.knowledge_base import knowledge_base_service
 from core.doctor import collect_diagnostics
 from core.config import (
+    DEMO_MODE,
     EARLY_EXEC_CONFIDENCE_THRESHOLD,
     DOCTOR_INCLUDE_MODEL_LOAD_CHECKS,
     DOCTOR_SCHEDULE_INTERVAL_SECONDS,
@@ -346,7 +347,7 @@ def _resolve_stt_language_hint(*, wake_source=None):
     if wake_source_value == "arabic":
         return "ar"
     if wake_source_value == "english":
-        return "en"
+        return None
     return None
 
 
@@ -686,13 +687,14 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_s
     try:
         active_audio_ux_profile = str(session_memory.get_audio_ux_profile() or "").strip().lower()
         skip_post_capture_guard = active_audio_ux_profile in _LOW_LATENCY_AUDIO_UX_PROFILES
-        # If the streaming VAD already confirmed speech during recording, the
-        # redundant batch file-based check is both slow and less reliable — skip it.
-        if not skip_post_capture_guard and bool((capture_summary or {}).get("speech_detected")):
+        capture_detected_speech = bool((capture_summary or {}).get("speech_detected"))
+        if capture_detected_speech:
+            skip_post_capture_guard = True
+        elif not skip_post_capture_guard and bool(SPEECH_GUARD_SKIP_NON_RESPONSIVE_PROFILES):
             skip_post_capture_guard = True
 
         if skip_post_capture_guard:
-            # record_utterance already runs mic VAD; skip duplicate file-based guard.
+            # record_utterance already runs mic VAD; skip duplicate file-based guard in fast profile.
             metrics.record_stage("speech_guard", 0.0, success=True)
         else:
             speech_guard_started = time.perf_counter()
@@ -753,6 +755,26 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_s
             return
         logger.info("Transcript[%s]: %s", detected_language or "unknown", _safe_log_text(text))
 
+        # Demo mode: print intent/confidence overlay to console for presentations.
+        if DEMO_MODE:
+            try:
+                from core.command_parser import parse_command as _pc
+                from core.intent_confidence import assess_intent_confidence as _aic
+                _dm_parsed = _pc(text)
+                _dm_assess = _aic(text, _dm_parsed, language=detected_language or "en")
+                _dm_conf = round(float(getattr(_dm_assess, "confidence", 0.0) or 0.0), 2)
+                print(
+                    f"\n┌─ DEMO ─────────────────────────────────────────────────────────┐\n"
+                    f"│  Transcript : {text[:55]:<55} │\n"
+                    f"│  Language   : {detected_language or 'unknown':<55} │\n"
+                    f"│  Intent     : {_dm_parsed.intent:<55} │\n"
+                    f"│  Confidence : {_dm_conf:<55} │\n"
+                    f"└────────────────────────────────────────────────────────────────┘",
+                    flush=True,
+                )
+            except Exception:
+                pass
+
         # ── Tasks 1.3 / 1.4: early-execution fast path with mismatch detection ──
         # If ConcurrentPipeline already executed the command from a high-confidence
         # partial, skip full routing.  But if the final transcript resolves to a
@@ -788,42 +810,8 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_s
             detected_language=detected_language,
         )
 
-        # Streaming TTS state: queue sentence chunks immediately as they arrive
-        # so playback pipelines naturally without polling for completion.
         tts_language = detected_language or session_memory.get_preferred_language()
         should_speak_response = not _is_interrupt_command(text)
-        streamed_sentences = []
-        sentence_queue = queue.Queue()
-        sentence_queue_started = False
-
-        def _iter_streamed_sentences():
-            while True:
-                item = sentence_queue.get()
-                if item is None:
-                    break
-                yield item
-
-        if should_speak_response:
-            sentence_queue_started, _ = speech_engine.speak_sentence_queue(
-                _iter_streamed_sentences(),
-                language=tts_language,
-            )
-
-        _first_sentence_recorded = False
-
-        def _on_sentence_streamed(sentence):
-            nonlocal _first_sentence_recorded
-            if not (should_speak_response and sentence_queue_started):
-                return
-            normalized = _speech_safe_response(sentence)
-            normalized = " ".join(str(normalized or "").split()).strip()
-            if not normalized:
-                return
-            streamed_sentences.append(normalized)
-            sentence_queue.put(normalized)
-            if not _first_sentence_recorded:
-                _first_sentence_recorded = True
-                latency_tracker.record("llm_first_token", time.perf_counter() - route_started)
 
         dialogue_manager.transition(DialogueState.RESPONDING)
 
@@ -839,8 +827,6 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_s
 
         try:
             if is_compound:
-                # Close the streaming queue immediately — compound path speaks the full response at the end
-                sentence_queue.put(None)
                 try:
                     all_responses = []
                     for sub_text in sub_commands:
@@ -868,7 +854,7 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_s
                         text,
                         detected_language=detected_language,
                         realtime=True,
-                        on_sentence=_on_sentence_streamed,
+                        on_sentence=None,
                         precomputed_language_result=precomputed_language_result,
                         precomputed_parser_candidate=precomputed_parser_candidate,
                     )
@@ -889,16 +875,7 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_s
             print(f"Jarvis: {response}")
         if should_speak_response:
             safe_response = _speech_safe_response(response)
-            if is_compound:
-                speech_engine.speak_async(safe_response, language=tts_language)
-            elif sentence_queue_started:
-                remaining = _remaining_after_streamed_sentences(safe_response, streamed_sentences)
-                if remaining:
-                    sentence_queue.put(remaining)
-                sentence_queue.put(None)
-            else:
-                # Fallback when queue startup failed.
-                speech_engine.speak_async(safe_response, language=tts_language)
+            speech_engine.speak_async(safe_response, language=tts_language)
     finally:
         metrics.record_stage("pipeline", time.perf_counter() - pipeline_started, success=bool(text) and route_success)
         _safe_remove(audio_file)
@@ -956,35 +933,6 @@ def _preload_stt_model():
     except Exception as exc:
         logger.warning("STT model preload failed (will load on first use): %s", exc)
 
-
-def _prewarm_streaming_vad():
-    """Pre-load the Silero VAD singleton used by StreamingSTT.
-
-    Without this, the first utterance after wake-word detection pays a
-    100–500 ms ONNX model-load penalty before VAD can classify any chunk.
-    """
-    try:
-        from audio.streaming_stt import prewarm_streaming_vad
-        ready = prewarm_streaming_vad()
-        if ready:
-            logger.info("Streaming VAD prewarmed successfully (Silero ONNX ready).")
-        else:
-            logger.info("Streaming VAD prewarmed (energy-fallback mode; Silero ONNX unavailable).")
-    except Exception as exc:
-        logger.warning("Streaming VAD prewarm failed (will load on first utterance): %s", exc)
-
-
-def _prewarm_batch_vad():
-    """Pre-load the batch Silero VAD singleton used by the speech guard."""
-    try:
-        from audio.vad import prewarm_batch_vad
-        ready = prewarm_batch_vad()
-        if ready:
-            logger.info("Batch VAD prewarmed successfully (Silero ONNX ready).")
-        else:
-            logger.info("Batch VAD prewarmed (energy-fallback mode; Silero ONNX unavailable).")
-    except Exception as exc:
-        logger.warning("Batch VAD prewarm failed (will load on first speech guard): %s", exc)
 
 
 def _is_llm_prewarm_failure(response_text):
@@ -1310,16 +1258,8 @@ def _play_follow_up_chime() -> None:
 
 def _calibrate_baseline_noise():
     """Measure ambient noise floor before any TTS plays; used for echo threshold."""
-    started = time.perf_counter()
-    try:
-        from audio.echo_cancel import baseline_noise
-        from core.config import BASELINE_NOISE_CALIBRATION_SECONDS
-        rms = baseline_noise.calibrate(seconds=float(BASELINE_NOISE_CALIBRATION_SECONDS))
-        metrics.record_stage("baseline_noise_calibration", time.perf_counter() - started, success=True)
-        logger.info("Ambient noise floor calibrated: rms=%.5f", rms)
-    except Exception as exc:
-        metrics.record_stage("baseline_noise_calibration", time.perf_counter() - started, success=False)
-        logger.warning("Ambient noise calibration failed (echo threshold will use ratio-only): %s", exc)
+    logger.info("Baseline noise calibration skipped (echo cancel disabled for STT debugging).")
+    return
 
 
 def _run_startup_prewarm_blocking():
@@ -1332,8 +1272,6 @@ def _run_startup_prewarm_blocking():
     tasks = [
         ("wake_word", _preload_wake_word_runtime),
         ("stt", _preload_stt_model),
-        ("streaming_vad", _prewarm_streaming_vad),
-        ("batch_vad", _prewarm_batch_vad),
         ("llm", _prewarm_llm),
     ]
     cpu_cores = max(1, int(os.cpu_count() or 1))
@@ -1524,7 +1462,8 @@ def run():
                     if wake_source == "follow_up"
                     else None
                 ),
-                on_partial=_pipeline_partial,
+                enable_partials=False,
+                on_partial=None,
             )
             metrics.record_stage(
                 "record_audio",

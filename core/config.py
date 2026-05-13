@@ -89,6 +89,8 @@ SPEECH_GUARD_SKIP_NON_RESPONSIVE_PROFILES = _env_bool(
 # Wake Word
 WAKE_WORD = "hey_jarvis"
 WAKE_WORD_THRESHOLD = 0.35
+WAKE_WORD_EN_THRESHOLD = float(_env("JARVIS_WAKE_WORD_EN_THRESHOLD", str(WAKE_WORD_THRESHOLD)))
+WAKE_WORD_AR_THRESHOLD = float(_env("JARVIS_WAKE_WORD_AR_THRESHOLD", str(WAKE_WORD_THRESHOLD)))
 WAKE_WORD_CHUNK_SIZE = 1280
 WAKE_WORD_INPUT_DEVICE = None  # None, device index (int), or name substring (str)
 WAKE_WORD_AUDIO_GAIN = 1.4
@@ -141,10 +143,13 @@ ELEVENLABS_BASE_URL = _env("ELEVENLABS_BASE_URL", "https://api.elevenlabs.io").s
 ELEVENLABS_API_KEY = _env("ELEVENLABS_API_KEY", "").strip()
 
 STT_LANGUAGE_DETECT_MODEL = _env("JARVIS_STT_LANGUAGE_DETECT_MODEL", "tiny").strip() or "tiny"
+# Default language hint passed to Whisper. Set to "ar" if user primarily speaks Arabic.
+# "auto" lets Whisper detect; "ar" bypasses detection for faster, more accurate Arabic STT.
+STT_LANGUAGE_HINT = str(_env("JARVIS_STT_LANGUAGE_HINT", "auto")).strip().lower() or "auto"
 STT_MIXED_TREAT_AS_ARABIC = _env_bool("JARVIS_STT_MIXED_TREAT_AS_ARABIC", True)
 
 STT_ELEVENLABS_ENABLED = _env_bool("JARVIS_STT_ELEVENLABS_ENABLED", True)
-STT_ELEVENLABS_STT_MODEL = _env("JARVIS_STT_ELEVENLABS_MODEL", "scribe_v1").strip() or "scribe_v1"
+STT_ELEVENLABS_STT_MODEL = _env("JARVIS_STT_ELEVENLABS_MODEL", "scribe_v2").strip() or "scribe_v2"
 STT_ELEVENLABS_ARABIC_LANGUAGE = _env("JARVIS_STT_ELEVENLABS_ARABIC_LANG", "ara").strip() or "ara"
 STT_ELEVENLABS_TIMEOUT_SECONDS = max(3.0, _env_float("JARVIS_STT_ELEVENLABS_TIMEOUT_SECONDS", 15.0))
 STT_ELEVENLABS_WEAK_TEXT_MIN_CHARS = max(2, _env_int("JARVIS_STT_ELEVENLABS_WEAK_TEXT_MIN_CHARS", 5))
@@ -153,6 +158,18 @@ STT_ELEVENLABS_WEAK_TEXT_MIN_CHARS = max(2, _env_int("JARVIS_STT_ELEVENLABS_WEAK
 WHISPER_MODEL = _env("JARVIS_WHISPER_MODEL", "small")
 
 # LLM
+# LLM_BACKEND: "claude" uses Anthropic Claude API; "ollama" uses local Ollama (default).
+LLM_BACKEND = str(_env("JARVIS_LLM_BACKEND", "ollama")).strip().lower()
+if LLM_BACKEND not in {"claude", "ollama"}:
+    LLM_BACKEND = "ollama"
+
+# Claude API (used when LLM_BACKEND=claude)
+ANTHROPIC_API_KEY = _env("ANTHROPIC_API_KEY", "").strip()
+CLAUDE_DEFAULT_MODEL = _env("JARVIS_CLAUDE_DEFAULT_MODEL", "claude-haiku-4-5").strip()
+CLAUDE_QUALITY_MODEL = _env("JARVIS_CLAUDE_QUALITY_MODEL", "claude-sonnet-4-6").strip()
+CLAUDE_MAX_TOKENS_COMMAND = max(64, _env_int("JARVIS_CLAUDE_MAX_TOKENS_COMMAND", 256))
+CLAUDE_MAX_TOKENS_QUESTION = max(128, _env_int("JARVIS_CLAUDE_MAX_TOKENS_QUESTION", 600))
+
 LLM_MODEL = _env("JARVIS_LLM_MODEL", "qwen3:4b")
 LLM_AUTO_SELECT_MODEL = _env_bool("JARVIS_LLM_AUTO_SELECT", True)
 LLM_FALLBACK_MODELS = tuple(
@@ -254,9 +271,13 @@ TTS_EDGE_ARABIC_VOLUME = _env("JARVIS_TTS_EDGE_ARABIC_VOLUME", "+4%")
 TTS_EDGE_MIXED_SCRIPT_CHUNKING = _env_bool("JARVIS_TTS_EDGE_MIXED_SCRIPT_CHUNKING", True)
 TTS_EDGE_MIXED_SCRIPT_MAX_CHUNKS = max(2, _env_int("JARVIS_TTS_EDGE_MIXED_SCRIPT_MAX_CHUNKS", 6))
 TTS_EDGE_MIXED_SCRIPT_MAX_TEXT_LENGTH = max(80, _env_int("JARVIS_TTS_EDGE_MIXED_SCRIPT_MAX_TEXT_LENGTH", 220))
-TTS_ELEVENLABS_ARABIC_ENABLED = _env_bool("JARVIS_TTS_ELEVENLABS_ARABIC_ENABLED", True)
+TTS_ELEVENLABS_ARABIC_ENABLED = _env_bool("JARVIS_TTS_ELEVENLABS_ARABIC_ENABLED", False)
 TTS_ELEVENLABS_ARABIC_VOICE_ID = _env("JARVIS_TTS_ELEVENLABS_ARABIC_VOICE_ID", "").strip()
 TTS_ELEVENLABS_ARABIC_MODEL_ID = _env("JARVIS_TTS_ELEVENLABS_ARABIC_MODEL_ID", "eleven_multilingual_v2").strip() or "eleven_multilingual_v2"
+# Arabic TTS backend: "edge" uses edge-tts ar-EG-SalmaNeural (default); "elevenlabs" uses ElevenLabs.
+TTS_ARABIC_BACKEND = str(_env("JARVIS_TTS_ARABIC_BACKEND", "edge")).strip().lower()
+if TTS_ARABIC_BACKEND not in {"edge", "elevenlabs"}:
+    TTS_ARABIC_BACKEND = "edge"
 TTS_ELEVENLABS_TIMEOUT_SECONDS = max(3.0, _env_float("JARVIS_TTS_ELEVENLABS_TIMEOUT_SECONDS", 15.0))
 TTS_PREWARM_ENABLED = _env_bool("JARVIS_TTS_PREWARM_ENABLED", True)
 STARTUP_PARSER_NLP_PREWARM_ENABLED = _env_bool("JARVIS_STARTUP_PARSER_NLP_PREWARM_ENABLED", True)
@@ -299,12 +320,7 @@ BARGE_IN_ENERGY_RATIO = max(1.0, _env_float("JARVIS_BARGE_IN_ENERGY_RATIO", 1.8)
 # Post-interrupt cooldown (seconds). The monitor stays silent for this period
 # after firing so echo decay cannot re-trigger a second barge-in.
 BARGE_IN_COOLDOWN_SECONDS = max(0.1, _env_float("JARVIS_BARGE_IN_COOLDOWN_SECONDS", 0.5))
-# Noise suppression via noisereduce (optional, adds ~50 ms per utterance).
-# Set JARVIS_NOISE_REDUCE_ENABLED=true in noisy environments (office, coffee shop).
-NOISE_REDUCE_ENABLED = _env_bool("JARVIS_NOISE_REDUCE_ENABLED", False)
-# Duration (seconds) of ambient silence recorded on startup to establish the
-# noise floor used in the echo-rejection formula.
-BASELINE_NOISE_CALIBRATION_SECONDS = max(0.5, _env_float("JARVIS_BASELINE_NOISE_CALIBRATION_SECONDS", 2.0))
+
 
 # Dialogue state machine — follow-up window
 # When enabled, Jarvis enters a FOLLOW_UP window after each response.  Within
@@ -603,6 +619,9 @@ POLICY_PROFILES = {
 # Streaming sentence-splitter
 STREAM_AR_SOFT_FLUSH_CHARS = max(20, _env_int("JARVIS_STREAM_AR_SOFT_FLUSH_CHARS", 40))
 STREAM_AR_HARD_FLUSH_CHARS = max(40, _env_int("JARVIS_STREAM_AR_HARD_FLUSH_CHARS", 80))
+
+# Demo mode: shows intent/confidence overlay in console (set via --demo-mode flag or env var)
+DEMO_MODE = _env_bool("JARVIS_DEMO_MODE", False)
 
 # Logging
 LOG_FILE = _project_path("jarvis.log")

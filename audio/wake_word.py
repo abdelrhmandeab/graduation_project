@@ -32,6 +32,8 @@ from core.config import (
     WAKE_WORD_SCORE_DEBUG,
     WAKE_WORD_SCORE_DEBUG_INTERVAL_SECONDS,
     WAKE_WORD_THRESHOLD,
+    WAKE_WORD_EN_THRESHOLD,
+    WAKE_WORD_AR_THRESHOLD,
     WAKE_WORD_USER_SPEAKER_ID,
     WAKE_WORD_USER_SAMPLES_DIR,
 )
@@ -44,6 +46,8 @@ _last_detection_ts = 0.0
 _OPENWAKEWORD_RELEASE = "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1"
 _runtime_wake_word_settings = {
     "threshold": float(WAKE_WORD_THRESHOLD),
+    "en_threshold": float(WAKE_WORD_EN_THRESHOLD),
+    "ar_threshold": float(WAKE_WORD_AR_THRESHOLD),
     "audio_gain": float(WAKE_WORD_AUDIO_GAIN),
     "detection_cooldown_seconds": float(WAKE_WORD_DETECTION_COOLDOWN_SECONDS),
 }
@@ -116,9 +120,22 @@ def get_runtime_wake_word_settings():
     return dict(_runtime_wake_word_settings)
 
 
-def set_runtime_wake_word_settings(*, threshold=None, audio_gain=None, detection_cooldown_seconds=None):
+def set_runtime_wake_word_settings(
+    *, threshold=None, en_threshold=None, ar_threshold=None,
+    audio_gain=None, detection_cooldown_seconds=None
+):
     if threshold is not None:
-        _runtime_wake_word_settings["threshold"] = max(0.05, min(0.95, float(threshold)))
+        v = max(0.05, min(0.95, float(threshold)))
+        _runtime_wake_word_settings["threshold"] = v
+        # Also propagate to per-language if not separately overridden
+        if "en_threshold" not in _runtime_wake_word_settings or en_threshold is None:
+            _runtime_wake_word_settings["en_threshold"] = v
+        if "ar_threshold" not in _runtime_wake_word_settings or ar_threshold is None:
+            _runtime_wake_word_settings["ar_threshold"] = v
+    if en_threshold is not None:
+        _runtime_wake_word_settings["en_threshold"] = max(0.05, min(0.95, float(en_threshold)))
+    if ar_threshold is not None:
+        _runtime_wake_word_settings["ar_threshold"] = max(0.05, min(0.95, float(ar_threshold)))
     if audio_gain is not None:
         _runtime_wake_word_settings["audio_gain"] = max(0.5, min(3.0, float(audio_gain)))
     if detection_cooldown_seconds is not None:
@@ -170,10 +187,22 @@ def set_runtime_wake_word_behavior(*, ignore_while_speaking=None, barge_in_inter
 
 
 def _get_arabic_onnx_model(model_path: str):
-    """Load an optional custom Arabic wake-word ONNX model.
+    """Load a custom Arabic wake-word ONNX model trained via openWakeWord.
 
-    The custom model is required when Arabic wake mode is enabled. If loading
-    fails we disable the Arabic layer so the assistant can still run.
+    TRAINING GUIDE for jarvis_ar model (replaces Whisper-tiny fallback):
+      1. Collect 200-500 audio clips (2-3 sec each) of "جارفيس" pronunciations
+      2. Use openWakeWord/tools/training to fine-tune on jarvis_ar keyword
+      3. Export to ONNX: ~4MB model, ~25ms inference (matches English speed)
+      4. Set JARVIS_WAKE_WORD_AR_ONNX_PATH=/path/to/jarvis_ar_v0.1.onnx
+      5. Enable: JARVIS_WAKE_WORD_MODE=both, JARVIS_WAKE_WORD_AR_ENABLED=true
+
+    Model path requirements:
+      - ONNX format (.onnx file)
+      - Trained on openWakeWord framework
+      - Must contain jarvis_ar weights (not generic model)
+      - Recommended size: 2-6 MB for <30ms inference on CPU
+
+    If loading fails we disable the Arabic layer so the assistant can still run.
     """
     global _arabic_onnx_model
     global _arabic_onnx_model_path
@@ -360,6 +389,8 @@ def listen_for_wake_word():
     phrase_runtime = get_runtime_wake_word_phrase_settings()
 
     wake_threshold = float(runtime["threshold"])
+    wake_en_threshold = float(runtime.get("en_threshold", wake_threshold))
+    wake_ar_threshold = float(runtime.get("ar_threshold", wake_threshold))
     wake_audio_gain = float(runtime["audio_gain"])
     wake_cooldown = float(runtime["detection_cooldown_seconds"])
 
@@ -456,7 +487,7 @@ def listen_for_wake_word():
                             )
                             last_debug_ts = now
 
-                    if score is not None and score > wake_threshold:
+                    if score is not None and score > wake_en_threshold:
                         now = time.perf_counter()
                         if now - _last_detection_ts < wake_cooldown:
                             continue
@@ -470,7 +501,7 @@ def listen_for_wake_word():
                     score = max(prediction.values()) if prediction else 0.0
                     if WAKE_WORD_SCORE_DEBUG and score is not None:
                         print(f"[WakeWord][AR] score={float(score):.6f}")
-                    if score and float(score) > wake_threshold:
+                    if score and float(score) > wake_ar_threshold:
                         now = time.perf_counter()
                         if now - _last_detection_ts < wake_cooldown:
                             continue

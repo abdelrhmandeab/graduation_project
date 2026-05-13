@@ -102,6 +102,20 @@ _QUESTION_HINTS = {
     "\u0643\u064a\u0641",
     "\u0644\u0645\u0627\u0630\u0627",
 }
+# Regex for utterances that start with a question/explanation opener — these
+# should rarely be OS commands. Applied as a confidence penalty in assess_intent_confidence.
+_QUESTION_OPENER_RE = re.compile(
+    r"^(?:"
+    r"what(?:'s| is| are| was| were)?|who(?:'s| is)?|why|how (?:do|does|can|to|did)|"
+    r"where(?:'s| is)?|when|tell me (?:about|how|why|what)|explain|"
+    r"what(?:'s| the)|give me|can you tell|do you know|"
+    # Egyptian Arabic openers
+    r"ايه|إيه|ازاي|إزاي|ليه|مين|فين|أمتى|امتى|اشرح|عرفني|احكيلي|اقولي|ممكن تشرح|ممكن تقولي"
+    r")",
+    re.IGNORECASE,
+)
+_QUESTION_PENALTY_INTENTS = {"OS_SYSTEM_COMMAND", "OS_APP_OPEN", "OS_APP_CLOSE"}
+
 _GREETING_HINTS = {
     "hi",
     "hello",
@@ -691,6 +705,14 @@ def assess_intent_confidence(raw_text, parsed, language="en"):
 
     if mixed_language:
         confidence -= 0.08
+
+    # Question-opener penalty: "tell me how to raise the volume" is a question,
+    # not a direct OS command. Penalise command intents when the utterance opens
+    # with a clear question/explanation phrase.
+    if parsed.intent in _QUESTION_PENALTY_INTENTS and _QUESTION_OPENER_RE.match(
+        " ".join(str(raw_text or "").split())
+    ):
+        confidence -= 0.30
 
     confidence = min(confidence, max(0.40, _min_entity_score(entity_scores) + 0.10))
 

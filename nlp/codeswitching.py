@@ -121,6 +121,47 @@ _STOPWORDS = {
 }
 
 
+# Tashkeel (harakat) Unicode range: U+064B–U+065F plus U+0670 (superscript alef)
+_TASHKEEL_RE = re.compile(r"[ً-ٰٟ]")
+
+# Letter normalization table: alef variants → alef, ya-without-dots → ya,
+# gaf (گ, U+06AF) → qaf (ق), and a few common hamza variants.
+_AR_LETTER_NORM = str.maketrans("أإآٱىگ", "اااايق")
+
+
+def strip_tashkeel(text: str) -> str:
+    """Remove Arabic diacritics (harakat / tashkeel) from text."""
+    return _TASHKEEL_RE.sub("", str(text or ""))
+
+
+def normalize_arabic_letters(text: str) -> str:
+    """Normalize common Arabic letter variants for robust command matching.
+
+    Maps:
+    - أ إ آ ٱ → ا  (alef variants)
+    - ى → ي        (ya without dots)
+    - گ → ق        (gaf used in some dialects for qaf)
+    """
+    return str(text or "").translate(_AR_LETTER_NORM)
+
+
+def normalize_arabic(text: str) -> str:
+    """Full Arabic pre-normalization: strip tashkeel + normalize letters + convert digits."""
+    t = strip_tashkeel(str(text or ""))
+    t = normalize_arabic_letters(t)
+    return t.translate(_AR_DIGITS)
+
+
+def normalize_arabic_preserve_digits(text: str) -> str:
+    """Same as normalize_arabic but keeps Arabic-Indic digits intact (٣ stays ٣).
+
+    Used in command_parser pre-normalization so that captured groups in regex
+    patterns (like time_str) retain the original numeral form.
+    """
+    t = strip_tashkeel(str(text or ""))
+    return normalize_arabic_letters(t)
+
+
 def convert_arabic_numerals(text: str) -> str:
     """Translate Arabic-Indic digits (٠١٢…٩) to ASCII digits (012…9)."""
     return str(text or "").translate(_AR_DIGITS)
@@ -223,6 +264,9 @@ def normalize_codeswitched(text: str) -> dict:
       intent, entity, normalized_entity, source_text
     """
     source = str(text or "").strip()
+    # Apply Arabic normalization before tokenizing so "اكتّم" → "اكتم" and
+    # "إفتح" → "افتح" are matched by the verb maps without separate entries.
+    normalized_source = normalize_arabic(source)
     empty = {
         "original": source,
         "arabic_segments": [],
@@ -240,13 +284,13 @@ def normalize_codeswitched(text: str) -> dict:
     if not source:
         return empty
 
-    tokens = [tok for tok in _TOKEN_RE.findall(source) if tok.strip()]
+    tokens = [tok for tok in _TOKEN_RE.findall(normalized_source) if tok.strip()]
     if not tokens:
         return empty
 
     arabic_segments = [tok for tok in tokens if _script_counts(tok)[0] and not _script_counts(tok)[1]]
     latin_segments = [tok for tok in tokens if _script_counts(tok)[1] and not _script_counts(tok)[0]]
-    numbers = _extract_numbers(source)
+    numbers = _extract_numbers(normalized_source)
 
     # --- detect verb (first matching token in first 3 positions) ---
     detected_verb = ""

@@ -5,7 +5,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 import httpx
 
-from core.config import LLM_MODEL, LLM_OLLAMA_BASE_URL, LLM_TIMEOUT_SECONDS
+from core.config import LLM_BACKEND, LLM_MODEL, LLM_OLLAMA_BASE_URL, LLM_TIMEOUT_SECONDS
 from core.logger import logger
 
 _OLLAMA_BASE_URL = str(LLM_OLLAMA_BASE_URL or "http://localhost:11434").rstrip("/")
@@ -230,6 +230,56 @@ def call_tool_tier(
     tool_calls = [call for call in tool_calls if call.get("name")]
     content = str(message.get("content") or "").strip()
     return {"tool_calls": tool_calls, "message": content, "raw": payload_json}
+
+
+def _ollama_tools_to_claude_format(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Convert Ollama-style tool definitions to Claude's input_schema format."""
+    result = []
+    for t in tools:
+        fn = t.get("function") or t
+        result.append({
+            "name": fn["name"],
+            "description": fn.get("description", ""),
+            "input_schema": fn.get("parameters") or {"type": "object", "properties": {}},
+        })
+    return result
+
+
+def call_tool_tier_claude(
+    user_text: str,
+    *,
+    tools: Optional[Sequence[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Tool-use call via Claude API. Returns same dict shape as call_tool_tier()."""
+    from llm.claude_client import _get_client
+    from core.config import CLAUDE_DEFAULT_MODEL
+
+    claude_tools = _ollama_tools_to_claude_format(list(tools or build_default_tools()))
+    system = (
+        "You are a command router for a Windows voice assistant. "
+        "Choose the appropriate tool(s) to execute the user's request. "
+        "Prefer 1-3 tool calls. Do not reply in prose."
+    )
+    try:
+        client = _get_client()
+        message = client.messages.create(
+            model=CLAUDE_DEFAULT_MODEL,
+            max_tokens=256,
+            system=system,
+            tools=claude_tools,
+            messages=[{"role": "user", "content": str(user_text or "")}],
+        )
+        tool_calls = []
+        for block in message.content:
+            if getattr(block, "type", None) == "tool_use":
+                tool_calls.append({
+                    "name": block.name,
+                    "arguments": dict(block.input or {}),
+                })
+        return {"tool_calls": tool_calls, "message": "", "raw": None}
+    except Exception as exc:
+        logger.debug("Claude tool-calling request failed: %s", exc)
+        return {"tool_calls": [], "message": "", "error": str(exc)}
 
 
 def tool_calls_to_parsed_commands(tool_calls: Iterable[Dict[str, Any]], raw_text: str):

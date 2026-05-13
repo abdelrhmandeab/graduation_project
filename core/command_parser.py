@@ -3,7 +3,7 @@ import re
 from dataclasses import dataclass, field
 
 from core.config import CONFIRMATION_TOKEN_BYTES, CONFIRMATION_TOKEN_MIN_HEX_LEN
-from nlp.codeswitching import normalize_codeswitched
+from nlp.codeswitching import normalize_codeswitched, normalize_arabic, normalize_arabic_preserve_digits
 from os_control.system_ops import normalize_system_action
 
 
@@ -595,7 +595,7 @@ def _try_codeswitched_command(raw, normalized):
                 args={"action_key": "browser_search_web", "search_query": query},
             )
 
-    if intent in {"stop", "mute"} and entity_normalized in {"music", "musiqa", "mزيكا", "الموسيقى", "المزيكا", "media"}:
+    if intent in {"stop", "mute"} and entity_normalized in {"music", "musiqa", "mزيكا", "الموسيقى", "الموسيقي", "المزيكا", "media"}:
         return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "media_stop"})
 
     if intent in {"increase", "decrease", "set"}:
@@ -1009,6 +1009,30 @@ def _try_keyword_table(normalized, raw):
 # If you find yourself adding a regex that has NO capture groups and only
 # matches a fixed phrase, prefer adding it to ``_KEYWORD_TABLE`` instead.
 
+# ---------------------------------------------------------------------------
+# Q2 2026 OPTIMIZATION: Parser Reduction Phase 1.6 → 1.7
+# ---------------------------------------------------------------------------
+# Current state: ~110 regex patterns in _REGEX_TABLE (high maintenance, paraphrase misses)
+# Target state: ~40 structural patterns only (unambiguous commands)
+#
+# Keep ONLY these in regex:
+#   - Paths/navigation: open /path, pwd, ls, cd, move /src /dst
+#   - Token sequences: set volume 50, set brightness 80, open [appname]
+#   - Explicit actions: create_directory, delete_item, send_email, create_calendar_event
+#   - System toggles: wifi_on, wifi_off, bluetooth_on, bluetooth_off, mute
+#   - Timer/reminder/alarm: set_timer 5m, set_reminder, set_alarm
+#   - Confirmations: yes, no, cancel, confirm
+#
+# MOVE TO SEMANTIC ROUTER (nlp/semantic_router.py):
+#   - Music playback (all paraphrases: "play some music", "put on music", etc.)
+#   - Media control (play, pause, skip, volume hints)
+#   - App commands (all friendly phrasings: "open chrome please", "launch spotify", etc.)
+#   - File operations (search, create, delete with natural language)
+#   - Every user-friendly paraphrase that embedding similarity can handle
+#
+# Result: Parser easier to maintain, semantic router handles rich user language,
+# combined coverage remains >95% with better recall on natural phrasings.
+#
 _REGEX_TABLE = [
     # Persona
     (
@@ -1376,6 +1400,109 @@ _REGEX_TABLE = [
         "OS_SYSTEM_COMMAND",
         "",
         lambda _m: {"action_key": "screenshot"},
+    ),
+    # Arabic volume up variants
+    (
+        re.compile(r"^(?:زود\s+الصوت|ارفع\s+الفوليم|ارفع\s+الصوت|صوت\s+أعلى|صوت\s+اعلى|مش\s+سامع\s+خالص|الصوت\s+واطي\s+جداً?|الصوت\s+واطي)$", re.IGNORECASE),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda _m: {"action_key": "volume_up"},
+    ),
+    # Arabic brightness up variants
+    (
+        re.compile(r"^(?:ارفع\s+السطوع|زود\s+الإضاءة|زود\s+الاضاءة|زود\s+الضوء|السطوع\s+واطي|الشاشة\s+مظلمة|مظلم\s+قوي)$", re.IGNORECASE),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda _m: {"action_key": "brightness_up"},
+    ),
+    # Arabic brightness down variants
+    (
+        re.compile(r"^(?:خفض\s+السطوع|قلل\s+الإضاءة|قلل\s+الاضاءة|قلل\s+الضوء|السطوع\s+عالي\s+قوي|الشاشة\s+ناصعة)$", re.IGNORECASE),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda _m: {"action_key": "brightness_down"},
+    ),
+    # Arabic additional screenshot variants
+    (
+        re.compile(r"^(?:صور\s+الشاشة|خد\s+لقطة\s+شاشة|سكرين\s+شوت|لقطة\s+الشاشة|التقط\s+الشاشة|صورة\s+للشاشة)$", re.IGNORECASE),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda _m: {"action_key": "screenshot"},
+    ),
+    # Arabic lock screen variants
+    (
+        re.compile(r"^(?:اقفل\s+الجهاز|اقفل\s+الشاشة|قفل\s+الشاشة|قفل\s+الجهاز|لوك\s+الشاشة|قفّل\s+الجهاز)$", re.IGNORECASE),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda _m: {"action_key": "lock"},
+    ),
+    # Arabic sleep variants
+    (
+        re.compile(r"^(?:نوم\s+الجهاز|حط\s+الجهاز\s+في\s+السليب|سليب\s+الجهاز|وضع\s+السليب|اوضع\s+الكمبيوتر\s+في\s+السليب)$", re.IGNORECASE),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda _m: {"action_key": "sleep"},
+    ),
+    # Arabic shutdown variants
+    (
+        re.compile(r"^(?:اوقف\s+الكمبيوتر|اغلق\s+الكمبيوتر|شتداون|اطفي\s+الجهاز|اطفئ\s+الجهاز|سكّر\s+الكمبيوتر)$", re.IGNORECASE),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda _m: {"action_key": "shutdown"},
+    ),
+    # Arabic restart variants
+    (
+        re.compile(r"^(?:اعيد\s+تشغيل\s+الكمبيوتر|ريستارت|عمل\s+ريستارت|اعد\s+تشغيل\s+الجهاز|اعادة\s+تشغيل)$", re.IGNORECASE),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda _m: {"action_key": "restart"},
+    ),
+    # Arabic media stop/pause/next/prev variants
+    # Note: ى (U+0649) is normalized to ي (U+064A) by normalize_arabic_preserve_digits
+    (
+        re.compile(r"^(?:وقف\s+الموسيقي|وقف\s+المزيكا|ايقاف\s+الموسيقي|وقّف\s+الموسيقي|اوقف\s+الموسيقي)$", re.IGNORECASE),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda _m: {"action_key": "media_stop"},
+    ),
+    (
+        re.compile(r"^(?:شغل\s+الموسيقي|شغّل\s+الموسيقي|كمل\s+الموسيقي|استانف\s+الموسيقي|play\s+الموسيقي)$", re.IGNORECASE),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda _m: {"action_key": "media_play"},
+    ),
+    # Arabic Wi-Fi toggle variants
+    (
+        re.compile(r"^(?:شيل\s+الواي\s+فاي|قطع\s+الانترنت|وقف\s+الواي\s+فاي|افصل\s+الواي\s+فاي)$", re.IGNORECASE),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda _m: {"action_key": "wifi_off"},
+    ),
+    (
+        re.compile(r"^(?:وصل\s+الواي\s+فاي|شغّل\s+الواي\s+فاي|فتح\s+الانترنت|شغل\s+الانترنت)$", re.IGNORECASE),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda _m: {"action_key": "wifi_on"},
+    ),
+    # Arabic مش سامع / مش شايف — shorthand for volume/brightness help
+    (
+        re.compile(r"^(?:مش\s+سامع|صوت\s+خفيف\s+قوي|الصوت\s+خفيف)$", re.IGNORECASE),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda _m: {"action_key": "volume_up"},
     ),
     # Audit
     (
@@ -2414,6 +2541,10 @@ def _try_cd_commands(normalized, raw):
 
 def parse_command(text: str) -> ParsedCommand:
     raw = text or ""
+    # Pre-normalize Arabic text: strip tashkeel, normalize alef/ya/gaf variants.
+    # Preserves Arabic-Indic digits (٣) so regex captures like time_str keep the
+    # original numeral form (normalize_arabic would convert them to ASCII).
+    raw = normalize_arabic_preserve_digits(raw) if any(0x0600 <= ord(c) <= 0x06FF for c in raw) else raw
     normalized = " ".join(raw.lower().split()).strip()
     normalized_match = _normalize_for_match(raw)
     spoken_candidate = _strip_spoken_prefixes(normalized_match)

@@ -344,3 +344,143 @@ class SQLiteMemoryStore:
         with open(path, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, ensure_ascii=False, indent=2)
         return path
+
+
+# ---------------------------------------------------------------------------
+# Vector memory store (ChromaDB + sentence-transformers)
+# ---------------------------------------------------------------------------
+
+class VectorMemoryStore:
+    """Semantic long-term memory backed by ChromaDB with local embeddings.
+
+    Stores every LLM_QUERY turn (user question + assistant answer) as an
+    embedding so future turns can retrieve the top-N most relevant past
+    exchanges to inject into the LLM context.
+
+    Usage:
+        store = VectorMemoryStore()
+        store.remember("what is machine learning?", "ML teaches computers from data.", language="en")
+        results = store.recall("explain deep learning", n=3)
+    """
+
+    _CHROMA_DIR = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "data", "chroma_memory",
+    )
+    _COLLECTION_NAME = "jarvis_memory"
+    _EMBED_MODEL = "all-MiniLM-L6-v2"
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._client = None
+        self._collection = None
+        self._embedder = None
+        self._ready = False
+        self._init_thread = threading.Thread(target=self._init_async, daemon=True)
+        self._init_thread.start()
+
+    def _init_async(self) -> None:
+        try:
+            import chromadb
+            from sentence_transformers import SentenceTransformer
+            os.makedirs(self._CHROMA_DIR, exist_ok=True)
+            client = chromadb.PersistentClient(path=self._CHROMA_DIR)
+            collection = client.get_or_create_collection(
+                self._COLLECTION_NAME,
+                metadata={"hnsw:space": "cosine"},
+            )
+            embedder = SentenceTransformer(self._EMBED_MODEL)
+            with self._lock:
+                self._client = client
+                self._collection = collection
+                self._embedder = embedder
+                self._ready = True
+            logger.info("VectorMemoryStore ready (%d entries).", collection.count())
+        except Exception as exc:
+            logger.warning("VectorMemoryStore init failed (semantic recall disabled): %s", exc)
+
+    def _embed(self, text: str) -> list[float]:
+        return self._embedder.encode(text, normalize_embeddings=True).tolist()
+
+    def remember(self, user_text: str, assistant_text: str, *, language: str = "en", intent: str = "LLM_QUERY") -> None:
+        """Store a turn embedding. No-op if the store isn't ready."""
+        if not self._ready:
+            return
+        user_text = (user_text or "").strip()
+        assistant_text = (assistant_text or "").strip()
+        if not user_text:
+            return
+        combined = f"Q: {user_text}\nA: {assistant_text}" if assistant_text else user_text
+        try:
+            import time as _time
+            doc_id = f"{int(_time.time() * 1000)}_{abs(hash(user_text)) % 100000}"
+            embedding = self._embed(combined)
+            with self._lock:
+                self._collection.add(
+                    ids=[doc_id],
+                    embeddings=[embedding],
+                    documents=[combined],
+                    metadatas=[{"user": user_text, "assistant": assistant_text, "language": language, "intent": intent}],
+                )
+        except Exception as exc:
+            logger.debug("VectorMemoryStore.remember failed: %s", exc)
+
+    def recall(self, query: str, n: int = 3, *, language: str | None = None) -> list[dict]:
+        """Return top-n semantically similar past turns for the given query.
+
+        Each result is {"user": str, "assistant": str, "language": str, "score": float}.
+        Returns [] if the store isn't ready or has fewer entries than requested.
+        """
+        if not self._ready:
+            return []
+        query = (query or "").strip()
+        if not query:
+            return []
+        try:
+            with self._lock:
+                count = self._collection.count()
+            if count == 0:
+                return []
+            k = min(n, count)
+            embedding = self._embed(query)
+            where = {"language": language} if language else None
+            with self._lock:
+                results = self._collection.query(
+                    query_embeddings=[embedding],
+                    n_results=k,
+                    where=where,
+                    include=["metadatas", "distances"],
+                )
+            memories = []
+            metadatas = results.get("metadatas", [[]])[0]
+            distances = results.get("distances", [[]])[0]
+            for meta, dist in zip(metadatas, distances):
+                score = 1.0 - float(dist)  # cosine distance → similarity
+                if score < 0.25:  # skip very dissimilar entries
+                    continue
+                memories.append({
+                    "user": meta.get("user", ""),
+                    "assistant": meta.get("assistant", ""),
+                    "language": meta.get("language", ""),
+                    "score": round(score, 3),
+                })
+            return memories
+        except Exception as exc:
+            logger.debug("VectorMemoryStore.recall failed: %s", exc)
+            return []
+
+    def count(self) -> int:
+        if not self._ready:
+            return 0
+        try:
+            with self._lock:
+                return self._collection.count()
+        except Exception:
+            return 0
+
+    def is_ready(self) -> bool:
+        return self._ready
+
+
+# Module-level singleton — import and use directly.
+vector_memory = VectorMemoryStore()

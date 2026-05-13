@@ -1,9 +1,17 @@
 """DuckDuckGo web search — free, no API key, no signup.
 
 Phase 2.7 hardening:
-  - Domain allowlist boost (trusted publishers rank first).
-  - Domain blocklist filtering (drop low-quality sources outright).
-  - Recency scoring using any "date"/"published" field exposed by the backend.
+    - Domain allowlist boost (trusted publishers rank first).
+    - Domain blocklist filtering (drop low-quality sources outright).
+    - Recency scoring using any "date"/"published" field exposed by the backend.
+
+Q2 2026 P0 Optimization #7 – Web search ranking:
+    ✅ COMPLETED. Implemented in Phase 2.7 with domain allowlist (WEB_SEARCH_TRUSTED_DOMAINS),
+         blocklist (WEB_SEARCH_BLOCKED_DOMAINS), and recency boosting (_recency_factor).
+         Result: No more SEO-optimized spam; trusted sources rank first; recent results boost.
+         Functions: _is_trusted_domain() + _is_blocked_domain() rank sources; _recency_factor()
+         applies time-decay to older results. Config: WEB_SEARCH_TRUSTED_DOMAIN_BOOST (0.5),
+         WEB_SEARCH_RECENCY_BOOST (0.3), WEB_SEARCH_TRUSTED_DOMAINS (reuters.com, bbc.co.uk, etc).
 """
 
 import re

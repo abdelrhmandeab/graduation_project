@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import concurrent.futures
 import queue
 import tempfile
 import threading
@@ -22,7 +21,12 @@ else:
 
 import re as _re
 
-from audio.stt import normalize_arabic_post_transcript, transcribe_streaming_with_meta
+from audio.mic import get_runtime_vad_settings
+from audio.stt import (
+    normalize_arabic_post_transcript,
+    transcribe_backend_direct_with_meta,
+    transcribe_streaming_with_meta,
+)
 from audio.vad import SileroVAD
 from core.config import (
     AUDIO_CHUNK_SIZE,
@@ -30,8 +34,10 @@ from core.config import (
     SAMPLE_RATE,
     VAD_CHAT_SILENCE_SECONDS,
     VAD_COMMAND_SILENCE_SECONDS,
+    VAD_ENERGY_THRESHOLD,
     VAD_MIN_SPEECH_SECONDS,
     VAD_PREROLL_SECONDS,
+    VAD_SILERO_THRESHOLD,
     VAD_SILENCE_SECONDS,
     VAD_START_TIMEOUT_SECONDS,
 )
@@ -55,30 +61,8 @@ def _is_arabic_text(text: str) -> bool:
     return bool(_ARABIC_CHAR_RE.search(str(text or "")))
 
 
-# ---------------------------------------------------------------------------
-# Shared streaming VAD singleton — loaded once, reused across all utterances.
-# This avoids re-loading the Silero ONNX model (~100-500 ms) on every wake.
-# ---------------------------------------------------------------------------
-_shared_streaming_vad: "SileroVAD | None" = None
-_shared_streaming_vad_lock = threading.Lock()
-
-
-def _get_shared_streaming_vad() -> SileroVAD:
-    global _shared_streaming_vad
-    if _shared_streaming_vad is None:
-        with _shared_streaming_vad_lock:
-            if _shared_streaming_vad is None:
-                _shared_streaming_vad = SileroVAD()
-    return _shared_streaming_vad
-
-
-def prewarm_streaming_vad() -> bool:
-    """Load the streaming Silero VAD model now so first-utterance latency is zero."""
-    try:
-        vad = _get_shared_streaming_vad()
-        return vad.is_ready()
-    except Exception:
-        return False
+_STREAMING_VAD: Optional[SileroVAD] = None
+_STREAMING_VAD_LOCK = threading.Lock()
 
 
 def _seconds_to_chunks(seconds: float) -> int:
@@ -99,6 +83,30 @@ def _write_wav_file(filename: str, sample_rate: int, audio_int16: np.ndarray) ->
         handle.setsampwidth(2)
         handle.setframerate(int(sample_rate))
         handle.writeframes(audio_int16.tobytes())
+
+
+def _get_streaming_vad(*, energy_threshold: float, silero_threshold: float) -> SileroVAD:
+    global _STREAMING_VAD
+    normalized_energy = max(0.001, float(energy_threshold))
+    normalized_threshold = max(0.05, min(0.95, float(silero_threshold)))
+    with _STREAMING_VAD_LOCK:
+        if _STREAMING_VAD is None:
+            _STREAMING_VAD = SileroVAD(
+                energy_threshold=normalized_energy,
+                threshold=normalized_threshold,
+            )
+        else:
+            _STREAMING_VAD.energy_threshold = normalized_energy
+            _STREAMING_VAD.threshold = normalized_threshold
+        _STREAMING_VAD.reset()
+        return _STREAMING_VAD
+
+
+def _get_shared_streaming_vad() -> SileroVAD:
+    return _get_streaming_vad(
+        energy_threshold=VAD_ENERGY_THRESHOLD,
+        silero_threshold=VAD_SILERO_THRESHOLD,
+    )
 
 
 def _resolve_silence_seconds(vad_mode: str, explicit_silence_seconds: Optional[float] = None) -> float:
@@ -131,6 +139,7 @@ def _transcribe_buffer(
     *,
     language_hint: Optional[str],
     on_partial: Optional[Callable[[str], None]] = None,
+    use_local_only: bool = False,
 ) -> Dict[str, Any]:
     if not chunks:
         return {
@@ -143,11 +152,6 @@ def _transcribe_buffer(
         }
 
     audio = np.concatenate(chunks, axis=0).astype(np.int16, copy=False)
-    try:
-        from audio.echo_cancel import noise_reducer
-        audio = noise_reducer.reduce(audio, SAMPLE_RATE)
-    except Exception:
-        pass
     _write_wav_file(filename, SAMPLE_RATE, audio)
 
     # Use Arabic-optimised whisper params for Arabic streaming sessions.
@@ -156,9 +160,18 @@ def _transcribe_buffer(
         if str(language_hint or "").startswith("ar")
         else None
     )
-    result = transcribe_streaming_with_meta(
-        filename, on_partial=on_partial, language_hint=language_hint, whisper_kwargs=ar_kwargs
-    )
+    if use_local_only:
+        result = transcribe_backend_direct_with_meta(
+            filename,
+            backend="faster_whisper",
+            on_partial=on_partial,
+            language_hint=language_hint,
+            whisper_kwargs=ar_kwargs,
+        )
+    else:
+        result = transcribe_streaming_with_meta(
+            filename, on_partial=on_partial, language_hint=language_hint, whisper_kwargs=ar_kwargs
+        )
     result["samples"] = int(audio.shape[0])
     result["duration_seconds"] = float(audio.shape[0]) / float(SAMPLE_RATE)
     return result
@@ -177,7 +190,10 @@ class StreamingSTT:
         pre_roll_seconds: Optional[float] = None,
         start_timeout_seconds: Optional[float] = None,
         max_speech_seconds: Optional[float] = None,
+        energy_threshold: Optional[float] = None,
+        silero_threshold: Optional[float] = None,
         partial_interval_seconds: float = 0.45,
+        enable_partials: bool = False,
         on_partial: Optional[Callable[[str], None]] = None,
         on_final: Optional[Callable[[Dict[str, Any]], None]] = None,
         on_speech_start: Optional[Callable[[], None]] = None,
@@ -192,7 +208,10 @@ class StreamingSTT:
         self.pre_roll_seconds = max(0.0, float(pre_roll_seconds or VAD_PREROLL_SECONDS))
         self.start_timeout_seconds = max(0.2, float(start_timeout_seconds or VAD_START_TIMEOUT_SECONDS))
         self.max_speech_seconds = max(0.5, float(max_speech_seconds or max(1.5, self.max_duration * 0.65)))
+        self.energy_threshold = max(0.001, float(energy_threshold or VAD_ENERGY_THRESHOLD))
+        self.silero_threshold = max(0.05, min(0.95, float(silero_threshold or VAD_SILERO_THRESHOLD)))
         self.partial_interval_seconds = max(0.2, float(partial_interval_seconds))
+        self.enable_partials = bool(enable_partials)
         self.on_partial = on_partial
         self.on_final = on_final
         self.on_speech_start = on_speech_start
@@ -200,21 +219,10 @@ class StreamingSTT:
         self._chunk_queue: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=128)
         self._stop_event = threading.Event()
         self._speech_started = False
-        # Re-use the pre-loaded singleton to avoid reloading the ONNX model
-        # on every utterance (~100–500 ms cold-start penalty otherwise).
-        self._vad_detector = _get_shared_streaming_vad()
-        self._vad_detector.reset()
+        self._vad_detector: Optional[SileroVAD] = None
         # Arabic partial stability — emit only after 2 consecutive identical windows
         self._ar_pending_partial: str = ""
         self._ar_pending_count: int = 0
-        # Single-worker executor for non-blocking partial transcription.
-        # Partials run in a daemon thread so the audio capture loop is never blocked
-        # by whisper inference (critical under memory pressure where inference can
-        # take several seconds).
-        self._partial_executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="jarvis-partial-stt"
-        )
-        self._partial_future: "Optional[concurrent.futures.Future[str]]" = None
 
     def _audio_callback(self, in_data, frames, time_info, status):  # pragma: no cover - called by sounddevice
         if in_data is None:
@@ -243,6 +251,7 @@ class StreamingSTT:
                 partial_file,
                 language_hint=self.language_hint,
                 on_partial=None,
+                use_local_only=True,
             )
             text = str(result.get("text", "") or "").strip()
 
@@ -318,10 +327,7 @@ class StreamingSTT:
                         continue
 
                     rms = _chunk_rms(chunk)
-                    if self._vad_detector is not None:
-                        is_voice = bool(self._vad_detector.is_speech_chunk(chunk))
-                    else:
-                        is_voice = rms >= 0.001
+                    is_voice = rms >= float(self.energy_threshold)
 
                     if not speech_detected:
                         pre_roll.append(chunk.copy())
@@ -346,28 +352,15 @@ class StreamingSTT:
                         silence_chunks += 1
 
                     now = time.perf_counter()
-
-                    # Harvest completed partial result (non-blocking check).
-                    if self._partial_future is not None and self._partial_future.done():
-                        try:
-                            partial_text = self._partial_future.result()
-                        except Exception:
-                            pass
-                        self._partial_future = None
-
-                    should_emit_partial = (
-                        speech_samples >= int(0.5 * SAMPLE_RATE)
-                        and (now - last_partial_emit) >= self.partial_interval_seconds
-                        and self._partial_future is None  # skip if previous still running
-                    )
-                    if should_emit_partial:
-                        chunks_snapshot = list(captured_chunks)
-                        partial_tmp_path = tempfile.mktemp(suffix=".wav")
-                        prev_text = partial_text
-                        self._partial_future = self._partial_executor.submit(
-                            self._transcribe_partial, chunks_snapshot, partial_tmp_path, prev_text
+                    if self.enable_partials:
+                        should_emit_partial = (
+                            speech_samples >= int(0.5 * SAMPLE_RATE)
+                            and (now - last_partial_emit) >= self.partial_interval_seconds
                         )
-                        last_partial_emit = now
+                        if should_emit_partial:
+                            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as partial_tmp:
+                                partial_text = self._transcribe_partial(captured_chunks, partial_tmp.name, partial_text)
+                            last_partial_emit = now
 
                     silence_target = _seconds_to_chunks(
                         _adaptive_silence_seconds(
@@ -382,11 +375,6 @@ class StreamingSTT:
                         break
         finally:
             self._stop_event.set()
-            # Cancel any in-flight partial so it doesn't compete with final transcription.
-            if self._partial_future is not None and not self._partial_future.done():
-                self._partial_future.cancel()
-            self._partial_executor.shutdown(wait=False)
-            self._partial_future = None
 
         elapsed = time.perf_counter() - started_at
         if not speech_detected or not captured_chunks:
@@ -400,13 +388,12 @@ class StreamingSTT:
             }
 
         _safe_callback(self.on_speech_end)
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
-            final_result = _transcribe_buffer(
-                captured_chunks,
-                temp_file.name,
-                language_hint=self.language_hint,
-                on_partial=self.on_partial,
-            )
+        final_result = _transcribe_buffer(
+            captured_chunks,
+            self.filename,
+            language_hint=self.language_hint,
+            on_partial=self.on_partial if self.enable_partials else None,
+        )
 
         final_text = str(final_result.get("text", "") or "").strip()
         final_result.update(
@@ -436,12 +423,39 @@ def record_utterance_streaming(
     pre_roll_seconds: Optional[float] = None,
     start_timeout_seconds: Optional[float] = None,
     max_speech_seconds: Optional[float] = None,
+    energy_threshold: Optional[float] = None,
     partial_interval_seconds: float = 0.45,
+    enable_partials: bool = False,
     on_partial: Optional[Callable[[str], None]] = None,
     on_final: Optional[Callable[[Dict[str, Any]], None]] = None,
     on_speech_start: Optional[Callable[[], None]] = None,
     on_speech_end: Optional[Callable[[], None]] = None,
 ) -> Dict[str, Any]:
+    runtime = get_runtime_vad_settings()
+    if energy_threshold is None:
+        energy_threshold = float(runtime.get("energy_threshold") or VAD_ENERGY_THRESHOLD)
+    if min_speech_seconds is None:
+        min_speech_seconds = float(runtime.get("min_speech_seconds") or VAD_MIN_SPEECH_SECONDS)
+    if pre_roll_seconds is None:
+        pre_roll_seconds = float(runtime.get("pre_roll_seconds") or VAD_PREROLL_SECONDS)
+    if start_timeout_seconds is None:
+        start_timeout_seconds = float(runtime.get("start_timeout_seconds") or VAD_START_TIMEOUT_SECONDS)
+    if max_speech_seconds is None:
+        max_speech_seconds = float(runtime.get("max_speech_seconds") or max(1.5, max_duration * 0.65))
+    if silence_seconds is None:
+        mode = str(vad_mode or "command").strip().lower()
+        if mode in {"chat", "conversation", "dialog", "turn"}:
+            silence_seconds = float(
+                runtime.get("chat_silence_seconds")
+                or runtime.get("silence_seconds")
+                or VAD_CHAT_SILENCE_SECONDS
+            )
+        else:
+            silence_seconds = float(
+                runtime.get("command_silence_seconds")
+                or runtime.get("silence_seconds")
+                or VAD_COMMAND_SILENCE_SECONDS
+            )
     engine = StreamingSTT(
         filename=filename,
         max_duration=max_duration,
@@ -452,8 +466,10 @@ def record_utterance_streaming(
         pre_roll_seconds=pre_roll_seconds,
         start_timeout_seconds=start_timeout_seconds,
         max_speech_seconds=max_speech_seconds,
+        energy_threshold=energy_threshold,
         partial_interval_seconds=partial_interval_seconds,
-        on_partial=on_partial,
+        enable_partials=enable_partials,
+        on_partial=on_partial if enable_partials else None,
         on_final=on_final,
         on_speech_start=on_speech_start,
         on_speech_end=on_speech_end,

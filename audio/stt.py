@@ -18,6 +18,7 @@ from core.config import (
     STT_ELEVENLABS_TIMEOUT_SECONDS,
     STT_ELEVENLABS_WEAK_TEXT_MIN_CHARS,
     STT_LANGUAGE_DETECT_MODEL,
+    STT_LANGUAGE_HINT,
     STT_MIXED_TREAT_AS_ARABIC,
     WHISPER_MODEL,
 )
@@ -48,7 +49,7 @@ def _normalize_backend_name(name: str) -> str:
 
 
 _RUNTIME_STT_BACKEND = _normalize_backend_name(STT_BACKEND)
-_RUNTIME_STT_SETTINGS: Dict[str, Any] = {"language_hint": "auto"}
+_RUNTIME_STT_SETTINGS: Dict[str, Any] = {"language_hint": STT_LANGUAGE_HINT}
 _LAST_TRANSCRIPTION_META: Dict[str, Any] = {}
 
 _LOCAL_MODEL_LOCK = threading.Lock()
@@ -461,9 +462,13 @@ def _is_weak_transcript(text: str) -> bool:
     normalized = " ".join(str(text or "").split()).strip()
     if len(normalized) < int(STT_ELEVENLABS_WEAK_TEXT_MIN_CHARS):
         return True
-    # Also reject transcripts that are mostly diacritics or non-Latin gibberish
+    # Accept Arabic-only transcripts — Arabic has no Latin characters by definition.
+    arabic_chars = sum(1 for c in normalized if '؀' <= c <= 'ۿ')
+    if arabic_chars > 0:
+        return False
+    # Reject transcripts that contain no recognizable Latin or Arabic characters
     latin_chars = sum(1 for c in normalized if 'a' <= c.lower() <= 'z')
-    if latin_chars == 0:
+    if latin_chars == 0 and arabic_chars == 0:
         return True
     return False
 
@@ -505,9 +510,12 @@ def _transcribe_with_hybrid_elevenlabs(
     local_text = str(local.get("text", "")).strip()
     local_lang = _normalize_detected_language(local.get("language") or detected_language)
     local_confidence = float(local.get("confidence") or 0.0)
-    
-    # Reject weak transcripts or those with very low confidence language detection
-    if _is_weak_transcript(local_text) or (local_confidence > 0.0 and local_confidence < 0.65):
+
+    # Arabic Whisper confidence is naturally lower (~0.3) because the model was
+    # pre-trained on mostly English data. Only reject truly empty/garbled output.
+    # Use a lower threshold for Arabic (0.15) than English (0.65).
+    _conf_floor = 0.15 if detected_language == "ar" else 0.65
+    if _is_weak_transcript(local_text) or (local_confidence > 0.0 and local_confidence < _conf_floor):
         logger.warning(
             "Local STT returned weak/uncertain result (text_len=%d, lang_conf=%.2f); falling back",
             len(local_text),

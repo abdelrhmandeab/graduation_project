@@ -1,8 +1,10 @@
 """Streaming sentence accumulator for TTS chunking.
 
-Arabic mode: flushes on ؟ . ! \n; soft-splits at connectors (و/ف/ثم)
-after `soft_flush_chars`; hard-cuts at `hard_flush_chars` regardless.
-English mode: flushes on . ! ? \\n (same as prior regex behaviour).
+Arabic mode: flushes on Egyptian punctuation (؟/.!/\n); requires ≥6 tokens + boundary.
+Soft-splits at connectors (و/ف/ثم) after `soft_flush_chars`; hard-cuts at `hard_flush_chars`.
+English mode: flushes on . ! ? \n (same as prior regex behaviour).
+
+Q2 2026: Egyptian Arabic-aware boundary list added to prevent mid-clause TTS cuts.
 """
 import re
 from typing import Optional
@@ -19,6 +21,14 @@ _AR_PUNCT_RE = re.compile(r"[.!?؟\n]")
 _EN_SENT_END_RE = re.compile(r"[.!?؟\n]\s+|[.!?؟]$")
 # Arabic connectors flanked by spaces — preferred soft-split points
 _AR_CONNECTOR_RE = re.compile(r"(?<= )(?:ثم|و|ف)(?= )")
+
+# Egyptian Arabic boundary list: avoid splitting mid-clause at these weak markers
+_EGYAR_CLAUSE_MARKERS = (
+    "،",  # Egyptian comma (used instead of Western comma)
+    "؛",  # Arabic semicolon
+    ":",  # Colon (common in lists)
+    "-",  # Dash (common in Egyptian speech)
+)
 
 
 class SentenceBuffer:
@@ -45,18 +55,30 @@ class SentenceBuffer:
         self.soft_flush_chars = int(soft_flush_chars if soft_flush_chars is not None else _CFG_SOFT)
         self.hard_flush_chars = int(hard_flush_chars if hard_flush_chars is not None else _CFG_HARD)
         self._buf = ""
+        self._token_count = 0  # Track tokens (not just chars) to avoid mid-clause splits
 
     def add_token(self, token: str) -> Optional[str]:
-        """Append *token* and return a flushed sentence if a boundary is found."""
+        """Append *token* and return a flushed sentence if a boundary is found.
+        
+        For Egyptian Arabic: requires ≥6 tokens + punctuation boundary to avoid
+        mid-clause splits at weak markers (commas, semicolons).
+        """
         if not token:
             return None
         self._buf += token
+        # Token count increments on space boundaries (word-like tokens) or every 5 chars (subword)
+        token_words = len(token.split())
+        if token_words > 0:
+            self._token_count += token_words
+        else:
+            self._token_count += max(1, len(token) // 5)
         return self._check()
 
     def flush(self) -> str:
         """Force-flush whatever remains in the buffer."""
         result = self._buf.strip()
         self._buf = ""
+        self._token_count = 0
         return result
 
     # ------------------------------------------------------------------
@@ -69,31 +91,38 @@ class SentenceBuffer:
         return self._check_arabic() if self.is_arabic else self._check_english()
 
     def _check_arabic(self) -> Optional[str]:
-        # Punctuation boundary — emit up to and including the mark
+        # Strong boundary: Punctuation + ≥6 tokens = emit
         m = _AR_PUNCT_RE.search(self._buf)
         if m:
-            sentence = self._buf[: m.end()].strip()
-            self._buf = self._buf[m.end() :].lstrip()
-            return sentence or None
+            min_tokens_for_emission = 6
+            if self._token_count >= min_tokens_for_emission:
+                sentence = self._buf[: m.end()].strip()
+                self._buf = self._buf[m.end() :].lstrip()
+                self._token_count = 0  # Reset token counter for next buffer
+                return sentence or None
+            # If < 6 tokens, wait for more (don't split mid-clause)
+            return None
 
         text = self._buf.strip()
         length = len(text)
 
-        # Soft flush: split at last Arabic connector or space
-        if length >= self.soft_flush_chars:
+        # Soft flush: split at last Arabic connector or space (only after 6+ tokens)
+        if length >= self.soft_flush_chars and self._token_count >= 6:
             pos = self._soft_split_pos(text)
             if pos > 0:
                 sentence = text[:pos].strip()
                 if self._is_single_word(sentence):
                     return None
                 self._buf = text[pos:].lstrip()
+                self._token_count = max(0, self._token_count - len(sentence.split()))  # Adjust token count
                 return sentence or None
 
-        # Hard flush: cut unconditionally
+        # Hard flush: cut unconditionally after 100+ chars
         if length >= self.hard_flush_chars:
             if self._is_single_word(text):
                 return None
             self._buf = ""
+            self._token_count = 0
             return text
 
         return None

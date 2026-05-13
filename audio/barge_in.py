@@ -14,9 +14,9 @@ Design notes
 * Activation is gated by ``BARGE_IN_VAD_GRACE_SECONDS``: cheap laptop mics
   often pick up the speaker output, so we ignore the first half second of
   audio to avoid self-triggering before the user could realistically respond.
-* Echo cancellation via ``set_tts_rms()``: the TTS engine reports its current
-  playback RMS so we can reject blocks where the mic just mirrors the speaker.
-  A block is only counted when mic_rms > tts_rms * ECHO_CANCEL_RATIO (1.5).
+* Echo gating via ``set_tts_rms()``: the TTS engine reports its current
+    playback RMS so we can reject blocks where the mic just mirrors the speaker.
+    A block is only counted when mic_rms > tts_rms * BARGE_IN_ENERGY_RATIO.
 * Silero VAD double-confirmation: after the energy streak meets the minimum
   duration, the accumulated samples are re-checked by SileroVAD before the
   callback fires, preventing false triggers from impulsive noise.
@@ -59,6 +59,50 @@ _POST_INTERRUPT_COOLDOWN_SECONDS = float(BARGE_IN_COOLDOWN_SECONDS)
 # occurred and it should exit immediately so the orchestrator can start
 # recording the user's utterance without requiring a new wake word.
 _barge_in_wake_event = threading.Event()
+
+# Module-level event: set while Jarvis is "thinking" (STT → LLM → before TTS).
+# The barge-in monitor watches this and fires an interrupt if the user speaks
+# during thinking, not just during TTS playback.
+_thinking_interrupt_event = threading.Event()
+# Callback to invoke when thinking-phase barge-in fires (set by orchestrator).
+_thinking_interrupt_callback = None
+_thinking_interrupt_lock = threading.Lock()
+
+
+def set_thinking_phase(active: bool, callback=None) -> None:
+    """Called by the orchestrator to mark when Jarvis is thinking (pre-TTS).
+
+    When active=True the barge-in monitor is enabled for the thinking phase.
+    callback() is invoked (once) when the user speaks during thinking.
+    When active=False the thinking phase ends (TTS started or cycle ended).
+    """
+    global _thinking_interrupt_callback
+    with _thinking_interrupt_lock:
+        _thinking_interrupt_callback = callback if active else None
+    if active:
+        _thinking_interrupt_event.clear()
+    else:
+        _thinking_interrupt_event.set()  # release any waiter
+
+
+def consume_thinking_interrupt() -> bool:
+    """Return True if a thinking-phase interrupt was requested, then clear it."""
+    global _thinking_interrupt_callback
+    with _thinking_interrupt_lock:
+        cb = _thinking_interrupt_callback
+    if cb is not None:
+        # Check if monitor fired
+        return False  # polled by orchestrator via is_thinking_interrupted()
+    return False
+
+
+def is_thinking_interrupted() -> bool:
+    """True if barge-in fired while Jarvis was thinking. Non-destructive check."""
+    return _thinking_interrupt_event.is_set()
+
+
+def clear_thinking_interrupt() -> None:
+    _thinking_interrupt_event.clear()
 
 
 def notify_barge_in_wake() -> None:
@@ -178,18 +222,11 @@ class BargeInMonitor:
                     samples_float = samples.astype(np.float32) / 32768.0
                     rms = float(np.sqrt(np.mean(np.square(samples_float))))
 
-                    # Echo cancellation: reject blocks where the mic is just
-                    # mirroring TTS speaker output.  Use adaptive ratio +
-                    # baseline noise offset from the echo_cancel module.
+                    # Echo gating: reject blocks where the mic is just mirroring
+                    # TTS speaker output using a fixed ratio.
                     tts_rms = self._get_tts_rms()
-                    try:
-                        from audio.echo_cancel import baseline_noise, echo_ratio_adapter
-                        _echo_threshold = baseline_noise.adjusted_echo_threshold(
-                            tts_rms, echo_ratio_adapter.get_current_ratio()
-                        )
-                    except Exception:
-                        from core.config import BARGE_IN_ENERGY_RATIO
-                        _echo_threshold = tts_rms * float(BARGE_IN_ENERGY_RATIO)
+                    from core.config import BARGE_IN_ENERGY_RATIO
+                    _echo_threshold = tts_rms * float(BARGE_IN_ENERGY_RATIO)
                     if tts_rms > 0.0 and rms < _echo_threshold:
                         voiced_blocks = 0
                         voiced_samples.clear()
@@ -216,12 +253,6 @@ class BargeInMonitor:
                                     voiced_blocks,
                                     "silero" if silero_vad is not None else "energy",
                                 )
-                                # Auto-calibrate echo ratio from this real event.
-                                try:
-                                    from audio.echo_cancel import echo_ratio_adapter
-                                    echo_ratio_adapter.record_interrupt_event(rms, tts_rms)
-                                except Exception:
-                                    pass
                                 try:
                                     self._on_barge_in()
                                 except Exception as exc:
@@ -270,3 +301,96 @@ def _resolve_input_device():
         if name_query in str(device.get("name", "")).lower():
             return idx
     return None
+
+
+class ThinkingPhaseMonitor:
+    """Lightweight mic monitor that fires while Jarvis is thinking (no TTS active).
+
+    Unlike BargeInMonitor it does not echo-cancel (no TTS playing) and uses a
+    lower energy threshold. When the user speaks it sets _thinking_interrupt_event
+    and calls the registered callback so the orchestrator can abort the LLM call
+    and start a fresh recording cycle.
+    """
+
+    def __init__(self):
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+
+    def start(self) -> bool:
+        if not BARGE_IN_VAD_ENABLED or sd is None:
+            return False
+        with self._lock:
+            if self._thread and self._thread.is_alive():
+                return True
+            self._stop_event.clear()
+            t = threading.Thread(target=self._run, name="jarvis-thinking-monitor", daemon=True)
+            self._thread = t
+            t.start()
+        return True
+
+    def stop(self, *, join_timeout: float = 0.3) -> None:
+        self._stop_event.set()
+        with self._lock:
+            t = self._thread
+            self._thread = None
+        if t and t.is_alive() and t.ident != threading.current_thread().ident:
+            t.join(timeout=join_timeout)
+
+    def _run(self) -> None:
+        threshold = max(0.001, float(BARGE_IN_VAD_ENERGY_THRESHOLD) * 0.8)  # slightly more sensitive
+        sample_rate = int(SAMPLE_RATE or 16000)
+        block_samples = _MONITOR_BLOCK_SAMPLES
+        seconds_per_block = float(block_samples) / float(sample_rate)
+        required_blocks = max(1, int(round(0.12 / max(seconds_per_block, 1e-6))))  # 120 ms
+        voiced_blocks = 0
+
+        try:
+            with sd.InputStream(
+                samplerate=sample_rate,
+                channels=1,
+                dtype="int16",
+                device=_resolve_input_device(),
+                blocksize=block_samples,
+            ) as stream:
+                while not self._stop_event.is_set():
+                    audio_bytes, overflowed = stream.read(block_samples)
+                    if overflowed or self._stop_event.is_set():
+                        continue
+                    chunk = np.frombuffer(audio_bytes, dtype=np.int16)
+                    rms = float(np.sqrt(np.mean(np.square(chunk.astype(np.float32) / 32768.0))))
+                    if rms >= threshold:
+                        voiced_blocks += 1
+                        if voiced_blocks >= required_blocks:
+                            # User spoke during thinking — fire interrupt
+                            logger.info("Thinking-phase barge-in detected (rms=%.4f)", rms)
+                            _thinking_interrupt_event.set()
+                            with _thinking_interrupt_lock:
+                                cb = _thinking_interrupt_callback
+                            if cb is not None:
+                                try:
+                                    cb()
+                                except Exception as exc:
+                                    logger.warning("Thinking interrupt callback raised: %s", exc)
+                            notify_barge_in_wake()
+                            return
+                    else:
+                        voiced_blocks = 0
+        except Exception as exc:
+            logger.debug("Thinking-phase monitor exited: %s", exc)
+
+
+# Module-level singleton — created once, reused per thinking phase.
+_thinking_monitor = ThinkingPhaseMonitor()
+
+
+def start_thinking_monitor(callback=None) -> bool:
+    """Start monitoring for user speech during the thinking phase."""
+    set_thinking_phase(active=True, callback=callback)
+    return _thinking_monitor.start()
+
+
+def stop_thinking_monitor() -> None:
+    """Stop the thinking-phase monitor (called when TTS starts or cycle ends)."""
+    set_thinking_phase(active=False)
+    _thinking_monitor.stop()

@@ -47,6 +47,7 @@ from core.config import (
     RESPONSE_MODE_FEATURE_ENABLED,
     TONE_SENSITIVE_NEUTRAL_ENABLED,
     TONE_ADAPTATION_ENABLED,
+    LLM_BACKEND,
 )
 from core.demo_mode import is_enabled as is_demo_mode_enabled
 from core.demo_mode import set_enabled as set_demo_mode
@@ -66,7 +67,7 @@ from core.response_templates import anti_repetition_prefixes, detect_language_hi
 from core.response_shaper import response_shaper
 from core.session_memory import session_memory
 from llm.ollama_client import ask_llm, ask_llm_streaming, get_runtime_lightweight_num_ctx, get_runtime_model_tier
-from llm.prompt_builder import build_prompt_package, build_lightweight_prompt, build_tool_augmented_prompt
+from llm.prompt_builder import build_prompt_package, build_lightweight_prompt, build_tool_augmented_prompt, build_claude_messages
 from tools.live_data import gather_live_data
 try:
     from nlp.intent_classifier import classify_intent as _classify_keyword_intent
@@ -106,7 +107,7 @@ from os_control.sysinfo_ops import get_battery_status, get_system_info
 from os_control.email_ops import draft_email
 from os_control.calendar_ops import create_calendar_event
 from os_control.settings_ops import open_settings_page
-from llm.tool_caller import call_tool_tier, tool_calls_to_parsed_commands
+from llm.tool_caller import call_tool_tier, call_tool_tier_claude, tool_calls_to_parsed_commands
 
 
 _JOB_QUEUE_EXECUTOR_READY = False
@@ -2045,20 +2046,21 @@ def _repair_low_value_llm_response(response_text, parsed, language, original_tex
 def _finalize_success_response(response_text, parsed, language, original_text, tone_meta, *, realtime=False):
     """Minimal text-level post-processing — no LLM calls, no aggressive shaping.
 
-    PHASE 1.2 POST-PROCESSING CLEANUP: Slim pipeline for fast, consistent responses.
+    Q2 2026 POST-PROCESSING OPTIMIZATION: Slim to 3 core transforms only.
     
-    With a slim prompt + few-shot examples the model produces good output directly,
-    so we only do three transformations that materially help voice UX:
-      1. Static assist-first fallback for genuinely empty/refusal replies (no LLM).
+    With a slim prompt + few-shot examples (no redundant guidance), the model produces
+    good output directly. Only three transforms that materially help voice UX:
+      1. Static assist-first fallback for genuinely empty/refusal replies (NO LLM).
       2. Egyptian dialect TTS rewrite (text-level, needed for natural Arabic speech).
-      3. Length cap (prevents rambling over the persona word target).
+      3. Length cap (prevents rambling over persona word target).
 
-    Removed (per Phase 1.2): 
-      - output_mode (over-truncates)
-      - tone_adaptation (unnatural prefixes)
-      - codeswitch_continuity (random language nudges)
+    Dropped (8 transforms removed for speed & clarity): 
+      - output_mode (over-truncates responses)
+      - tone_adaptation (adds unnatural prefixes)
+      - codeswitch_continuity (injects random language nudges)
       - anti_repetition (sometimes mangles correct text)
-      - All LLM-based post-processing transforms
+      - analyze_tone_markers, apply_tone_adaptation, _apply_output_mode (now DELETED)
+      - All LLM-based post-processing transforms (NO LLM calls in response finalization)
     
     Args:
         response_text: LLM response to finalize
@@ -3217,19 +3219,44 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
         else None
     )
     if not cache_hit:
-        response = (
-            ask_llm_streaming(
-                package["prompt"],
-                on_sentence=_stream_callback,
-                num_ctx=llm_num_ctx,
-                is_arabic=(language == "ar"),
+        if LLM_BACKEND == "claude":
+            from llm.claude_client import ask_claude_streaming
+            _claude_msgs = build_claude_messages(
+                parsed.raw,
+                response_language=language,
+                use_memory=not use_lightweight,
+                use_kb=not use_lightweight,
+                tier=get_runtime_model_tier(),
             )
-            or ""
-        ).strip()
-        if LLM_APPEND_SOURCE_CITATIONS and package["kb_sources"]:
-            response += _format_source_citations(package["kb_sources"])
-        if cache_eligible and response:
-            _cache_put_llm_response(package["prompt"], language, response)
+            response = (
+                ask_claude_streaming(
+                    _claude_msgs["system"],
+                    _claude_msgs["user"],
+                    on_sentence=_stream_callback,
+                    is_arabic=(language == "ar"),
+                    prior_messages=_claude_msgs.get("prior_messages"),
+                )
+                or ""
+            ).strip()
+            _claude_kb_sources = _claude_msgs.get("kb_sources", [])
+            if LLM_APPEND_SOURCE_CITATIONS and _claude_kb_sources:
+                response += _format_source_citations(_claude_kb_sources)
+            if cache_eligible and response:
+                _cache_put_llm_response(_claude_msgs["user"], language, response)
+        else:
+            response = (
+                ask_llm_streaming(
+                    package["prompt"],
+                    on_sentence=_stream_callback,
+                    num_ctx=llm_num_ctx,
+                    is_arabic=(language == "ar"),
+                )
+                or ""
+            ).strip()
+            if LLM_APPEND_SOURCE_CITATIONS and package["kb_sources"]:
+                response += _format_source_citations(package["kb_sources"])
+            if cache_eligible and response:
+                _cache_put_llm_response(package["prompt"], language, response)
 
     return (
         True,
@@ -3355,6 +3382,9 @@ def route_command(
     original_text = text or ""
     start = time.perf_counter()
     forced_language = _normalize_supported_language_tag(detected_language)
+    script_hint = detect_language_hint(original_text, fallback="")
+    if forced_language and script_hint in {"ar", "en"} and forced_language != script_hint:
+        forced_language = ""
 
     language_result = precomputed_language_result
     if language_result is None:
@@ -3770,7 +3800,11 @@ def route_command(
             parsed = keyword_nlp_parsed
 
     if parsed is None and _should_try_tool_tier(original_text, parser_candidate):
-        tool_result = call_tool_tier(original_text, model_name=None)
+        tool_result = (
+            call_tool_tier_claude(original_text)
+            if LLM_BACKEND == "claude"
+            else call_tool_tier(original_text, model_name=None)
+        )
         raw_tool_calls = tool_result.get("tool_calls") or []
         parsed_tool_commands = tool_calls_to_parsed_commands(raw_tool_calls, original_text)
         if parsed_tool_commands:

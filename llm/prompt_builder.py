@@ -330,6 +330,108 @@ def build_tool_augmented_prompt(user_text, tool_context, response_language="en",
     }
 
 
+def build_claude_messages(
+    user_text,
+    response_language="en",
+    *,
+    use_memory: bool = True,
+    use_kb: bool = True,
+    tier: str = "medium",
+) -> dict:
+    """Return {"system": str, "user": str, "token_count": int} for Claude API calls.
+
+    Builds the same context as build_prompt_package() but separated into a
+    Claude-style system message and a user message instead of a single string.
+    """
+    query = (user_text or "").strip()
+    response_language = _normalize_response_language(response_language)
+    effective_tier = get_prompt_tier() if tier == "medium" else tier
+
+    # System block (strips the "SYSTEM:" header line for Claude's system param)
+    system_sections = _build_system_block(response_language, tier=effective_tier)
+    # Drop leading "SYSTEM:" label — it's a Ollama-ism, not needed for Claude
+    if system_sections and system_sections[0].strip().upper() == "SYSTEM:":
+        system_sections = system_sections[1:]
+
+    if use_memory:
+        memory_context = session_memory.build_context(
+            max_chars=min(int(MEMORY_MAX_CONTEXT_CHARS), _PROMPT_MEMORY_CONTEXT_MAX_CHARS),
+            language=response_language,
+            intents={"LLM_QUERY"},
+        )
+        compact_memory = " ".join(str(memory_context or "").split()).strip()
+        if compact_memory:
+            system_sections.append(f"Memory from previous turns: {compact_memory}")
+
+        # Semantic recall: inject top-3 relevant past exchanges from vector store.
+        try:
+            semantic_hits = session_memory.recall_semantic(query, n=3, language=response_language)
+            if semantic_hits:
+                recall_lines = []
+                for hit in semantic_hits:
+                    u = (hit.get("user") or "").strip()
+                    a = (hit.get("assistant") or "").strip()
+                    if u and a:
+                        recall_lines.append(f"Q: {u}\nA: {a}")
+                if recall_lines:
+                    system_sections.append(
+                        "Relevant past knowledge (from earlier sessions):\n" + "\n---\n".join(recall_lines)
+                    )
+        except Exception:
+            pass
+
+    context_slots = session_memory.context_snapshot()
+    last_app = context_slots.get("last_app") or ""
+    last_file = context_slots.get("last_file") or ""
+    context_parts = []
+    if last_app:
+        context_parts.append(f"last_app={last_app}")
+    if last_file:
+        context_parts.append(f"last_file={last_file}")
+    if context_parts:
+        system_sections.append(f"Session context: {', '.join(context_parts)}")
+
+    kb_sources: list = []
+    if use_kb:
+        kb_package = knowledge_base_service.retrieve_for_prompt(
+            query, top_k=KB_TOP_K, max_chars=KB_MAX_CONTEXT_CHARS
+        )
+        compact_kb = " ".join(str(kb_package.get("context") or "").split()).strip()
+        if compact_kb:
+            system_sections.append(f"Reference knowledge: {compact_kb}")
+        kb_sources = kb_package.get("sources", [])
+
+    # Length / dialect constraints as a final system instruction
+    if response_language == "ar":
+        system_sections.append(
+            "Keep answers concise (1–3 sentences for commands, up to 4 for questions). "
+            "Reply in Egyptian colloquial Arabic (عامية مصرية) only — not formal MSA."
+        )
+    else:
+        system_sections.append(
+            "Keep answers concise: 1–2 sentences for commands, up to 3 for questions. "
+            "No markdown, no bullet lists — speak naturally."
+        )
+
+    system_text = "\n".join(ln for ln in system_sections if ln is not None)
+    token_count = _estimate_token_count(system_text + query)
+
+    # Fetch recent conversation turns to pass as prior messages (not as system text).
+    # This gives Claude proper multi-turn context instead of injected text blocks.
+    prior_messages = session_memory.get_messages_for_claude(
+        limit=5, language=response_language
+    ) if use_memory else []
+
+    return {
+        "system": system_text,
+        "user": query,
+        "prior_messages": prior_messages,
+        "kb_sources": kb_sources,
+        "token_count": token_count,
+        "tier": effective_tier,
+    }
+
+
 def build_intent_extraction_prompt(user_text, language="en"):
     query = (user_text or "").strip()
     lang = (language or "en").strip().lower() or "en"
