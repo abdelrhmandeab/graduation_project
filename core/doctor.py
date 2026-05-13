@@ -2,6 +2,7 @@ import importlib.util
 import traceback
 import sys
 import time
+import argparse
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -262,6 +263,40 @@ def collect_diagnostics(*, include_model_load_checks=False):
         }
     )
 
+    if include_model_load_checks:
+        try:
+            from llm.ollama_client import ask_llm, get_runtime_model_tier
+
+            warmup_reply = ask_llm("Reply with OK only.", num_ctx=8)
+            warmup_text = str(warmup_reply or "").strip().lower()
+            warmup_ok = bool(warmup_text) and not any(
+                marker in warmup_text
+                for marker in (
+                    "cannot connect",
+                    "could not run the local model",
+                    "timed out",
+                    "internal error",
+                    "rate limited",
+                )
+            )
+            checks.append(
+                {
+                    "name": "ollama_model_smoke_test",
+                    "ok": bool(warmup_ok),
+                    "details": f"tier={get_runtime_model_tier()} reply={str(warmup_reply or '')[:80]}",
+                    "required": bool(False),
+                }
+            )
+        except Exception as exc:
+            checks.append(
+                {
+                    "name": "ollama_model_smoke_test",
+                    "ok": False,
+                    "details": str(exc),
+                    "required": False,
+                }
+            )
+
     vram_ok, vram_details = _probe_vram_status()
     checks.append(
         {
@@ -370,14 +405,21 @@ def format_diagnostics_report(payload):
     return "\n".join(lines)
 
 
-def run():
-    payload = collect_diagnostics(include_model_load_checks=True)
+def run(*, include_model_load_checks=False):
+    payload = collect_diagnostics(include_model_load_checks=include_model_load_checks)
     print(format_diagnostics_report(payload))
 
 
 if __name__ == "__main__":
     try:
-        run()
+        parser = argparse.ArgumentParser(description="Jarvis realtime doctor")
+        parser.add_argument(
+            "--full",
+            action="store_true",
+            help="Run model-load smoke tests and other heavier diagnostics.",
+        )
+        args = parser.parse_args()
+        run(include_model_load_checks=bool(args.full))
     except Exception:
         traceback.print_exc()
         raise

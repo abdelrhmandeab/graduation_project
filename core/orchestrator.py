@@ -4,8 +4,9 @@ import os
 import queue
 import re
 import subprocess
-import tempfile
-import threading
+        allow_sequential_prewarm = cpu_cores <= 4
+        allow_extended_prewarm = cpu_cores >= 6
+        allow_heavy_prewarm = cpu_cores >= 10
 import time
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1275,6 +1276,7 @@ def _run_startup_prewarm_blocking():
         ("llm", _prewarm_llm),
     ]
     cpu_cores = max(1, int(os.cpu_count() or 1))
+    allow_sequential_prewarm = cpu_cores <= 4
     allow_extended_prewarm = cpu_cores >= 6
     allow_heavy_prewarm = cpu_cores >= 10
 
@@ -1289,8 +1291,9 @@ def _run_startup_prewarm_blocking():
         return
 
     logger.info(
-        "Startup prewarm started (cpu_cores=%d, extended=%s, heavy=%s); waiting before wake-word listening begins.",
+        "Startup prewarm started (cpu_cores=%d, sequential=%s, extended=%s, heavy=%s); waiting before wake-word listening begins.",
         cpu_cores,
+        allow_sequential_prewarm,
         allow_extended_prewarm,
         allow_heavy_prewarm,
     )
