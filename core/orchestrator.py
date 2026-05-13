@@ -1299,20 +1299,27 @@ def _run_startup_prewarm_blocking():
     )
     started = time.perf_counter()
 
-    with ThreadPoolExecutor(
-        max_workers=max(1, len(tasks)),
-        thread_name_prefix="jarvis-startup-prewarm",
-    ) as prewarm_executor:
-        futures = {
-            prewarm_executor.submit(task_fn): task_name
-            for task_name, task_fn in tasks
-        }
-        for future in as_completed(futures):
-            task_name = futures[future]
+    if allow_sequential_prewarm:
+        for task_name, task_fn in tasks:
             try:
-                future.result()
+                task_fn()
             except Exception as exc:
                 logger.warning("Startup prewarm task '%s' crashed: %s", task_name, exc)
+    else:
+        with ThreadPoolExecutor(
+            max_workers=max(1, len(tasks)),
+            thread_name_prefix="jarvis-startup-prewarm",
+        ) as prewarm_executor:
+            futures = {
+                prewarm_executor.submit(task_fn): task_name
+                for task_name, task_fn in tasks
+            }
+            for future in as_completed(futures):
+                task_name = futures[future]
+                try:
+                    future.result()
+                except Exception as exc:
+                    logger.warning("Startup prewarm task '%s' crashed: %s", task_name, exc)
 
     logger.info(
         "Startup prewarm finished in %.2fs; entering wake-word loop.",
