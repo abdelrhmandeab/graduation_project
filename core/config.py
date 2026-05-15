@@ -142,7 +142,7 @@ if STT_BACKEND not in {"hybrid_elevenlabs", "faster_whisper"}:
 ELEVENLABS_BASE_URL = _env("ELEVENLABS_BASE_URL", "https://api.elevenlabs.io").strip() or "https://api.elevenlabs.io"
 ELEVENLABS_API_KEY = _env("ELEVENLABS_API_KEY", "").strip()
 
-STT_LANGUAGE_DETECT_MODEL = _env("JARVIS_STT_LANGUAGE_DETECT_MODEL", "tiny").strip() or "tiny"
+STT_LANGUAGE_DETECT_MODEL = _env("JARVIS_STT_LANGUAGE_DETECT_MODEL", "small").strip() or "small"
 # Default language hint passed to Whisper. Set to "ar" if user primarily speaks Arabic.
 # "auto" lets Whisper detect; "ar" bypasses detection for faster, more accurate Arabic STT.
 STT_LANGUAGE_HINT = str(_env("JARVIS_STT_LANGUAGE_HINT", "auto")).strip().lower() or "auto"
@@ -216,7 +216,7 @@ NLU_INTENT_THRESHOLD_BY_FAMILY = {
     "OS_APP_CLOSE": _env_float("JARVIS_NLU_THRESHOLD_OS_APP_CLOSE", 0.74),
     "OS_FILE_SEARCH": _env_float("JARVIS_NLU_THRESHOLD_OS_FILE_SEARCH", 0.73),
     "OS_FILE_NAVIGATION": _env_float("JARVIS_NLU_THRESHOLD_OS_FILE_NAVIGATION", 0.74),
-    "OS_SYSTEM_COMMAND": _env_float("JARVIS_NLU_THRESHOLD_OS_SYSTEM_COMMAND", 0.85),  # Raised from 0.77 to prevent false positives like "RISK AND EPS"
+    "OS_SYSTEM_COMMAND": _env_float("JARVIS_NLU_THRESHOLD_OS_SYSTEM_COMMAND", 0.70),  # Lowered from 0.85 to allow system actions (WiFi, Bluetooth, media) without excessive clarification
     "JOB_QUEUE_COMMAND": _env_float("JARVIS_NLU_THRESHOLD_JOB_QUEUE_COMMAND", 0.70),
     "VOICE_COMMAND": _env_float("JARVIS_NLU_THRESHOLD_VOICE_COMMAND", 0.82),
 }

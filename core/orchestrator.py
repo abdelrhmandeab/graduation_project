@@ -4,11 +4,10 @@ import os
 import queue
 import re
 import subprocess
-        allow_sequential_prewarm = cpu_cores <= 4
-        allow_extended_prewarm = cpu_cores >= 6
-        allow_heavy_prewarm = cpu_cores >= 10
-import time
 import sys
+import tempfile
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -335,21 +334,12 @@ def _is_stt_annotation_only(text):
 
 
 def _resolve_stt_language_hint(*, wake_source=None):
-    # Prefer auto-detection on every utterance so one Arabic turn does not
-    # lock the next turn into Arabic. Keep a narrow fast-path when the wake
-    # word itself is Arabic or English and the runtime has not already been
-    # forced to a specific language.
-    runtime_hint = str(stt_runtime.get_runtime_stt_settings().get("language_hint") or "auto").strip().lower()
-    if runtime_hint in {"ar", "arabic", "ar-eg", "ar_eg"}:
-        return "ar"
-    if runtime_hint in {"en", "english", "en-us", "en_us"}:
-        return "en"
-    wake_source_value = str(wake_source or "").strip().lower()
-    if wake_source_value == "arabic":
-        return "ar"
-    if wake_source_value == "english":
-        return None
-    return None
+    # Strict auto-detection mode: always defer to STT backend's language detector.
+    # This ensures the language detector model (Whisper) decides language based on
+    # audio content, without any orchestrator-level forcing.
+    # Wake-word label (arabic/english) is NOT used as a hint — the detector alone
+    # determines if speech is Arabic, English, or mixed, enabling robust bilingual support.
+    return "auto"
 
 
 def _is_interrupt_command(text):
@@ -508,11 +498,12 @@ def _transcript_quality_score(text, detected_language, wake_source=None):
 
 def _transcribe_with_runtime_stt(audio_file, wake_source=None):
     global _LAST_STT_LANGUAGE_CONFIDENCE
-    primary_hint = _resolve_stt_language_hint(wake_source=wake_source)
+    # Always use strict auto-detection: pass language_hint="auto" to let
+    # the STT backend's language detector determine language from audio content.
     text = transcribe_streaming(
         audio_file,
         on_partial=_on_partial_transcript,
-        language_hint=primary_hint,
+        language_hint="auto",
     )
     _LAST_STT_LANGUAGE_CONFIDENCE = 0.0
     detected_language = _extract_detected_language_from_stt(text)
@@ -1466,7 +1457,7 @@ def run():
                 filename=audio_file,
                 max_duration=MAX_RECORD_DURATION,
                 vad_mode="chat" if wake_source == "follow_up" else "command",
-                language_hint=_resolve_stt_language_hint(wake_source=wake_source),
+                language_hint="auto",
                 start_timeout_seconds=(
                     max(1.0, dialogue_manager.time_remaining())
                     if wake_source == "follow_up"

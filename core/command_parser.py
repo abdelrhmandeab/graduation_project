@@ -1386,6 +1386,27 @@ _REGEX_TABLE = [
         "",
         lambda m: {"action_key": "bluetooth_on" if m.group(0).lower().startswith("enable") else "bluetooth_off"},
     ),
+    # Arabic Bluetooth control — شغل / اقفل البلوتوث variants
+    (
+        re.compile(
+            r"^(?:شغل\s+البلوتوث|شغّل\s+البلوتوث|وصل\s+البلوتوث|فعّل\s+البلوتوث|تفعيل\s+البلوتوث)$",
+            re.IGNORECASE,
+        ),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda _m: {"action_key": "bluetooth_on"},
+    ),
+    (
+        re.compile(
+            r"^(?:اقفل\s+البلوتوث|اطفي\s+البلوتوث|وقف\s+البلوتوث|افصل\s+البلوتوث|تعطيل\s+البلوتوث)$",
+            re.IGNORECASE,
+        ),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda _m: {"action_key": "bluetooth_off"},
+    ),
     # Arabic colloquial volume down mapping and colloquial screenshot phrasing
     (
         re.compile(r"^(?:وطي\s+الصوت|اخفض\s+الصوت|خف\u0651\u0636\s+الصوت|خفف\s+الصوت)$", re.IGNORECASE),
@@ -1481,9 +1502,9 @@ _REGEX_TABLE = [
         "",
         lambda _m: {"action_key": "media_play"},
     ),
-    # Arabic Wi-Fi toggle variants
+    # Arabic Wi-Fi toggle variants — includes اقفل (close/lock)
     (
-        re.compile(r"^(?:شيل\s+الواي\s+فاي|قطع\s+الانترنت|وقف\s+الواي\s+فاي|افصل\s+الواي\s+فاي)$", re.IGNORECASE),
+        re.compile(r"^(?:شيل\s+الواي\s+فاي|اقفل\s+الواي\s+فاي|قطع\s+الانترنت|وقف\s+الواي\s+فاي|افصل\s+الواي\s+فاي)$", re.IGNORECASE),
         False,
         "OS_SYSTEM_COMMAND",
         "",
@@ -1503,6 +1524,28 @@ _REGEX_TABLE = [
         "OS_SYSTEM_COMMAND",
         "",
         lambda _m: {"action_key": "volume_up"},
+    ),
+    # Media control — next/skip forward
+    (
+        re.compile(
+            r"^(?:next\s+(?:track|song)|skip\s+(?:forward|track)|go\s+to\s+next|play\s+next|التالي|الأغنية\s+الجاية|الأغنية\s+التالية|شغل\s+التالي|التراك\s+التالي)$",
+            re.IGNORECASE,
+        ),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda _m: {"action_key": "media_next"},
+    ),
+    # Media control — previous/skip backward
+    (
+        re.compile(
+            r"^(?:previous\s+(?:track|song)|skip\s+back(?:ward)?|go\s+(?:back|to\s+previous)|play\s+previous|السابق|الأغنية\s+اللي\s+فات|الأغنية\s+السابقة|رجع\s+تراك|التراك\s+السابق)$",
+            re.IGNORECASE,
+        ),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda _m: {"action_key": "media_prev"},
     ),
     # Audit
     (
