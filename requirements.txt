@@ -22,6 +22,7 @@ openwakeword==0.6.0
 
 # Text-to-speech — neural TTS (REQUIRED)
 edge-tts>=6.1.12
+elevenlabs>=1.0.0
 # Edge stream decoder for older edge-tts versions that emit MP3 chunks
 soundfile>=0.12.1
 
@@ -52,6 +53,9 @@ pyperclip>=1.9.0
 
 # Python-first brightness control (DDC/CI + WMI fallback)
 screen-brightness-control>=0.23.0
+
+# Keyboard media key dispatch used for direct media control
+pynput>=1.7.6
 
 # Semantic intent routing (multilingual embeddings for paraphrase-tolerant NLU)
 # Pin below v5 to avoid torchcodec runtime issues on some Windows/Python combos.

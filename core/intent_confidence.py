@@ -526,6 +526,10 @@ def _entity_clarification_threshold(parsed, language="en", mixed_language=False)
     base = float(ENTITY_CLARIFICATION_THRESHOLD_BY_INTENT.get(parsed.intent, 0.0) or 0.0)
     if parsed.intent == "JOB_QUEUE_COMMAND" and parsed.action != "enqueue":
         return 0.0
+    if parsed.intent == "OS_FILE_NAVIGATION" and parsed.action == "list_directory":
+        path_value = str((parsed.args or {}).get("path") or "").strip()
+        if not path_value:
+            return 0.0
     if parsed.intent == "OS_FILE_NAVIGATION" and parsed.action not in {
         "cd",
         "list_directory",
@@ -654,7 +658,19 @@ def assess_intent_confidence(raw_text, parsed, language="en"):
     profile = _script_profile(raw_text)
     mixed_language = profile["mixed"]
     entity_scores = _compute_entity_scores(parsed)
+    # Base confidence; may be overridden by parser-provided per-pattern confidence
     confidence = 0.82
+    pattern_conf = None
+    pattern_conf_provided = False
+    try:
+        pattern_conf = float((parsed.args or {}).get("pattern_confidence"))
+        # only accept sensible numeric values
+        if pattern_conf is not None and 0.0 <= pattern_conf <= 1.0:
+            confidence = pattern_conf
+            pattern_conf_provided = True
+    except Exception:
+        pattern_conf = None
+        pattern_conf_provided = False
 
     if parsed.intent == "LLM_QUERY":
         confidence = 0.36
@@ -683,25 +699,29 @@ def assess_intent_confidence(raw_text, parsed, language="en"):
             entity_scores=entity_scores,
         )
 
-    if parsed.intent == "OS_FILE_NAVIGATION":
-        if parsed.action in {"create_directory", "file_info"}:
-            confidence = 0.92
-        elif parsed.action in {"delete_item", "move_item", "rename_item"}:
-            confidence = 0.90
-        elif parsed.action == "list_directory":
-            confidence = 0.78
-        else:
-            confidence = 0.85
-    elif parsed.intent == "OS_APP_OPEN":
-        confidence = 0.80
-    elif parsed.intent == "OS_APP_CLOSE":
-        confidence = 0.80
-    elif parsed.intent == "OS_SYSTEM_COMMAND":
-        confidence = 0.88
-    elif parsed.intent == "OS_FILE_SEARCH":
-        confidence = 0.86
-    elif parsed.intent == "JOB_QUEUE_COMMAND":
-        confidence = 0.84
+    # If the parser supplied a pattern-level confidence, prefer that as the
+    # base and avoid overwriting with intent defaults. Otherwise apply intent
+    # specific default confidences below.
+    if not pattern_conf_provided:
+        if parsed.intent == "OS_FILE_NAVIGATION":
+            if parsed.action in {"create_directory", "file_info"}:
+                confidence = 0.92
+            elif parsed.action in {"delete_item", "move_item", "rename_item"}:
+                confidence = 0.90
+            elif parsed.action == "list_directory":
+                confidence = 0.78
+            else:
+                confidence = 0.85
+        elif parsed.intent == "OS_APP_OPEN":
+            confidence = 0.80
+        elif parsed.intent == "OS_APP_CLOSE":
+            confidence = 0.80
+        elif parsed.intent == "OS_SYSTEM_COMMAND":
+            confidence = 0.88
+        elif parsed.intent == "OS_FILE_SEARCH":
+            confidence = 0.86
+        elif parsed.intent == "JOB_QUEUE_COMMAND":
+            confidence = 0.84
 
     if mixed_language:
         confidence -= 0.08

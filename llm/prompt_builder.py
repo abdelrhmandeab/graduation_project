@@ -290,7 +290,9 @@ def build_tool_augmented_prompt(user_text, tool_context, response_language="en",
     """
     query = (user_text or "").strip()
     response_language = _normalize_response_language(response_language)
-    sections = _build_system_block(response_language, tier=tier)
+    # Live-data answers need facts quickly; skip few-shot examples and keep the
+    # system block lean so weather/news queries spend fewer tokens on prompt setup.
+    sections = _build_system_block(response_language, include_few_shot=False, tier=tier)
     # Per-tool framing lives inside ``tool_context`` (each block carries its own
     # [WEATHER]/[WEB_SEARCH] header). Here we add the global rule so the model
     # treats the block as authoritative for facts and never invents numbers.

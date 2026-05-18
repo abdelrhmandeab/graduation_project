@@ -11,8 +11,9 @@ def _project_path(*parts):
     return str(PROJECT_ROOT.joinpath(*parts))
 
 
-# Load .env from project root (next to core/)
-load_dotenv(PROJECT_ROOT / ".env")
+# Load .env from project root (next to core/) and let it override ambient vars
+# so local workspace edits take effect consistently during development.
+load_dotenv(PROJECT_ROOT / ".env", override=True)
 
 
 def _env(key, default=""):
@@ -288,7 +289,7 @@ TTS_EGYPTIAN_COLLOQUIAL_REWRITE = _env_bool("JARVIS_TTS_EGYPTIAN_COLLOQUIAL_REWR
 TTS_DEFAULT_RATE = 175
 TTS_SIMULATED_CHAR_DELAY = 0.02
 BARGE_IN_INTERRUPT_ON_WAKE = True
-WAKE_WORD_IGNORE_WHILE_SPEAKING = True
+WAKE_WORD_IGNORE_WHILE_SPEAKING = _env_bool("JARVIS_WAKE_WORD_IGNORE_WHILE_SPEAKING", True)
 
 # Phase 2.11 — VAD-based barge-in: detect user speech while TTS is playing
 # and treat it as an implicit interrupt (user wants to override the assistant).
@@ -332,7 +333,7 @@ FOLLOWUP_WINDOW_SECONDS = max(3.0, _env_float("JARVIS_FOLLOWUP_WINDOW_SECONDS", 
 FOLLOWUP_CHIME_ENABLED = _env_bool("JARVIS_FOLLOWUP_CHIME_ENABLED", False)
 
 # Persona
-PERSONA_DEFAULT = "assistant"
+PERSONA_DEFAULT = "friendly"
 PERSONA_LENGTH_TARGET_ENABLED = _env_bool("JARVIS_PERSONA_LENGTH_TARGET_ENABLED", True)
 TONE_ADAPTATION_ENABLED = _env_bool("JARVIS_TONE_ADAPTATION_ENABLED", True)
 TONE_SENSITIVE_NEUTRAL_ENABLED = _env_bool("JARVIS_TONE_SENSITIVE_NEUTRAL_ENABLED", True)
@@ -397,6 +398,20 @@ WEB_SEARCH_BLOCKED_DOMAINS = _env_list(
     "JARVIS_WEB_SEARCH_BLOCKED_DOMAINS",
     (),
 )
+
+
+# -----------------------------
+# Feature flags (Phase 7)
+# -----------------------------
+# Toggle higher-level features for staged rollout and quick rollback during
+# deployment. Flags can be overridden via environment variables prefixed with
+# JARVIS_FEATURE_ for testing and gradual enablement.
+FEATURE_FLAGS = {
+    "NUMERIC_PARSING_ENABLED": _env_bool("JARVIS_FEATURE_NUMERIC_PARSING_ENABLED", True),
+    "AUTO_APP_DISCOVERY_ENABLED": _env_bool("JARVIS_FEATURE_AUTO_APP_DISCOVERY_ENABLED", True),
+    "MEDIA_DIRECT_DISPATCH_ENABLED": _env_bool("JARVIS_FEATURE_MEDIA_DIRECT_DISPATCH_ENABLED", True),
+    "SYSTEM_VOLUME_CONTROL": _env_bool("JARVIS_FEATURE_SYSTEM_VOLUME_CONTROL", True),
+}
 # Score blending weights — all values clamped between 0 and 1.
 WEB_SEARCH_TRUSTED_DOMAIN_BOOST = max(
     0.0, min(1.0, _env_float("JARVIS_WEB_SEARCH_TRUSTED_DOMAIN_BOOST", 0.35))

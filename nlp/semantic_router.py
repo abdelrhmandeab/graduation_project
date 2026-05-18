@@ -14,6 +14,7 @@ import time
 from typing import Optional, Tuple
 
 from core.logger import logger
+from nlp.entity_types import EntityType
 
 # ---------------------------------------------------------------------------
 # Lazy-loaded globals — populated by _ensure_loaded()
@@ -21,6 +22,23 @@ from core.logger import logger
 _router = None
 _loaded = False
 _load_failed = False
+
+
+_ROUTE_ENTITY_TYPES: dict[str, tuple[EntityType, ...]] = {
+    "OS_APP_OPEN": (EntityType.APP,),
+    "OS_APP_CLOSE": (EntityType.APP,),
+    "OS_FILE_SEARCH": (EntityType.PATH,),
+    "OS_FILE_NAVIGATION": (EntityType.PATH,),
+    "OS_SYSTEM_COMMAND": (EntityType.SYSTEM_FEATURE,),
+    "OS_TIMER": (EntityType.DURATION, EntityType.DATE),
+    "OS_CLIPBOARD": (EntityType.PATH,),
+    "OS_SYSINFO": (EntityType.SYSTEM_FEATURE,),
+    "OS_EMAIL": (EntityType.EMAIL, EntityType.PERSON),
+    "OS_CALENDAR": (EntityType.DATE, EntityType.DURATION, EntityType.PERSON),
+    "OS_SETTINGS": (EntityType.SYSTEM_FEATURE,),
+    "VOICE_COMMAND": (EntityType.SYSTEM_FEATURE,),
+    "JOB_QUEUE_COMMAND": (EntityType.DATE, EntityType.DURATION),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -519,6 +537,11 @@ def classify_semantic(text: str) -> Optional[Tuple[str, float]]:
     except Exception as exc:
         logger.debug("Semantic router classification failed: %s", exc)
         return None
+
+
+def get_route_entity_types(intent_name: str) -> tuple[EntityType, ...]:
+    """Return the entity types associated with a semantic route intent."""
+    return _ROUTE_ENTITY_TYPES.get(str(intent_name or "").strip().upper(), ())
 
 
 def is_available() -> bool:

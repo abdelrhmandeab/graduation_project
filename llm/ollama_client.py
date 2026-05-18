@@ -5,6 +5,7 @@ import time
 import httpx
 
 from core.config import (
+    LLM_FALLBACK_MODELS,
     LLM_MODEL,
     LLM_OLLAMA_BASE_URL,
     LLM_OLLAMA_NUM_CTX,
@@ -141,6 +142,24 @@ def _resolve_model_name():
         return _runtime_model
     configured = str(LLM_MODEL or "").strip()
     return configured or "qwen3:4b"
+
+
+def _resolve_model_candidates(primary_model: str):
+    primary = str(primary_model or "").strip()
+    ordered = []
+    seen = set()
+
+    for candidate in [primary, *list(LLM_FALLBACK_MODELS or ())]:
+        name = str(candidate or "").strip()
+        if not name:
+            continue
+        lowered = name.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        ordered.append(name)
+
+    return ordered
 
 
 def _flush_sentence_buffer(buf, on_sentence):
@@ -313,9 +332,25 @@ def ask_llm_streaming(prompt, on_sentence=None, num_ctx=None, is_arabic=False):
         if partial:
             success = True
             return partial
+        fallback = ask_llm(prompt, num_ctx=num_ctx)
+        if fallback and "timed out" not in str(fallback).lower():
+            try:
+                on_sentence(str(fallback))
+            except Exception:
+                pass
+            success = True
+            return str(fallback)
         return "The local model timed out. Try a shorter query."
     except httpx.ConnectError:
         logger.error("Cannot connect to Ollama at %s. Is it running?", _OLLAMA_BASE_URL)
+        fallback = ask_llm(prompt, num_ctx=num_ctx)
+        if fallback and "cannot connect to ollama" not in str(fallback).lower():
+            try:
+                on_sentence(str(fallback))
+            except Exception:
+                pass
+            success = True
+            return str(fallback)
         return "Cannot connect to Ollama. Make sure it is running."
     except Exception as exc:
         logger.error("LLM streaming failed: %s", exc)
@@ -330,53 +365,65 @@ def ask_llm(prompt, num_ctx=None):
     try:
         model_name = _resolve_model_name()
         effective_num_ctx = int(num_ctx or _runtime_num_ctx or LLM_OLLAMA_NUM_CTX)
-        payload = _build_request_payload(model_name, prompt, effective_num_ctx, stream=False)
-        try:
-            response = httpx.post(
-                _GENERATE_ENDPOINT,
-                json=payload,
-                timeout=LLM_TIMEOUT_SECONDS,
-            )
-        except httpx.TimeoutException:
+        candidates = _resolve_model_candidates(model_name)
+        timeout_seen = False
+        connect_seen = False
+
+        for idx, candidate_model in enumerate(candidates):
+            payload = _build_request_payload(candidate_model, prompt, effective_num_ctx, stream=False)
+            try:
+                response = httpx.post(
+                    _GENERATE_ENDPOINT,
+                    json=payload,
+                    timeout=LLM_TIMEOUT_SECONDS,
+                )
+            except httpx.TimeoutException:
+                timeout_seen = True
+                logger.error(
+                    "LLM timeout after %.2fs (model=%s, timeout=%ss)",
+                    time.perf_counter() - started,
+                    candidate_model,
+                    LLM_TIMEOUT_SECONDS,
+                )
+                continue
+            except httpx.ConnectError:
+                connect_seen = True
+                logger.error("Cannot connect to Ollama at %s. Is it running?", _OLLAMA_BASE_URL)
+                continue
+
             latency = time.perf_counter() - started
+            logger.info("LLM latency: %.2fs (model=%s)", latency, candidate_model)
+
+            if response.status_code == 200:
+                data = response.json()
+                text = (data.get("response") or "").strip()
+                if _is_thinking_mode_model(candidate_model):
+                    text = _strip_thinking_tags(text)
+                if text:
+                    if idx > 0:
+                        logger.warning("LLM fallback used: %s -> %s", model_name, candidate_model)
+                    success = True
+                    return text
+                logger.error("LLM returned an empty response (model=%s)", candidate_model)
+                continue
+
+            err_text = ""
+            try:
+                err_text = response.json().get("error", "")
+            except Exception:
+                err_text = response.text or ""
+
             logger.error(
-                "LLM timeout after %.2fs (model=%s, timeout=%ss)",
-                latency,
-                model_name,
-                LLM_TIMEOUT_SECONDS,
+                "LLM request failed with status %s (model=%s): %s",
+                response.status_code,
+                candidate_model,
+                err_text or "unknown_error",
             )
-            return "The local model timed out. Try a shorter query."
-        except httpx.ConnectError:
-            logger.error("Cannot connect to Ollama at %s. Is it running?", _OLLAMA_BASE_URL)
+
+        if connect_seen and not timeout_seen:
             return "Cannot connect to Ollama. Make sure it is running."
-
-        latency = time.perf_counter() - started
-        logger.info("LLM latency: %.2fs (model=%s)", latency, model_name)
-
-        if response.status_code == 200:
-            data = response.json()
-            text = (data.get("response") or "").strip()
-            if _is_thinking_mode_model(model_name):
-                text = _strip_thinking_tags(text)
-            if text:
-                success = True
-                return text
-
-            logger.error("LLM returned an empty response (model=%s)", model_name)
-            return "I could not run the local model."
-
-        err_text = ""
-        try:
-            err_text = response.json().get("error", "")
-        except Exception:
-            err_text = response.text or ""
-
-        logger.error(
-            "LLM request failed with status %s (model=%s): %s",
-            response.status_code,
-            model_name,
-            err_text or "unknown_error",
-        )
+        if timeout_seen:
+            return "The local model timed out. Try a shorter query."
         return "I could not run the local model."
     except Exception as exc:
         logger.error("LLM failed: %s", exc)

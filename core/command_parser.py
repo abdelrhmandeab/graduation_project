@@ -3,7 +3,8 @@ import re
 from dataclasses import dataclass, field
 
 from core.config import CONFIRMATION_TOKEN_BYTES, CONFIRMATION_TOKEN_MIN_HEX_LEN
-from nlp.codeswitching import normalize_codeswitched, normalize_arabic, normalize_arabic_preserve_digits
+from nlp.codeswitching import convert_arabic_numerals, normalize_codeswitched, normalize_arabic, normalize_arabic_preserve_digits
+from os_control.temporal_parser import parse_recurrence_spec
 from os_control.system_ops import normalize_system_action
 
 
@@ -14,12 +15,12 @@ class ParsedCommand:
     normalized: str
     action: str = ""
     args: dict = field(default_factory=dict)
+    negated: bool = False
 
 
 # ---------------------------------------------------------------------------
 # Text normalization helpers
 # ---------------------------------------------------------------------------
-
 _COLLAPSE_WS_RE = re.compile(r"\s+")
 _MATCH_SANITIZE_RE = re.compile(r"[^a-z0-9_\s:\\/.\-\u0600-\u06FF]")
 _DRIVE_COLON_RE = re.compile(r"\b([a-z])\s*:", flags=re.IGNORECASE)
@@ -29,7 +30,6 @@ _OPEN_FILLER_PREFIXES = (
     r"^(?:for me|for us|for me now|for me please)\s+",
     r"^(?:\u0645\u0646 \u0641\u0636\u0644\u0643|\u0644\u0648 \u0633\u0645\u062d\u062a|\u0631\u062c\u0627\u0621|\u0627\u0644\u0631\u062c\u0627\u0621)\s+",
     r"^(?:the)\s+",
-    r"^(?:\u0627\u0644)\s+",
 )
 _FILESYSTEM_OPEN_HINTS = (
     "drive",
@@ -39,10 +39,6 @@ _FILESYSTEM_OPEN_HINTS = (
     "desktop",
     "downloads",
     "documents",
-    "pictures",
-    "music",
-    "videos",
-    "file explorer",
     "\u0642\u0631\u0635",
     "\u0628\u0627\u0631\u062a\u0634\u0646",
     "\u0642\u0633\u0645",
@@ -53,7 +49,6 @@ _FILESYSTEM_OPEN_HINTS = (
     "\u0627\u0644\u062a\u062d\u0645\u064a\u0644\u0627\u062a",
     "\u0627\u0644\u0645\u0633\u062a\u0646\u062f\u0627\u062a",
     "\u0627\u0644\u0635\u0648\u0631",
-    "\u0627\u0644\u0645\u0648\u0633\u064a\u0642\u0649",
     "\u0627\u0644\u0641\u064a\u062f\u064a\u0648\u0647\u0627\u062a",
 )
 _SPECIAL_FOLDER_ALIASES = {
@@ -163,6 +158,7 @@ _DURATION_UNIT_SECONDS = {
     "seconds": 1,
     "ثانية": 1,
     "ثواني": 1,
+    "ثانيتين": 2,
     "m": 60,
     "min": 60,
     "mins": 60,
@@ -171,6 +167,7 @@ _DURATION_UNIT_SECONDS = {
     "دقيقة": 60,
     "دقائق": 60,
     "دقايق": 60,
+    "دقيقتين": 120,
     "h": 3600,
     "hr": 3600,
     "hrs": 3600,
@@ -179,6 +176,7 @@ _DURATION_UNIT_SECONDS = {
     "ساعة": 3600,
     "ساعات": 3600,
     "ساعه": 3600,
+    "ساعتين": 7200,
 }
 # Egyptian Arabic fraction words used as duration quantities
 _AR_DURATION_FRACTIONS = {"نص": 0.5, "ربع": 0.25}
@@ -205,7 +203,10 @@ _NUMBER_ONES = {
     "nineteen": 19,
     "صفر": 0,
     "واحد": 1,
+    "واحدة": 1,
+    "اتنين": 2,
     "اثنين": 2,
+    "اثنتين": 2,
     "ثلاثة": 3,
     "اربعة": 4,
     "خمسة": 5,
@@ -240,6 +241,89 @@ def _normalize_for_match(text: str) -> str:
     lowered = " ".join((text or "").lower().split()).strip()
     cleaned = _MATCH_SANITIZE_RE.sub(" ", lowered)
     return _COLLAPSE_WS_RE.sub(" ", cleaned).strip()
+
+
+def _int_from_numeric_text(text: str) -> int:
+    return int(convert_arabic_numerals(str(text or "")).strip())
+
+
+def _looks_like_explicit_level_request(text: str) -> bool:
+    normalized = _normalize_for_match(text)
+    if not normalized:
+        return False
+    if re.search(r"\b(?:to|at|=|ل|لـ|الى|إلى|على)\s*[0-9٠-٩]{1,3}\b", normalized, flags=re.IGNORECASE):
+        return True
+    if re.match(
+        r"^(?:volume|sound|brightness|screen\s+brightness|الصوت|السطوع|الإضاءة|الاضاءة|النور)\s+[0-9٠-٩]{1,3}\b",
+        normalized,
+        flags=re.IGNORECASE,
+    ):
+        return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Negation detection and handling
+# ---------------------------------------------------------------------------
+
+_NEGATION_RE = re.compile(r"^(?:do not|don't|don t|dont)\b|^(?:\u0644\u0627\b|\u0645\u0634\b|\u0645\u0627\b)", flags=re.IGNORECASE)
+
+
+def _detect_and_strip_negation(text: str):
+    """Detect a leading negation token in normalized text and return
+    (negated: bool, stripped_text: str).
+    Handles simple English (don't, do not) and Arabic (لا, مش, ما) prefixes.
+    """
+    if not text:
+        return False, text
+    m = _NEGATION_RE.match(text)
+    if not m:
+        return False, text
+    # strip matched prefix
+    stripped = text[m.end():].strip()
+    return True, stripped
+
+
+def _apply_negation_to_parsed(parsed: ParsedCommand) -> ParsedCommand:
+    """Apply conservative negation inversions for common intents.
+    This function mutates and returns the parsed command.
+    """
+    if not parsed or not parsed.intent:
+        return parsed
+    # Invert simple app open -> app close
+    if parsed.intent == "OS_APP_OPEN":
+        parsed.intent = "OS_APP_CLOSE"
+        return parsed
+
+    if parsed.intent == "OS_SYSTEM_COMMAND":
+        ak = parsed.args.get("action_key")
+        if ak == "wifi_on":
+            parsed.args["action_key"] = "wifi_off"
+        elif ak == "bluetooth_on":
+            parsed.args["action_key"] = "bluetooth_off"
+        elif ak == "notifications_on":
+            parsed.args["action_key"] = "notifications_off"
+        elif ak == "notifications_off":
+            parsed.args["action_key"] = "notifications_on"
+        elif ak == "media_play":
+            parsed.args["action_key"] = "media_stop"
+        elif ak == "volume_up":
+            parsed.args["action_key"] = "volume_down"
+        elif ak == "volume_down":
+            parsed.args["action_key"] = "volume_up"
+        elif ak == "volume_mute":
+            parsed.args["action_key"] = "volume_unmute"
+        elif ak == "volume_unmute":
+            parsed.args["action_key"] = "volume_mute"
+        elif ak == "brightness_up":
+            parsed.args["action_key"] = "brightness_down"
+        elif ak == "media_play":
+            parsed.args["action_key"] = "media_play_pause"
+        elif ak == "media_next":
+            parsed.args["action_key"] = "media_next_track"
+        elif ak == "media_prev":
+            parsed.args["action_key"] = "media_previous_track"
+    return parsed
 
 
 def _normalize_audio_profile(mode_str: str) -> str:
@@ -479,6 +563,57 @@ def _duration_to_seconds(number_value, unit_text):
     return max(1, min(86400, int(number * factor)))
 
 
+def parse_duration_from_text(text):
+    candidate = _normalize_for_match(text)
+    if not candidate:
+        return None
+
+    candidate = re.sub(r"^(?:for|in|after|على|ل(?:ـ)?|الى|إلى|بعد)\s+", "", candidate, flags=re.IGNORECASE)
+    candidate = re.sub(r"\s+(?:for|in|after|على|ل(?:ـ)?|الى|إلى|بعد)$", "", candidate, flags=re.IGNORECASE)
+    candidate = " ".join(candidate.split()).strip()
+    if not candidate:
+        return None
+
+    duration_units = r"seconds?|secs?|minutes?|mins?|hours?|hrs?|ثانية|ثواني|ثانيتين|دقيقة|دقائق|دقايق|دقيقتين|ساعة|ساعات|ساعتين"
+
+    explicit_match = re.search(
+        rf"\b(.+?)\s+({duration_units})\b",
+        candidate,
+        flags=re.IGNORECASE,
+    )
+    if explicit_match:
+        seconds = _duration_to_seconds(explicit_match.group(1), explicit_match.group(2))
+        if seconds is not None:
+            return seconds
+
+    reverse_match = re.search(
+        rf"\b({duration_units})\s+(.+?)\b",
+        candidate,
+        flags=re.IGNORECASE,
+    )
+    if reverse_match:
+        seconds = _duration_to_seconds(reverse_match.group(2), reverse_match.group(1))
+        if seconds is not None:
+            return seconds
+
+    unit_only = _DURATION_UNIT_SECONDS.get(candidate)
+    if unit_only is not None:
+        return max(1, min(86400, int(unit_only)))
+
+    spoken = _parse_spoken_int(candidate)
+    if spoken is not None:
+        return spoken
+
+    return None
+
+
+def _timer_args_from_text(duration_text, *, label="Timer"):
+    seconds = parse_duration_from_text(duration_text)
+    if seconds is None:
+        return {}
+    return {"seconds": seconds, "label": label}
+
+
 def _normalize_url_target(value: str):
     candidate = str(value or "").strip().strip('"').strip("'")
     candidate = re.sub(r"^(?:website|site|url|لينك|ويبسايت)\s+", "", candidate, flags=re.IGNORECASE).strip()
@@ -548,6 +683,8 @@ def _try_codeswitched_command(raw, normalized):
             return ParsedCommand("OS_FILE_NAVIGATION", raw, normalized, action="list_directory", args={"path": ""})
 
         if entity_normalized in {"music", "spotify", "vlc", "youtube music", "youtube", "song", "songs", "الموسيقى", "المزيكا"}:
+            if normalized.startswith(("play ", "start ", "resume ", "pause ")):
+                return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "media_play_pause"})
             app_name = _infer_known_app_name(entity) or _infer_known_app_name("spotify")
             if app_name:
                 return ParsedCommand("OS_APP_OPEN", raw, normalized, args={"app_name": app_name})
@@ -558,6 +695,38 @@ def _try_codeswitched_command(raw, normalized):
             return ParsedCommand("OS_APP_CLOSE", raw, normalized, args={"app_name": app_name})
 
     if intent == "search":
+        source_text = str((entities or {}).get("source_text") or raw).strip()
+        source_norm = _normalize_for_match(source_text)
+        explicit_search_markers = (
+            "search",
+            "google",
+            "look up",
+            "ابحث",
+            "دور",
+            "دوّر",
+        )
+        question_markers = (
+            "tell me",
+            "what",
+            "who",
+            "when",
+            "where",
+            "why",
+            "how",
+            "ممكن تقول",
+            "قولي",
+            "ايه",
+            "إيه",
+            "اخبار",
+            "أخبار",
+            "النهاردة",
+            "النهارده",
+        )
+        looks_informational_question = any(marker in source_norm for marker in question_markers)
+        has_explicit_search_verb = any(marker in source_norm for marker in explicit_search_markers)
+        if looks_informational_question and not has_explicit_search_verb:
+            return ParsedCommand("LLM_QUERY", raw, normalized)
+
         if entity_normalized in {"files", "file", "folder", "folders", "document", "documents", "الملفات", "المستندات", "المجلد", "المجلدات"}:
             query = str((entities or {}).get("source_text") or raw).strip()
             query = re.sub(
@@ -586,7 +755,7 @@ def _try_codeswitched_command(raw, normalized):
             if entity_normalized not in web_terms and not re.search(r"://|\.[a-z0-9]{2,6}\b", entity_normalized, flags=re.IGNORECASE):
                 return ParsedCommand("OS_FILE_SEARCH", raw, normalized, args={"filename": entity, "search_path": ""})
 
-        query = str((entities or {}).get("source_text") or raw).strip()
+        query = source_text
         if query:
             return ParsedCommand(
                 "OS_SYSTEM_COMMAND",
@@ -604,6 +773,9 @@ def _try_codeswitched_command(raw, normalized):
         numbers = (cs or {}).get("numbers") or []
         level = int(numbers[0]) if numbers else None
         if entity_normalized in _volume_targets or entity in _volume_targets:
+            if level is not None and _looks_like_explicit_level_request(raw):
+                return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized,
+                                     args={"action_key": "volume_set", "volume_level": level})
             if intent == "increase":
                 return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized,
                                      args={"action_key": "volume_up",
@@ -616,6 +788,9 @@ def _try_codeswitched_command(raw, normalized):
                 return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized,
                                      args={"action_key": "volume_set", "volume_level": level})
         if entity_normalized in _brightness_targets or entity in _brightness_targets:
+            if level is not None and _looks_like_explicit_level_request(raw):
+                return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized,
+                                     args={"action_key": "brightness_set", "brightness_level": level})
             if intent == "increase":
                 return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized,
                                      args={"action_key": "brightness_up",
@@ -634,6 +809,517 @@ def _try_codeswitched_command(raw, normalized):
 def _contains_any_phrase(text: str, phrases):
     lowered = (text or "").lower()
     return any(phrase in lowered for phrase in phrases)
+
+
+def _recurrence_args(time_phrase: str):
+    recurrence, meta = parse_recurrence_spec(time_phrase)
+    args = {"recurrence": recurrence} if recurrence else {}
+    if meta.get("weekday") is not None:
+        args["recurrence_weekday"] = meta["weekday"]
+    if meta.get("weekday_name"):
+        args["recurrence_weekday_name"] = meta["weekday_name"]
+    return args
+
+
+# ---------------------------------------------------------------------------
+# Priority structural patterns
+# ---------------------------------------------------------------------------
+# These are exact, high-confidence command phrases that should win before the
+# broader keyword and regex inventories. Keep this list small and bilingual.
+_PRIORITY_STRUCTURAL_TABLE = [
+    (
+        {
+            "turn on notifications",
+            "enable notifications",
+            "notifications on",
+            "allow notifications",
+            "open notifications",
+            "notifications enable",
+            "turn off dnd",
+            "disable dnd",
+            "dnd off",
+            "turn off focus assist",
+            "شغل الاشعارات",
+            "شغّل الاشعارات",
+            "افتح الاشعارات",
+            "شغل الإشعارات",
+            "شغّل الإشعارات",
+            "افتح الإشعارات",
+            "turn off do not disturb",
+            "disable do not disturb",
+            "do not disturb off",
+            "dnd off",
+            "focus assist off",
+            "turn off do not disturb",
+            "disable do not disturb",
+            "do not disturb off",
+            "dnd off",
+            "focus assist off",
+            "ايقاف وضع عدم الإزعاج",
+            "إيقاف وضع عدم الإزعاج",
+            "طفي وضع عدم الإزعاج",
+            "طفي عدم الإزعاج",
+            "اقفل وضع عدم الإزعاج",
+            "اقفل عدم الإزعاج",
+            "شيل وضع عدم الإزعاج",
+            "شيل عدم الإزعاج",
+            "قطّع وضع عدم الإزعاج",
+            "قطّع عدم الإزعاج",
+            "قطع وضع عدم الإزعاج",
+            "قطع عدم الإزعاج",
+            "ايقاف وضع عدم الازعاج",
+            "إيقاف وضع عدم الازعاج",
+            "طفي وضع عدم الازعاج",
+            "طفي عدم الازعاج",
+            "اقفل وضع عدم الازعاج",
+            "اقفل عدم الازعاج",
+            "شيل وضع عدم الازعاج",
+            "شيل عدم الازعاج",
+            "قطّع وضع عدم الازعاج",
+            "قطّع عدم الازعاج",
+            "قطع وضع عدم الازعاج",
+            "قطع عدم الازعاج",
+        },
+        "OS_SYSTEM_COMMAND",
+        "",
+        {"action_key": "notifications_on"},
+        0.95,
+    ),
+    (
+        {
+            "turn off notifications",
+            "disable notifications",
+            "notifications off",
+            "mute notifications",
+            "silence notifications",
+            "turn on do not disturb",
+            "enable do not disturb",
+            "do not disturb on",
+            "dnd on",
+            "focus assist on",
+            "turn on dnd",
+            "enable dnd",
+            "dnd on",
+            "turn on focus assist",
+            "تفعيل وضع عدم الإزعاج",
+            "فعّل وضع عدم الإزعاج",
+            "فعّل عدم الإزعاج",
+            "شغّل وضع عدم الإزعاج",
+            "وضع عدم الإزعاج",
+            "وضع عدم الازعاج",
+            "طيب، ممكن تفعّل وضع عدم الإزعاج؟",
+            "ممكن تفعّل وضع عدم الإزعاج؟",
+            "تفعّل وضع عدم الإزعاج؟",
+            "تفعيل وضع عدم الإزعاج؟",
+            "ممكن تفعيل وضع عدم الإزعاج",
+            "ممكن تفعيل وضع عدم الازعاج",
+            "طيب، ممكن تفعل وضع عدم الازعاج؟",
+            "ممكن تفعل وضع عدم الازعاج؟",
+            "تفعل وضع عدم الازعاج؟",
+            "تفعيل وضع عدم الازعاج؟",
+            "خلي الوضع صامت",
+            "تفعيل dnd",
+            "شغل dnd",
+            "notifications disable",
+            "notifications mute",
+            "اطفي الاشعارات",
+            "اطفِ الاشعارات",
+            "اقفل الاشعارات",
+            "وقف الاشعارات",
+            "كتم الاشعارات",
+        },
+        "OS_SYSTEM_COMMAND",
+        "",
+        {"action_key": "notifications_off"},
+        0.95,
+    ),
+    (
+        {
+            "list running apps",
+            "show running apps",
+            "show running applications",
+            "what apps are running",
+            "what is open right now",
+            "show processes",
+            "show running processes",
+            "التطبيقات الشغالة",
+            "البرامج الشغالة",
+            "إيه التطبيقات الشغالة",
+            "ايه التطبيقات الشغالة",
+            "إيه البرامج الشغالة",
+            "اعرض التطبيقات الشغالة",
+            "وريني التطبيقات الشغالة",
+            "وريني البرامج الشغالة",
+        },
+        "OS_SYSTEM_COMMAND",
+        "",
+        {"action_key": "list_processes"},
+        0.94,
+    ),
+    (
+        {
+            "rescan apps",
+            "refresh app list",
+            "refresh installed apps",
+            "scan apps",
+            "find installed apps",
+            "find installed app list",
+            "اسكن البرامج تاني",
+            "اسكن البرامج",
+            "سكن البرامج",
+            "جدّد قائمة البرامج",
+            "جدد قائمة البرامج",
+            "تحديث قائمة البرامج",
+            "تحديث التطبيقات",
+            "اعادة فحص التطبيقات",
+        },
+        "OS_SYSTEM_COMMAND",
+        "",
+        {"action_key": "rescan_apps"},
+        0.94,
+    ),
+    (
+        {
+            "volume up",
+            "turn up volume",
+            "raise volume",
+            "increase volume",
+            "louder",
+            "volume louder",
+            "volume increase",
+            "ارفع الصوت",
+            "علي الصوت",
+            "على الصوت",
+            "زوّد الصوت",
+            "زود الصوت",
+            "صوت أعلى",
+            "صوت اعلى",
+        },
+        "OS_SYSTEM_COMMAND",
+        "",
+        {"action_key": "volume_up"},
+        0.95,
+    ),
+    (
+        {
+            "volume down",
+            "turn down volume",
+            "lower volume",
+            "decrease volume",
+            "softer",
+            "volume lower",
+            "volume decrease",
+            "وطّي الصوت",
+            "وطي الصوت",
+            "اخفض الصوت",
+            "خفض الصوت",
+            "قلل الصوت",
+            "صوت واطي",
+            "الصوت واطي",
+        },
+        "OS_SYSTEM_COMMAND",
+        "",
+        {"action_key": "volume_down"},
+        0.95,
+    ),
+    (
+        {
+            "mute volume",
+            "mute sound",
+            "mute audio",
+            "turn off sound",
+            "silence sound",
+            "اكتم الصوت",
+            "كتم الصوت",
+            "اسكت الصوت",
+        },
+        "OS_SYSTEM_COMMAND",
+        "",
+        {"action_key": "volume_mute"},
+        0.95,
+    ),
+    (
+        {
+            "unmute volume",
+            "unmute sound",
+            "unmute audio",
+            "turn sound on",
+            "restore sound",
+            "شغل الصوت",
+            "شغّل الصوت",
+            "ارجع الصوت",
+            "فعل الصوت",
+        },
+        "OS_SYSTEM_COMMAND",
+        "",
+        {"action_key": "volume_unmute"},
+        0.95,
+    ),
+    (
+        {
+            "turn on wifi",
+            "enable wifi",
+            "wifi on",
+            "turn on wi fi",
+            "enable wi fi",
+            "wifi enable",
+            "شغل الواي فاي",
+            "شغّل الواي فاي",
+            "وصل الواي فاي",
+            "افتح الانترنت",
+            "فتح الانترنت",
+        },
+        "OS_SYSTEM_COMMAND",
+        "",
+        {"action_key": "wifi_on"},
+        0.95,
+    ),
+    (
+        {
+            "turn off wifi",
+            "disable wifi",
+            "wifi off",
+            "turn off wi fi",
+            "disable wi fi",
+            "wifi disable",
+            "turn off internet",
+            "disable internet",
+            "شيل الواي فاي",
+            "اقفل الواي فاي",
+            "قطع الانترنت",
+            "وقف الواي فاي",
+            "افصل الواي فاي",
+        },
+        "OS_SYSTEM_COMMAND",
+        "",
+        {"action_key": "wifi_off"},
+        0.95,
+    ),
+    (
+        {
+            "turn on bluetooth",
+            "enable bluetooth",
+            "bluetooth on",
+            "bluetooth enable",
+            "وصل البلوتوث",
+            "شغّل البلوتوث",
+            "شغل البلوتوث",
+            "فتح البلوتوث",
+        },
+        "OS_SYSTEM_COMMAND",
+        "",
+        {"action_key": "bluetooth_on"},
+        0.95,
+    ),
+    (
+        {
+            "turn off bluetooth",
+            "disable bluetooth",
+            "bluetooth off",
+            "bluetooth disable",
+            "اقفل البلوتوث",
+            "اطفي البلوتوث",
+            "اطفِ البلوتوث",
+            "قطع البلوتوث",
+        },
+        "OS_SYSTEM_COMMAND",
+        "",
+        {"action_key": "bluetooth_off"},
+        0.95,
+    ),
+]
+
+
+def _try_priority_structural_table(normalized, raw):
+    for entry in _PRIORITY_STRUCTURAL_TABLE:
+        phrases, intent, action = entry[0], entry[1], entry[2]
+        if normalized in phrases:
+            args = entry[3] if len(entry) > 3 else {}
+            pattern_confidence = entry[4] if len(entry) > 4 else None
+            final_args = dict(args or {})
+            if pattern_confidence is not None:
+                final_args["pattern_confidence"] = float(pattern_confidence)
+            return ParsedCommand(intent, raw, normalized, action=action, args=final_args)
+    return None
+
+
+_PRIORITY_REGEX_TABLE = [
+    (
+        re.compile(
+            r"^(?:please\s+|could\s+you\s+|can\s+you\s+)?(?:set|adjust|change)\s+(?:the\s+)?(?:volume|sound)\s+(?:to|at|=)\s+([0-9٠-٩]{1,3})%?[.!?]*$",
+            re.IGNORECASE,
+        ),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda m: {"action_key": "volume_set", "volume_level": _int_from_numeric_text(m.group(1))},
+        0.97,
+    ),
+    (
+        re.compile(
+            r"^(?:please\s+|could\s+you\s+|can\s+you\s+)?(?:volume|sound)\s+([0-9٠-٩]{1,3})%?[.!?]*$",
+            re.IGNORECASE,
+        ),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda m: {"action_key": "volume_set", "volume_level": _int_from_numeric_text(m.group(1))},
+        0.96,
+    ),
+    (
+        re.compile(
+            r"^(?:please\s+|could\s+you\s+|can\s+you\s+)?(?:set|adjust|change)\s+(?:the\s+)?(?:brightness|screen\s+brightness)\s+(?:to|at|=)\s+([0-9٠-٩]{1,3})%?[.!?]*$",
+            re.IGNORECASE,
+        ),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda m: {"action_key": "brightness_set", "brightness_level": _int_from_numeric_text(m.group(1))},
+        0.97,
+    ),
+    (
+        re.compile(
+            r"^(?:please\s+|could\s+you\s+|can\s+you\s+)?(?:brightness|screen\s+brightness)\s+([0-9٠-٩]{1,3})%?[.!?]*$",
+            re.IGNORECASE,
+        ),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda m: {"action_key": "brightness_set", "brightness_level": _int_from_numeric_text(m.group(1))},
+        0.96,
+    ),
+    (
+        re.compile(
+            r"^(?:ممكن\s+|لو\s+سمحت\s+|please\s+|could\s+you\s+|can\s+you\s+)?(?:(?:increase|raise|turn\s+up|decrease|lower|turn\s+down|set|adjust|change)\s+)?(?:the\s+)?(?:volume|sound)\s+(?:to|at|=|ل|لـ|الى|إلى|على)\s*([0-9٠-٩]{1,3})%?[.!?]*$",
+            re.IGNORECASE,
+        ),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda m: {"action_key": "volume_set", "volume_level": _int_from_numeric_text(m.group(1))},
+        0.96,
+    ),
+    (
+        re.compile(
+            r"^(?:ممكن\s+|لو\s+سمحت\s+|please\s+|could\s+you\s+|can\s+you\s+)?(?:(?:increase|raise|turn\s+up|decrease|lower|turn\s+down|set|adjust|change)\s+)?(?:the\s+)?(?:brightness|screen\s+brightness)\s+(?:to|at|=|ل|لـ|الى|إلى|على)\s*([0-9٠-٩]{1,3})%?[.!?]*$",
+            re.IGNORECASE,
+        ),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda m: {"action_key": "brightness_set", "brightness_level": _int_from_numeric_text(m.group(1))},
+        0.96,
+    ),
+    (
+        re.compile(
+            r"^(?:ممكن\s+|لو\s+سمحت\s+|please\s+|could\s+you\s+|can\s+you\s+)?(?:ارفع|زود|زيد|اخفض|خفض|قلل|وطي|وطّي|اضبط|ظبط|حط|ضع|اعمل|ترفع|تزود|تزيد|تخفض|تقلل|توطي|توطي)\s+(?:الصوت|الفوليم|volume)\s*(?:ل|لـ|على|الى|إلى|to|at|=)?\s*([0-9٠-٩]{1,3})%?[.!?]*$",
+            re.IGNORECASE,
+        ),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda m: {"action_key": "volume_set", "volume_level": _int_from_numeric_text(m.group(1))},
+        0.97,
+    ),
+    (
+        re.compile(
+            r"^(?:ممكن\s+|لو\s+سمحت\s+|please\s+|could\s+you\s+|can\s+you\s+)?(?:ارفع|زود|زيد|اخفض|خفض|قلل|وطي|وطّي|اضبط|ظبط|حط|ضع|اعمل|ترفع|تزود|تزيد|تخفض|تقلل|توطي|توطي)\s+(?:السطوع|الإضاءة|الاضاءة|النور|brightness|screen\s+brightness)\s*(?:ل|لـ|على|الى|إلى|to|at|=)?\s*([0-9٠-٩]{1,3})%?[.!?]*$",
+            re.IGNORECASE,
+        ),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda m: {"action_key": "brightness_set", "brightness_level": _int_from_numeric_text(m.group(1))},
+        0.97,
+    ),
+    (
+        re.compile(r"^(?:batch add|اضف دفعة|ضيف دفعة)\s+(.+)$", re.IGNORECASE),
+        True,
+        "BATCH_COMMAND",
+        "add",
+        lambda m: {"command_text": m.group(1).strip()},
+        0.95,
+    ),
+    (
+        re.compile(r"^(?:index find|search indexed|دور في الفهرس|ابحث في الفهرس)\s+(.+?)(?:\s+in\s+(.+))?$", re.IGNORECASE),
+        True,
+        "SEARCH_INDEX_COMMAND",
+        "search",
+        lambda m: {"query": m.group(1).strip(), "root": (m.group(2) or "").strip() or None},
+        0.95,
+    ),    # Phase 3: Batch file delete patterns (highest priority for batch)
+    (
+        re.compile(
+            r"^(?:delete|remove|rm)\s+(?:files?|items?)\s+(.+?)(?:\s+from\s+(.+))?$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_FILE_NAVIGATION_BATCH",
+        "delete_multiple",
+        lambda m: {"files": m.group(1).strip(), "location": (m.group(2) or "").strip()},
+        0.92,
+    ),
+    (
+        re.compile(
+            r"^(?:احذف|امسح)\s+(?:ملفات|مستندات)\s+(.+?)(?:\s+(?:من|في)\s+(.+))?$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_FILE_NAVIGATION_BATCH",
+        "delete_multiple",
+        lambda m: {"files": m.group(1).strip(), "location": (m.group(2) or "").strip()},
+        0.92,
+    ),
+    # Phase 4: Advanced file search patterns (highest priority for search intent)
+    (
+        re.compile(
+            r"^(?:find|search for|look for|locate)\s+(?:files?|documents?|docs?|pdfs?|images?)\s+(?:about|on|for|containing|with)\s+(.+?)(?:\s+in\s+(.+))?$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_FILE_SEARCH_ADVANCED",
+        "search",
+        lambda m: {"query": m.group(1).strip(), "search_path": (m.group(2) or "").strip() or None},
+        0.94,
+    ),
+    (
+        re.compile(
+            r"^(?:find files about|search files about|look for files about)\s+(.+?)(?:\s+in\s+(.+))?$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_FILE_SEARCH_ADVANCED",
+        "search",
+        lambda m: {"query": m.group(1).strip(), "search_path": (m.group(2) or "").strip() or None},
+        0.94,
+    ),
+    (
+        re.compile(
+            r"^(?:اوجد|ابحث|دور|دوّر)\s+(?:ملفات|مستندات|وثائق|pdf|بي\s*دي\s*اف)\s+(?:عن|بخصوص|فيها|تحتوي\s+على)\s+(.+?)(?:\s+(?:في|بداخل|داخل)\s+(.+))?$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_FILE_SEARCH_ADVANCED",
+        "search",
+        lambda m: {"query": m.group(1).strip(), "search_path": (m.group(2) or "").strip() or None},
+        0.94,
+    ),
+
+]
+
+
+def _try_priority_regex_table(normalized, raw):
+    for entry in _PRIORITY_REGEX_TABLE:
+        pattern, use_raw, intent, action, args_builder, pattern_confidence = entry
+        text = raw if use_raw else normalized
+        m = pattern.match(text)
+        if m:
+            args = args_builder(m) if args_builder else {}
+            if pattern_confidence is not None:
+                args = dict(args or {})
+                args["pattern_confidence"] = float(pattern_confidence)
+            return ParsedCommand(intent, raw, normalized, action=action, args=args)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -818,13 +1504,29 @@ _KEYWORD_TABLE = [
             "show clipboard",
             "what's in my clipboard",
             "whats in my clipboard",
+            "what's in clipboard",
+            "whats in clipboard",
+            "read my clipboard",
+            "show my clipboard",
+            "what's in clipboard?",
+            "whats in clipboard?",
             "paste clipboard",
             "اقرا الكليب بورد",
             "وريني الكليب بورد",
             "ايه في الكليب بورد",
+            "إيه اللي في Clipboard",
+            "ايه اللي في Clipboard",
+            "إيه اللي في clipboard",
+            "ايه اللي في clipboard",
+            "إيه اللي في clipboard؟",
+            "ايه اللي في clipboard؟",
+            "إيه المنسوخ",
+            "المنسوخ ايه",
             "في الكليبورد ايه",
             "انسخ من الكليب بورد",
             "اللي في الكليب بورد",
+            "افتح الكليب بورد",
+            "الكليب بورد",
         },
         "OS_CLIPBOARD",
         "read",
@@ -837,6 +1539,8 @@ _KEYWORD_TABLE = [
             "فضي الكليب بورد",
             "مسح الكليب بورد",
             "خليه فاضي",
+            "نضف الكليب بورد",
+            "افرغ الكليب بورد",
         },
         "OS_CLIPBOARD",
         "clear",
@@ -855,6 +1559,8 @@ _KEYWORD_TABLE = [
             "الشحن قد ايه",
             "البطارية وصلت كام",
             "البطارية تجيب كام",
+            "البطارية عاملة ايه",
+            "نسبة الشحن",
         },
         "OS_SYSINFO",
         "battery",
@@ -874,6 +1580,10 @@ _KEYWORD_TABLE = [
             "المعالج بياخد قد ايه",
             "الكمبيوتر شغال بكام",
             "المساحة قد ايه",
+            "معلومات الجهاز",
+            "حالة الجهاز",
+            "استهلاك المعالج",
+            "الرام كام",
         },
         "OS_SYSINFO",
         "system",
@@ -885,8 +1595,17 @@ _KEYWORD_TABLE = [
             "new email",
             "draft email",
             "open email",
+            "open mail",
+            "open inbox",
+            "افتح البريد",
+            "افتح الايميل",
+            "افتح الإيميل",
+            "اكتب بريد",
             "افتح ايميل جديد",
             "ايميل جديد",
+            "اكتب ايميل",
+            "اعمل ايميل",
+            "مسودة ايميل",
         },
         "OS_EMAIL",
         "draft",
@@ -907,6 +1626,9 @@ _KEYWORD_TABLE = [
             "خدني على الاعدادات",
             "عايز الاعدادات",
             "اعداداتك",
+            "افتح الضبط",
+            "روح للاعدادات",
+            "روح للضبط",
         },
         "OS_SETTINGS",
         "open",
@@ -920,6 +1642,9 @@ _KEYWORD_TABLE = [
             "ارجع اخر حاجة",
             "الغي اخر حاجة",
             "رجعني لاخر خطوة",
+            "تراجع",
+            "ارجع",
+            "رجع",
         },
         "OS_ROLLBACK",
         "",
@@ -989,7 +1714,11 @@ def _try_keyword_table(normalized, raw):
         keywords, intent, action = entry[0], entry[1], entry[2]
         if normalized in keywords:
             args = entry[3] if len(entry) > 3 else {}
-            return ParsedCommand(intent, raw, normalized, action=action, args=dict(args))
+            pattern_confidence = entry[4] if len(entry) > 4 else None
+            final_args = dict(args or {})
+            if pattern_confidence is not None:
+                final_args["pattern_confidence"] = float(pattern_confidence)
+            return ParsedCommand(intent, raw, normalized, action=action, args=final_args)
     return None
 
 
@@ -1500,7 +2229,7 @@ _REGEX_TABLE = [
         False,
         "OS_SYSTEM_COMMAND",
         "",
-        lambda _m: {"action_key": "media_play"},
+        lambda _m: {"action_key": "media_play_pause"},
     ),
     # Arabic Wi-Fi toggle variants — includes اقفل (close/lock)
     (
@@ -1509,6 +2238,7 @@ _REGEX_TABLE = [
         "OS_SYSTEM_COMMAND",
         "",
         lambda _m: {"action_key": "wifi_off"},
+        0.95,
     ),
     (
         re.compile(r"^(?:وصل\s+الواي\s+فاي|شغّل\s+الواي\s+فاي|فتح\s+الانترنت|شغل\s+الانترنت)$", re.IGNORECASE),
@@ -1516,6 +2246,49 @@ _REGEX_TABLE = [
         "OS_SYSTEM_COMMAND",
         "",
         lambda _m: {"action_key": "wifi_on"},
+        0.95,
+    ),
+    # Arabic Bluetooth toggle variants
+    (
+        re.compile(r"^(?:اقفل\s+البلوتوث|اطفي\s+البلوتوث|قطع\s+البلوتوث)$", re.IGNORECASE),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda _m: {"action_key": "bluetooth_off"},
+        0.95,
+    ),
+    (
+        re.compile(r"^(?:شغّل\s+البلوتوث|وصل\s+البلوتوث|فتح\s+البلوتوث)$", re.IGNORECASE),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda _m: {"action_key": "bluetooth_on"},
+        0.95,
+    ),
+    # Arabic notifications toggle variants
+    (
+        re.compile(r"^(?:اطفي\s+الاشعارات|اقفل\s+الاشعارات|وقف\s+الاشعارات)$", re.IGNORECASE),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda _m: {"action_key": "notifications_off"},
+        0.95,
+    ),
+    (
+        re.compile(r"^(?:شغّل\s+الاشعارات|وصل\s+الاشعارات|افتح\s+الاشعارات)$", re.IGNORECASE),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda _m: {"action_key": "notifications_on"},
+        0.95,
+    ),
+    (
+        re.compile(r"^(?:فع.?ل\s+عدم\s+الإزعاج|فع.?ل\s+عدم\s+الازعاج)$", re.IGNORECASE),
+        False,
+        "OS_SYSTEM_COMMAND",
+        "",
+        lambda _m: {"action_key": "notifications_off"},
+        0.95,
     ),
     # Arabic مش سامع / مش شايف — shorthand for volume/brightness help
     (
@@ -1534,7 +2307,7 @@ _REGEX_TABLE = [
         False,
         "OS_SYSTEM_COMMAND",
         "",
-        lambda _m: {"action_key": "media_next"},
+        lambda _m: {"action_key": "media_next_track"},
     ),
     # Media control — previous/skip backward
     (
@@ -1545,11 +2318,11 @@ _REGEX_TABLE = [
         False,
         "OS_SYSTEM_COMMAND",
         "",
-        lambda _m: {"action_key": "media_prev"},
+        lambda _m: {"action_key": "media_previous_track"},
     ),
     # Audit
     (
-        re.compile(r"^show audit log(?:\s+(\d+))?$"),
+        re.compile(r"^(?:show audit log|عرض سجل التدقيق|وريني سجل التدقيق|اعرض سجل التدقيق)(?:\s+(\d+))?$", re.IGNORECASE),
         False,
         "AUDIT_LOG_REPORT",
         "",
@@ -1557,28 +2330,28 @@ _REGEX_TABLE = [
     ),
     # Policy
     (
-        re.compile(r"^policy profile\s+([a-z0-9_-]+)$"),
+        re.compile(r"^(?:policy profile|ملف السياسة)\s+([a-z0-9_-]+)$", re.IGNORECASE),
         False,
         "POLICY_COMMAND",
         "set_profile",
         lambda m: {"profile": m.group(1)},
     ),
     (
-        re.compile(r"^policy (?:read only|readonly)\s+(on|off)$"),
+        re.compile(r"^(?:policy (?:read only|readonly)|السياسة قراءة فقط)\s+(on|off)$", re.IGNORECASE),
         False,
         "POLICY_COMMAND",
         "set_read_only",
         lambda m: {"enabled": m.group(1) == "on"},
     ),
     (
-        re.compile(r"^policy (?:dry run|dry-run|dryrun)\s+(on|off)$"),
+        re.compile(r"^(?:policy (?:dry run|dry-run|dryrun)|وضع المحاكاة)\s+(on|off)$", re.IGNORECASE),
         False,
         "POLICY_COMMAND",
         "set_dry_run",
         lambda m: {"enabled": m.group(1) == "on"},
     ),
     (
-        re.compile(r"^policy permission\s+([a-z_]+)\s+(on|off)$"),
+        re.compile(r"^(?:policy permission|صلاحية السياسة)\s+([a-z_]+)\s+(on|off)$", re.IGNORECASE),
         False,
         "POLICY_COMMAND",
         "set_permission",
@@ -1586,7 +2359,7 @@ _REGEX_TABLE = [
     ),
     # Batch
     (
-        re.compile(r"^batch add\s+(.+)$", re.IGNORECASE),
+        re.compile(r"^(?:batch add|اضف دفعة|ضيف دفعة)\s+(.+)$", re.IGNORECASE),
         True,
         "BATCH_COMMAND",
         "add",
@@ -1594,14 +2367,14 @@ _REGEX_TABLE = [
     ),
     # Search index
     (
-        re.compile(r"^index refresh(?:\s+in\s+(.+))?$", re.IGNORECASE),
+        re.compile(r"^(?:index refresh|حدث الفهرس|اعمل تحديث للفهرس)(?:\s+in\s+(.+))?$", re.IGNORECASE),
         True,
         "SEARCH_INDEX_COMMAND",
         "refresh",
         lambda m: {"root": (m.group(1) or "").strip() or None},
     ),
     (
-        re.compile(r"^(?:indexed find|index find|search indexed)\s+(.+?)(?:\s+in\s+(.+))?$", re.IGNORECASE),
+        re.compile(r"^(?:indexed find|index find|search indexed|دور في الفهرس|ابحث في الفهرس)\s+(.+?)(?:\s+in\s+(.+))?$", re.IGNORECASE),
         True,
         "SEARCH_INDEX_COMMAND",
         "search",
@@ -1609,42 +2382,42 @@ _REGEX_TABLE = [
     ),
     # Job queue
     (
-        re.compile(r"^(?:queue job|job add)\s+in\s+(\d+)\s*(?:s|sec|secs|seconds)?\s+(.+)$", re.IGNORECASE),
+        re.compile(r"^(?:queue job|job add|جدولة مهمة)\s+in\s+(\d+)\s*(?:s|sec|secs|seconds)?\s+(.+)$", re.IGNORECASE),
         True,
         "JOB_QUEUE_COMMAND",
         "enqueue",
         lambda m: {"delay_seconds": int(m.group(1)), "command_text": m.group(2).strip()},
     ),
     (
-        re.compile(r"^(?:queue job|job add)\s+(.+)$", re.IGNORECASE),
+        re.compile(r"^(?:queue job|job add|جدولة مهمة)\s+(.+)$", re.IGNORECASE),
         True,
         "JOB_QUEUE_COMMAND",
         "enqueue",
         lambda m: {"delay_seconds": 0, "command_text": m.group(1).strip()},
     ),
     (
-        re.compile(r"^job status\s+(\d+)$"),
+        re.compile(r"^(?:job status|حالة المهمة)\s+(\d+)$", re.IGNORECASE),
         False,
         "JOB_QUEUE_COMMAND",
         "status",
         lambda m: {"job_id": int(m.group(1))},
     ),
     (
-        re.compile(r"^job cancel\s+(\d+)$"),
+        re.compile(r"^(?:job cancel|الغ المهمة|الغ المهمة رقم)\s+(\d+)$", re.IGNORECASE),
         False,
         "JOB_QUEUE_COMMAND",
         "cancel",
         lambda m: {"job_id": int(m.group(1))},
     ),
     (
-        re.compile(r"^job retry\s+(\d+)(?:\s+in\s+(\d+)\s*(?:s|sec|secs|seconds)?)?$"),
+        re.compile(r"^(?:job retry|أعد المهمة)\s+(\d+)(?:\s+in\s+(\d+)\s*(?:s|sec|secs|seconds)?)?$", re.IGNORECASE),
         False,
         "JOB_QUEUE_COMMAND",
         "retry",
         lambda m: {"job_id": int(m.group(1)), "delay_seconds": int(m.group(2) or 0)},
     ),
     (
-        re.compile(r"^job list(?:\s+([a-z]+|\d+))?(?:\s+(\d+))?$"),
+        re.compile(r"^(?:job list|قائمة المهام)(?:\s+([a-z]+|\d+))?(?:\s+(\d+))?$", re.IGNORECASE),
         False,
         "JOB_QUEUE_COMMAND",
         "list",
@@ -1747,6 +2520,27 @@ _REGEX_TABLE = [
         "rename_item",
         lambda m: {"source": _strip_file_target_fillers(m.group(1)), "new_name": _strip_file_target_fillers(m.group(2))},
     ),
+    # Copy — "copy file X to Y", "انسخ الملف X الى Y", "copy X to Y"
+    (
+        re.compile(
+            r"^(?:copy|انسخ|انسخلي)\s+(?:the\s+)?(?:file|folder)?\s*(.+?)\s+(?:to|الى|الي|ل)\s+(.+)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_FILE_NAVIGATION",
+        "copy_item",
+        lambda m: {"source": _strip_file_target_fillers(m.group(1)), "destination": _strip_file_target_fillers(m.group(2))},
+    ),
+    (
+        re.compile(
+            r"^(?:copy|انسخ|انسخلي|كوبي)\s+(.+?)\s+(?:to|الى|الي|ل)\s+(.+)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_FILE_NAVIGATION",
+        "copy_item",
+        lambda m: {"source": _strip_file_target_fillers(m.group(1)), "destination": _strip_file_target_fillers(m.group(2))},
+    ),
     # Timer — "set timer 5 minutes", "timer 10 seconds", "حط تايمر 5 دقايق"
     (
         re.compile(
@@ -1757,6 +2551,18 @@ _REGEX_TABLE = [
         "OS_TIMER",
         "set",
         lambda m: {"seconds": _duration_to_seconds(m.group(1), m.group(2)), "label": "Timer"},
+        0.95,
+    ),
+    (
+        re.compile(
+            r"^(?:set\s+(?:a\s+)?timer\s+for|timer\s+for)\s+(\S+)\s+(seconds?|secs?|minutes?|mins?|hours?|hrs?)[.!?]*$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_TIMER",
+        "set",
+        lambda m: {"seconds": _duration_to_seconds(m.group(1), m.group(2)), "label": "Timer"},
+        0.95,
     ),
     # Timer — "set a 5 minute timer", "set it a 5 minute timer", "5 minutes timer"
     (
@@ -1768,6 +2574,7 @@ _REGEX_TABLE = [
         "OS_TIMER",
         "set",
         lambda m: {"seconds": _duration_to_seconds(m.group(1), m.group(2)), "label": "Timer"},
+        0.95,
     ),
     (
         re.compile(
@@ -1778,6 +2585,7 @@ _REGEX_TABLE = [
         "OS_TIMER",
         "set",
         lambda m: {"seconds": _duration_to_seconds(m.group(1), m.group(2)), "label": "Timer"},
+        0.95,
     ),
     (
         re.compile(
@@ -1788,6 +2596,7 @@ _REGEX_TABLE = [
         "OS_TIMER",
         "set",
         lambda m: {"seconds": _duration_to_seconds(m.group(1), m.group(2)), "label": "Reminder"},
+        0.95,
     ),
     (
         re.compile(
@@ -1798,6 +2607,7 @@ _REGEX_TABLE = [
         "OS_TIMER",
         "set_alarm",
         lambda m: {"alarm_time": m.group(1).strip(), "label": "Alarm"},
+        0.95,
     ),
     (
         re.compile(
@@ -1808,6 +2618,7 @@ _REGEX_TABLE = [
         "OS_TIMER",
         "set_alarm",
         lambda m: {"alarm_time": m.group(1).strip(), "label": "Alarm"},
+        0.95,
     ),
     # Loose timer — handles STT garbling like "sit at ten seconds timer"
     # Must come AFTER strict patterns so it only fires as a fallback.
@@ -1820,6 +2631,44 @@ _REGEX_TABLE = [
         "OS_TIMER",
         "set",
         lambda m: {"seconds": _duration_to_seconds(m.group(1), m.group(2)), "label": "Timer"},
+    ),
+    (
+        re.compile(
+            r"^(?:set\s+(?:a\s+)?timer|timer|set\s+(?:an?\s+)?alarm|(?:حط|حطلي|ظبط|ظبّط|اعمل|اعمللي|اضبط|اضبطلي)\s+(?:تايمر|منبه|alarm|timer))(?:\s+(?:for|at|in|after|على|ل(?:ـ)?|الى|إلى|بعد))?\s+(.+?)(?:[.!?]+)?$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_TIMER",
+        "set",
+        lambda m: _timer_args_from_text(m.group(1), label="Timer"),
+        0.9,
+    ),
+    # Reminder — English recurring, time before message:
+    #   "remind me every day at 9 to drink water"
+    #   "remind me every monday at 9 to call mom"
+    (
+        re.compile(
+            r"^(?:remind(?:\s+me)?|set\s+(?:a\s+)?reminder)\s+"
+            r"((?:every\s+.+?|daily|weekly|monthly))\s+to\s+(.+)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_REMINDER",
+        "create",
+        lambda m: {**{"time_str": m.group(1).strip(), "message": m.group(2).strip()}, **_recurrence_args(m.group(1).strip())},
+        0.95,
+    ),
+    # Reminder — English recurring, message before time:
+    (
+        re.compile(
+            r"^(?:remind(?:\s+me)?|set\s+(?:a\s+)?reminder)\s+to\s+(.+?)\s+((?:every\s+.+?|daily|weekly|monthly))$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_REMINDER",
+        "create",
+        lambda m: {**{"time_str": m.group(2).strip(), "message": m.group(1).strip()}, **_recurrence_args(m.group(2).strip())},
+        0.95,
     ),
     # Reminder — English, time before message:
     #   "remind me at 3pm to call Ahmed", "remind me in 2 hours to take meds",
@@ -1834,6 +2683,36 @@ _REGEX_TABLE = [
         "OS_REMINDER",
         "create",
         lambda m: {"time_str": m.group(1).strip(), "message": m.group(2).strip()},
+        0.95,
+    ),
+    # Reminder — Arabic recurring, time before message:
+    #   "فكرني كل يوم الساعة ٩ علشان اشرب مية"
+    #   "فكرني كل اثنين الساعة ٩ علشان اكلم ماما"
+    (
+        re.compile(
+            r"^(?:فكرني|فكّرني|ذكرني|ذكّرني|نبهني|نبّهني|اعمل(?:لي)?\s+تذكير)\s+"
+            r"((?:كل\s+.+?|يومي|اسبوعي|أسبوعي|شهري))\s+"
+            r"(?:علشان|عشان|to)\s+(.+)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_REMINDER",
+        "create",
+        lambda m: {**{"time_str": m.group(1).strip(), "message": m.group(2).strip()}, **_recurrence_args(m.group(1).strip())},
+        0.95,
+    ),
+    # Reminder — Arabic recurring, message before time:
+    (
+        re.compile(
+            r"^(?:فكرني|فكّرني|ذكرني|ذكّرني|نبهني|نبّهني|اعمل(?:لي)?\s+تذكير)\s+"
+            r"(?:علشان|عشان|to)\s+(.+?)\s+((?:كل\s+.+?|يومي|اسبوعي|أسبوعي|شهري))$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_REMINDER",
+        "create",
+        lambda m: {**{"time_str": m.group(2).strip(), "message": m.group(1).strip()}, **_recurrence_args(m.group(2).strip())},
+        0.95,
     ),
     # Reminder — English, message before time:
     #   "remind me to call Ahmed at 3pm", "remind me to take meds in 2 hours"
@@ -1847,6 +2726,7 @@ _REGEX_TABLE = [
         "OS_REMINDER",
         "create",
         lambda m: {"time_str": m.group(2).strip(), "message": m.group(1).strip()},
+        0.95,
     ),
     # Reminder — English, message only (no time) — dispatcher returns "when?" prompt
     (
@@ -1858,6 +2738,20 @@ _REGEX_TABLE = [
         "OS_REMINDER",
         "create",
         lambda m: {"time_str": "", "message": m.group(1).strip()},
+        0.80,
+    ),
+    (
+        re.compile(
+            r"^(?:فكرني|فكّرني|ذكرني|ذكّرني|نبهني|نبّهني|اعمل(?:لي)?\s+تذكير)\s+"
+            r"((?:بكرة|بكره|بكرا|النهاردة|النهارده|اليوم|بعد\s+بكرة|بعد\s+بكره|بعد\s+بكرا|بعد)\s+.+?)\s+"
+            r"(?:عشان|علشان|to)\s+(.+)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_REMINDER",
+        "create",
+        lambda m: {"time_str": m.group(1).strip(), "message": m.group(2).strip()},
+        0.95,
     ),
     # Reminder — Arabic wall-clock time:
     #   "فكرني الساعة ٣ أكلم أحمد", "فكرني بكرة الساعة ٩ أصحى"
@@ -1873,6 +2767,7 @@ _REGEX_TABLE = [
         "OS_REMINDER",
         "create",
         lambda m: {"time_str": m.group(1).strip(), "message": m.group(2).strip()},
+        0.95,
     ),
     # Reminder — Arabic relative time:
     #   "فكرني بعد ساعتين أكلم أحمد", "فكرني بعد ٣٠ دقيقة أاخد الدواء"
@@ -1888,6 +2783,7 @@ _REGEX_TABLE = [
         "OS_REMINDER",
         "create",
         lambda m: {"time_str": m.group(1).strip(), "message": m.group(2).strip()},
+        0.95,
     ),
     # Clipboard — "copy this: {text}", "انسخ: {text}"
     (
@@ -1916,13 +2812,34 @@ _REGEX_TABLE = [
     ),
     (
         re.compile(
-            r"^(?:ابعت|اكتب|افتح)\s+(?:ايميل|إيميل)\s+(?:ل\s*)?(\S+@\S+)?(?:\s+(?:عن|بخصوص)\s+(.+))?$",
+            r"^(?:ابعت|اكتب|افتح)\s+(?:ايميل|إيميل)\s+(?:ل|الى|الي)?\s*(\S+@\S+)?(?:\s+(?:عن|بخصوص)\s+(.+))?$",
             re.IGNORECASE,
         ),
         True,
         "OS_EMAIL",
         "draft",
         lambda m: {"to": (m.group(1) or "").strip(), "subject": (m.group(2) or "").strip()},
+    ),
+    # Email with body — "draft email to X with subject Y and body Z", "ابعت ايميل"
+    (
+        re.compile(
+            r"^(?:draft|compose|send|write|new)\s+(?:an?\s+)?email\s+(?:to\s+)?(\S+@\S+)(?:\s+(?:subject|about|re)\s+(.+?))?(?:\s+(?:with\s+)?(?:body|message|text)\s+(.+))?$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_EMAIL",
+        "draft",
+        lambda m: {"to": m.group(1).strip(), "subject": (m.group(2) or "").strip(), "body": (m.group(3) or "").strip()},
+    ),
+    (
+        re.compile(
+            r"^(?:ابعت|اكتب|افتح)\s+(?:ايميل|إيميل)\s+(?:ل|الى|الي)?\s*(\S+@\S+)(?:\s+(?:عن|بخصوص|موضوع)\s+(.+?))?(?:\s+(?:و|الرسالة|الجسم)\s+(.+))?$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_EMAIL",
+        "draft",
+        lambda m: {"to": (m.group(1) or "").strip(), "subject": (m.group(2) or "").strip(), "body": (m.group(3) or "").strip()},
     ),
     # Calendar — "create event meeting at 3pm", "اعمل حدث اجتماع"
     (
@@ -2023,11 +2940,21 @@ def _parse_job_list_args(m):
 
 
 def _try_regex_table(normalized, raw):
-    for pattern, use_raw, intent, action, args_builder in _REGEX_TABLE:
+    for entry in _REGEX_TABLE:
+        # support optional pattern_confidence as a 6th element
+        if len(entry) == 5:
+            pattern, use_raw, intent, action, args_builder = entry
+            pattern_confidence = None
+        else:
+            pattern, use_raw, intent, action, args_builder, pattern_confidence = entry
         text = raw if use_raw else normalized
         m = pattern.match(text)
         if m:
-            return ParsedCommand(intent, raw, normalized, action=action, args=args_builder(m))
+            args = args_builder(m) if args_builder else {}
+            if pattern_confidence is not None:
+                args = dict(args or {})
+                args["pattern_confidence"] = float(pattern_confidence)
+            return ParsedCommand(intent, raw, normalized, action=action, args=args)
     return None
 
 
@@ -2055,14 +2982,14 @@ def _try_open_command(raw, normalized):
         return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": system_action})
 
     open_match = re.match(
-        r"^(?:open|launch|start|\u0627\u0641\u062a\u062d|\u0627\u0641\u062a\u062d\u0644\u064a|\u0634\u063a\u0644|\u0634\u063a\u0644\u0644\u064a)\s+(.+)$",
+        r"^(?:open|launch|start|\u0627\u0641\u062a\u062d|\u062a\u0641\u062a\u062d|\u0627\u0641\u062a\u062d\u0644\u064a|\u0634\u063a\u0644|\u0634\u063a\u0644\u0644\u064a)\s+(.+)$",
         raw,
         flags=re.IGNORECASE,
     )
     if not open_match:
         return None
 
-    target_raw = re.sub(r"[.!?,;]+$", "", open_match.group(1).strip()).strip()
+    target_raw = open_match.group(1).strip()
     target_for_match = _strip_open_fillers(_normalize_for_match(target_raw))
 
     drive_from_target = _extract_drive_letter(target_for_match)
@@ -2257,10 +3184,6 @@ def _try_media_open_command(raw, normalized):
         if target:
             return ParsedCommand("OS_APP_OPEN", raw, normalized, args={"app_name": target})
 
-    play_music = re.match(r"^(?:play|start)\s+(?:some\s+)?music$", lowered, flags=re.IGNORECASE)
-    if play_music:
-        return ParsedCommand("OS_APP_OPEN", raw, normalized, args={"app_name": "spotify"})
-
     arabic_match = re.match(
         r"^(?:\u0634\u063a\u0644|\u0627\u0641\u062a\u062d)\s+(?:\u0645\u0648\u0633\u064a\u0642\u0649(?:\s+\u0639\u0644\u0649)?\s*)?(\u0633\u0628\u0648\u062a\u064a\u0641\u0627\u064a|spotify|vlc|\u064a\u0648\u062a\u064a\u0648\u0628\s+\u0645\u064a\u0648\u0632\u0643|youtube\s+music)$",
         lowered,
@@ -2290,8 +3213,10 @@ def _try_natural_app_open_command(raw, normalized):
 
 def _try_app_catalog_refresh_command(raw, normalized):
     patterns = (
-        re.compile(r"^(?:rescan|refresh|scan)(?:\s+(?:apps?|installed\s+apps?|app\s+catalog))?(?:\s+now)?[.!?]*$", re.IGNORECASE),
-        re.compile(r"^(?:اعادة\s+فحص|حدّث|تحديث)(?:\s+(?:التطبيقات|قائمة\s+التطبيقات|كتالوج\s+التطبيقات))?[.!؟]*$", re.IGNORECASE),
+        re.compile(r"^(?:rescan|refresh|scan)(?:\s+(?:apps?|installed\s+apps?|app\s+catalog|app\s+list))?(?:\s+now)?[.!?]*$", re.IGNORECASE),
+        re.compile(r"^(?:find|locate)(?:\s+(?:installed\s+)?apps?)?(?:\s+now)?[.!?]*$", re.IGNORECASE),
+        re.compile(r"^(?:اعادة\s+فحص|حدّث|تحديث|اسكن|سكن)(?:\s+(?:التطبيقات|قائمة\s+التطبيقات|كتالوج\s+التطبيقات|البرامج|قائمة\s+البرامج))?[.!؟]*$", re.IGNORECASE),
+        re.compile(r"^(?:جدّد|جدد)(?:\s+(?:قائمة\s+)?(?:التطبيقات|البرامج))?[.!؟]*$", re.IGNORECASE),
     )
     for pattern in patterns:
         if pattern.match(raw) or pattern.match(normalized):
@@ -2414,6 +3339,26 @@ def _try_natural_media_control_command(raw, normalized):
     media_context = any(
         token in lowered for token in ("music", "media", "track", "song", "موسيقى", "اغنية")
     )
+
+    direct_en = re.match(
+        r"^(?:play|start|resume|pause|stop)\s+(?:music|media|audio|song|track|songs|tracks)?$",
+        lowered,
+        flags=re.IGNORECASE,
+    )
+    if direct_en:
+        verb = lowered.split()[0]
+        action_key = "media_stop" if verb == "stop" else "media_play_pause"
+        return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": action_key})
+
+    direct_ar = re.match(
+        r"^(?:شغل|شغّل|كمل|استأنف|وقف|وقّف|اوقف)\s*(?:الموسيقى|المزيكا|الميديا|الاغاني|الاغنية|الاغانيه)?$",
+        lowered,
+        flags=re.IGNORECASE,
+    )
+    if direct_ar:
+        verb = lowered.split()[0]
+        action_key = "media_stop" if verb in {"وقف", "وقّف", "اوقف"} else "media_play_pause"
+        return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": action_key})
 
     forward = re.search(
         r"(?:seek|skip|forward|قدم)\s+(?:by\s+)?(.+?)?\s*(seconds?|secs?|ثانية|ثواني)?$",
@@ -2578,6 +3523,67 @@ def _try_cd_commands(normalized, raw):
 
 
 # ---------------------------------------------------------------------------
+# Phase 3: Command Chaining and Batch Operations
+# ---------------------------------------------------------------------------
+
+def _try_command_chaining(raw, normalized):
+    """Detect and parse chained commands with conjunctions (AND/OR/THEN)."""
+    conjunction_pattern = re.compile(
+        r'(?:\s+(?:and|or|then)\s+|\s+(?:\u0648|\u0623\u0648|\u062b\u0645)(?:\s+|(?=[\u0600-\u06FFA-Za-z]))|\s+و(?=[\u0600-\u06FFA-Za-z]))',
+        re.IGNORECASE
+    )
+    
+    if not conjunction_pattern.search(raw):
+        return None
+    
+    return ParsedCommand(
+        "COMMAND_CHAIN",
+        raw,
+        normalized,
+        action="parse_and_execute",
+        args={"command_text": raw},
+    )
+
+
+def _try_batch_file_operations(raw, normalized):
+    """Detect batch file operations with multiple targets."""
+    delete_pattern = re.compile(
+        r"^(?:delete|remove|rm)\s+files?\s+(.+?)(?:\s+from\s+(.+))?$",
+        re.IGNORECASE,
+    )
+    delete_ar_pattern = re.compile(
+        r"^(?:\u0627\u062d\u0630\u0641|\u0623\u0632\u0644|\u0627\u0645\u0633\u062d)\s+(?:\u0645\u0644\u0641\u0627\u062a)\s+(.+?)(?:\s+(?:\u0641\\u064a|\u0645\u0646)\s+(.+))?$",
+        re.IGNORECASE,
+    )
+    
+    m = delete_pattern.match(raw)
+    if m:
+        files = m.group(1) or ""
+        location = m.group(2) or ""
+        return ParsedCommand(
+            "OS_FILE_NAVIGATION_BATCH",
+            raw,
+            normalized,
+            action="delete_multiple",
+            args={"files": files.strip(), "location": location.strip()},
+        )
+    
+    m = delete_ar_pattern.match(raw)
+    if m:
+        files = m.group(1) or ""
+        location = m.group(2) or ""
+        return ParsedCommand(
+            "OS_FILE_NAVIGATION_BATCH",
+            raw,
+            normalized,
+            action="delete_multiple",
+            args={"files": files.strip(), "location": location.strip()},
+        )
+    
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Main parser
 # ---------------------------------------------------------------------------
 
@@ -2604,45 +3610,79 @@ def parse_command(text: str) -> ParsedCommand:
                 args=dict(nested.args),
             )
 
+    # Detect negation early and strip it for downstream parsing. Keep the
+    # original raw/normalized values for reporting; we will mark the final
+    # ParsedCommand.negated flag if a negation was present.
+    negated, stripped_norm = _detect_and_strip_negation(normalized_match)
+    if negated:
+        # Use stripped normalized forms for matching patterns.
+        normalized = " ".join(stripped_norm.split())
+        normalized_match = stripped_norm
+
+    def _finalize(p: ParsedCommand) -> ParsedCommand:
+        if not p:
+            return p
+        if negated:
+            p.negated = True
+            p = _apply_negation_to_parsed(p)
+        return p
+
+    match_raw = normalized if negated else raw
+
+    # 0. Priority structural table (exact, bilingual, high-confidence toggles).
+    result = _try_priority_structural_table(normalized, raw)
+    if result:
+        return _finalize(result)
+
+    # 0.5 Priority structural regexes for queue/index actions that need args.
+    result = _try_priority_regex_table(normalized, raw)
+    if result:
+        return _finalize(result)
+
+    # 0.6 Phase 3: Command chaining detection
+    result = _try_command_chaining(raw, normalized)
+    if result:
+        return _finalize(result)
+
     # 1. Keyword table (exact match on normalized).
     result = _try_keyword_table(normalized, raw)
     if result:
-        return result
+        return _finalize(result)
 
     # 1.5 Mixed Arabic/English command pass.
     result = _try_codeswitched_command(raw, normalized)
     if result:
-        return result
+        return _finalize(result)
 
     # 2. Regex table.
     result = _try_regex_table(normalized, raw)
     if result:
-        return result
+        return _finalize(result)
 
     # 2.5 Natural scheduling phrasing.
     result = _try_natural_schedule_command(raw, normalized)
     if result:
-        return result
+        return _finalize(result)
 
     # 3. Natural file search phrasing.
     result = _try_natural_file_search(raw, normalized)
     if result:
-        return result
+        return _finalize(result)
 
     # 3.5 Natural media launch phrasing.
     result = _try_media_open_command(raw, normalized)
     if result:
-        return result
+        return _finalize(result)
 
     # 3.6 Natural media control phrasing.
     result = _try_natural_media_control_command(raw, normalized)
     if result:
-        return result
+        return _finalize(result)
 
     # 3.7 Natural browser command phrasing.
     result = _try_natural_browser_command(raw, normalized)
     if result:
-        return result
+        return _finalize(result)
 
     # 3.8 Natural window command phrasing.
     result = _try_natural_window_command(raw, normalized)
@@ -2650,46 +3690,51 @@ def parse_command(text: str) -> ParsedCommand:
         return result
 
     # 3.9 Natural app-open phrasing.
-    result = _try_natural_app_open_command(raw, normalized)
+    result = _try_natural_app_open_command(match_raw, normalized)
     if result:
-        return result
+        return _finalize(result)
 
     # 3.95 App catalog refresh phrasing.
     result = _try_app_catalog_refresh_command(raw, normalized)
     if result:
-        return result
+        return _finalize(result)
 
     # 4. Drive open heuristic.
     result = _try_drive_open(normalized_match, raw, normalized)
     if result:
-        return result
+        return _finalize(result)
 
     # 5. "open ..." disambiguation.
-    result = _try_open_command(raw, normalized)
+    result = _try_open_command(match_raw, normalized)
     if result:
-        return result
+        return _finalize(result)
 
     # 5.5 Natural file operation phrasing.
     result = _try_natural_file_operation(raw, normalized)
     if result:
-        return result
+        return _finalize(result)
+
+    # 5.6 Phase 3: Batch file operations
+    result = _try_batch_file_operations(raw, normalized)
+    if result:
+        return _finalize(result)
 
     # 6. System action aliases.
     result = _try_system_action(normalized_match, normalized, raw)
     if result:
-        return result
+        return _finalize(result)
 
     # 7. Natural close-app phrasing.
-    result = _try_close_command(raw, normalized)
+    result = _try_close_command(match_raw, normalized)
     if result:
-        return result
+        return _finalize(result)
 
     # 8. CD / navigation commands.
     result = _try_cd_commands(normalized, raw)
     if result:
-        return result
+        return _finalize(result)
 
     # 9. LLM fallback.
-    return ParsedCommand("LLM_QUERY", raw, normalized)
+    return _finalize(ParsedCommand("LLM_QUERY", raw, normalized))
 
 

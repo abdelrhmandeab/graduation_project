@@ -1264,7 +1264,6 @@ def _run_startup_prewarm_blocking():
     tasks = [
         ("wake_word", _preload_wake_word_runtime),
         ("stt", _preload_stt_model),
-        ("llm", _prewarm_llm),
     ]
     cpu_cores = max(1, int(os.cpu_count() or 1))
     allow_sequential_prewarm = cpu_cores <= 4
@@ -1316,6 +1315,13 @@ def _run_startup_prewarm_blocking():
         "Startup prewarm finished in %.2fs; entering wake-word loop.",
         time.perf_counter() - started,
     )
+
+
+def _start_background_llm_prewarm():
+    """Warm the LLM in the background so wake-word listening can start immediately."""
+    thread = threading.Thread(target=_prewarm_llm, name="jarvis-llm-prewarm", daemon=True)
+    thread.start()
+    return thread
 
 
 def run():

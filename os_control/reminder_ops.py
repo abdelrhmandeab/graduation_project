@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from core.logger import logger
+from os_control.temporal_parser import parse_natural_datetime, parse_recurrence_spec
 
 try:
     import win32com.client
@@ -73,75 +74,136 @@ _EN_CLOCK_RE = re.compile(
 
 def _parse_trigger_time(time_str: str) -> Optional[datetime]:
     """Return a future datetime for the given natural-language time string."""
-    now = datetime.now()
-    text = _norm(time_str)
-    if not text:
-        return None
+    return parse_natural_datetime(time_str)
 
-    # --- relative: "in N unit" / "بعد N unit" ---
-    rel = _REL_RE.search(text)
-    if rel:
-        qty_str = rel.group(1) or ""
-        unit_str = (rel.group(2) or "").strip().lower()
-        if qty_str == "نص":
-            qty = 0.5
-        elif qty_str == "ربع":
-            qty = 0.25
-        elif qty_str == "ساعتين":
-            qty, unit_str = 2.0, "h"
-        else:
-            try:
-                qty = float(qty_str)
-            except ValueError:
-                qty = 1.0
-        if unit_str in ("h", "hr", "hrs", "hour", "hours", "ساعة", "ساعات", "ساعه"):
-            return now + timedelta(hours=qty)
-        if unit_str in ("m", "min", "mins", "minute", "minutes", "دقيقة", "دقائق", "دقايق"):
-            return now + timedelta(minutes=qty)
-        return now + timedelta(seconds=qty)
 
-    # --- tomorrow? ---
-    is_tomorrow = bool(_TOMORROW_RE.search(text))
-    stripped = _TOMORROW_RE.sub("", text).strip()
+def _normalize_recurrence(recurrence: str, time_str: str = "") -> tuple[str, dict]:
+    kind = str(recurrence or "").strip().lower()
+    if not kind:
+        kind, meta = parse_recurrence_spec(time_str)
+        return kind or "", dict(meta or {})
+    meta: dict = {}
+    if kind in {"daily", "weekly", "monthly"}:
+        if kind == "weekly":
+            _, meta = parse_recurrence_spec(time_str)
+    return kind, meta
 
-    # --- wall-clock time ---
-    hour = minute = None
-    ampm: Optional[str] = None
 
-    ar = _AR_CLOCK_RE.search(stripped)
-    if ar:
-        hour = int(ar.group(1))
-        minute = int(ar.group(2)) if ar.group(2) else 0
-        period = (ar.group(3) or "").strip().lower()
-        if period in ("صباحاً", "صباحا", "صبح", "ص"):
-            ampm = "am"
-        elif period in ("مساءً", "مساءا", "مساء", "م"):
-            ampm = "pm"
-    else:
-        en = _EN_CLOCK_RE.search(stripped)
-        if en:
-            hour = int(en.group(1))
-            minute = int(en.group(2)) if en.group(2) else 0
-            ampm = (en.group(3) or "").strip().lower() or None
+def _add_month(trigger_time: datetime) -> datetime:
+    year = trigger_time.year + (1 if trigger_time.month == 12 else 0)
+    month = 1 if trigger_time.month == 12 else trigger_time.month + 1
+    day = trigger_time.day
+    while day > 28:
+        try:
+            return trigger_time.replace(year=year, month=month, day=day)
+        except ValueError:
+            day -= 1
+    return trigger_time.replace(year=year, month=month, day=day)
 
-    if hour is None:
-        return None
 
-    # Resolve AM/PM
-    if ampm == "pm" and hour != 12:
-        hour += 12
-    elif ampm == "am" and hour == 12:
-        hour = 0
-    elif ampm is None and 1 <= hour <= 6:
-        # Heuristic: ambiguous small hours lean PM in everyday speech
-        hour += 12
+def _next_recurrence_time(trigger_time: datetime, recurrence: str) -> datetime:
+    recurrence = str(recurrence or "").strip().lower()
+    if recurrence == "daily":
+        return trigger_time + timedelta(days=1)
+    if recurrence == "weekly":
+        return trigger_time + timedelta(days=7)
+    if recurrence == "monthly":
+        return _add_month(trigger_time)
+    return trigger_time
 
-    hour = hour % 24
-    base = now.date() + timedelta(days=1) if is_tomorrow else now.date()
-    target = datetime(base.year, base.month, base.day, hour, minute, 0)
-    if not is_tomorrow and target <= now:
-        target += timedelta(days=1)
-    return target
+
+def _weekday_to_schtasks_day(weekday: int) -> str:
+    # Python weekday: Monday=0 .. Sunday=6
+    mapping = {
+        0: "MON",
+        1: "TUE",
+        2: "WED",
+        3: "THU",
+        4: "FRI",
+        5: "SAT",
+        6: "SUN",
+    }
+    return mapping.get(int(weekday), "MON")
+
+
+def _scheduler_create_recurring(task_name: str, trigger_time: datetime, message: str, recurrence: str, recurrence_meta: dict | None = None) -> bool:
+    """Create a recurring Task Scheduler task via schtasks for persistence."""
+    recurrence = str(recurrence or "").strip().lower()
+    if recurrence not in {"daily", "weekly", "monthly"}:
+        return False
+
+    recurrence_meta = dict(recurrence_meta or {})
+
+    safe = message.replace('"', '\\"').replace("'", "\\'")
+    ps = _TOAST_PS.replace("{MSG}", safe)
+    task_action = f'powershell.exe -NonInteractive -WindowStyle Hidden -Command "{ps}"'
+
+    sc_map = {
+        "daily": "DAILY",
+        "weekly": "WEEKLY",
+        "monthly": "MONTHLY",
+    }
+
+    cmd = [
+        "schtasks",
+        "/Create",
+        "/TN",
+        task_name,
+        "/TR",
+        task_action,
+        "/SC",
+        sc_map[recurrence],
+        "/ST",
+        trigger_time.strftime("%H:%M"),
+        "/SD",
+        trigger_time.strftime("%m/%d/%Y"),
+        "/F",
+    ]
+
+    if recurrence == "weekly":
+        weekday = recurrence_meta.get("weekday")
+        if weekday is None:
+            weekday = int(trigger_time.weekday())
+        cmd.extend(["/D", _weekday_to_schtasks_day(int(weekday))])
+
+    if recurrence == "monthly":
+        cmd.extend(["/D", str(int(trigger_time.day)), "/MO", "1"])
+
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if proc.returncode == 0:
+            logger.info("Task Scheduler recurring reminder created: %s (%s)", task_name, recurrence)
+            return True
+        logger.warning("Recurring schtasks create failed (%s): %s", proc.returncode, (proc.stderr or proc.stdout or "").strip())
+        return False
+    except Exception as exc:
+        logger.warning("Recurring schtasks create exception: %s", exc)
+        return False
+
+
+def _schedule_in_process(task_name: str, trigger_time: datetime, message: str, language: str, recurrence: str = "", recurrence_meta: dict | None = None) -> None:
+    seconds = max(1, int((trigger_time - datetime.now()).total_seconds()))
+
+    def _timer_fire():
+        _fire(task_name)
+
+    timer = threading.Timer(seconds, _timer_fire)
+    timer.daemon = True
+    with _lock:
+        _in_process[task_name] = {
+            "timer": timer,
+            "message": message,
+            "fires_at": time.time() + seconds,
+            "language": language,
+            "recurrence": recurrence,
+            "recurrence_meta": dict(recurrence_meta or {}),
+            "trigger_time": trigger_time,
+        }
+    timer.start()
+
+
+def _create_recurring_reminder(task_name: str, trigger_time: datetime, message: str, language: str, recurrence: str, recurrence_meta: dict | None = None) -> None:
+    _schedule_in_process(task_name, trigger_time, message, language, recurrence=recurrence, recurrence_meta=recurrence_meta)
 
 
 # ---------------------------------------------------------------------------
@@ -180,7 +242,15 @@ def _show_toast(message: str) -> None:
 # Fire callback
 # ---------------------------------------------------------------------------
 
-def _fire(task_name: str, message: str) -> None:
+def _fire(task_name: str) -> None:
+    with _lock:
+        info = dict(_in_process.get(task_name) or {})
+    if not info:
+        return
+
+    message = str(info.get("message") or "")
+    recurrence = str(info.get("recurrence") or "").strip().lower()
+    recurrence_meta = dict(info.get("recurrence_meta") or {})
     logger.info("Reminder fired: %s — %s", task_name, message)
     _show_toast(message)
     if _WINSOUND_AVAILABLE:
@@ -190,6 +260,12 @@ def _fire(task_name: str, message: str) -> None:
                 time.sleep(0.2)
         except Exception:
             pass
+    if recurrence in {"daily", "weekly", "monthly"}:
+        next_trigger = _next_recurrence_time(info.get("trigger_time") or datetime.now(), recurrence)
+        logger.info("Recurring reminder rescheduled: %s (%s) -> %s", task_name, recurrence, next_trigger)
+        _schedule_in_process(task_name, next_trigger, message, str(info.get("language") or "en"), recurrence=recurrence, recurrence_meta=recurrence_meta)
+        return
+
     with _lock:
         _in_process.pop(task_name, None)
 
@@ -277,7 +353,7 @@ def _scheduler_list() -> list:
 # Public API
 # ---------------------------------------------------------------------------
 
-def create_reminder(message: str, time_str: str, language: str = "en") -> str:
+def create_reminder(message: str, time_str: str, language: str = "en", recurrence: str = "") -> str:
     """Schedule a reminder. Uses Task Scheduler if pywin32 is available."""
     if not (message and message.strip()):
         return ("محتاج تقولي تذكرني بإيه." if language == "ar"
@@ -294,8 +370,49 @@ def create_reminder(message: str, time_str: str, language: str = "en") -> str:
     if trigger <= datetime.now():
         return ("الوقت ده فات." if language == "ar" else "That time has already passed.")
 
+    recurrence_kind, recurrence_meta = _normalize_recurrence(recurrence, time_str)
+
     task_name = f"{_TASK_PREFIX}{str(uuid.uuid4())[:8]}"
     time_label = trigger.strftime("%H:%M")
+
+    if recurrence_kind in {"daily", "weekly", "monthly"}:
+        # Prefer persistent OS scheduling for recurring reminders.
+        if _scheduler_create_recurring(task_name, trigger, message, recurrence_kind, recurrence_meta):
+            recurrence_label = {
+                "daily": "every day",
+                "weekly": "every week",
+                "monthly": "every month",
+            }.get(recurrence_kind, recurrence_kind)
+            if language == "ar":
+                recurrence_label = {
+                    "daily": "كل يوم",
+                    "weekly": "كل أسبوع",
+                    "monthly": "كل شهر",
+                }.get(recurrence_kind, recurrence_kind)
+            return (
+                f"تمام، هفكرك «{message}» الساعة {time_label} {recurrence_label}."
+                if language == "ar"
+                else f"Recurring reminder set for {time_label} {recurrence_label}: '{message}'."
+            )
+
+        _create_recurring_reminder(task_name, trigger, message, language, recurrence_kind, recurrence_meta)
+        recurrence_label = {
+            "daily": "every day",
+            "weekly": "every week",
+            "monthly": "every month",
+        }.get(recurrence_kind, recurrence_kind)
+        if language == "ar":
+            recurrence_label = {
+                "daily": "كل يوم",
+                "weekly": "كل أسبوع",
+                "monthly": "كل شهر",
+            }.get(recurrence_kind, recurrence_kind)
+        note = " (تنبيه متكرر أثناء تشغيل Jarvis)" if language == "ar" else " (recurring while Jarvis is running)"
+        return (
+            f"تمام، هفكرك «{message}» الساعة {time_label} {recurrence_label}.{note}"
+            if language == "ar"
+            else f"Recurring reminder set for {time_label} {recurrence_label}: '{message}'.{note}"
+        )
 
     if _scheduler_create(task_name, trigger, message):
         return (f"تمام، هفكرك «{message}» الساعة {time_label}." if language == "ar"
@@ -303,15 +420,20 @@ def create_reminder(message: str, time_str: str, language: str = "en") -> str:
 
     # Fallback: in-process threading.Timer (won't survive app restart)
     seconds = max(1, int((trigger - datetime.now()).total_seconds()))
-    t = threading.Timer(seconds, _fire, args=(task_name, message))
+    t = threading.Timer(seconds, _fire, args=(task_name,))
     t.daemon = True
     t.start()
     with _lock:
-        _in_process[task_name] = {"timer": t, "message": message, "fires_at": time.time() + seconds}
+        _in_process[task_name] = {"timer": t, "message": message, "fires_at": time.time() + seconds, "language": language, "recurrence": recurrence_kind, "recurrence_meta": recurrence_meta, "trigger_time": trigger}
     logger.info("In-process reminder: %s in %ss", message, seconds)
     note = " (تنبيه: ما يبقاش بعد ما التطبيق يقفل)" if language == "ar" else " (won't survive app restart)"
     return (f"تمام، هفكرك «{message}» الساعة {time_label}.{note}" if language == "ar"
             else f"Reminder set for {time_label}: '{message}'.{note}")
+
+
+def create_recurring_reminder(message: str, time_str: str, recurrence: str, language: str = "en") -> str:
+    """Schedule a recurring reminder using the recurring in-process scheduler."""
+    return create_reminder(message, time_str, language=language, recurrence=recurrence)
 
 
 def list_reminders(language: str = "en") -> str:
@@ -330,7 +452,9 @@ def list_reminders(language: str = "en") -> str:
             remaining = max(0, int(info["fires_at"] - now))
             time_display = f"in {remaining // 60}m {remaining % 60}s" if remaining >= 60 else f"in {remaining}s"
             short_id = tid.replace(_TASK_PREFIX, "")
-            lines.append(f"[{short_id}] {time_display} — {info['message']} *")
+            recurrence = str(info.get("recurrence") or "").strip().lower()
+            recurrence_suffix = f" [{recurrence}]" if recurrence else ""
+            lines.append(f"[{short_id}] {time_display} — {info['message']} *{recurrence_suffix}")
 
     if not lines:
         return "مفيش تذكيرات نشطة." if language == "ar" else "No active reminders."

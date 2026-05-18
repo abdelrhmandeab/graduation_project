@@ -68,7 +68,13 @@ _APP_CATALOG = {
             "\u0637\u0631\u0641\u064a\u0629",
         ],
     },
-    "powershell.exe": {
+            try:
+                from core.metrics import log_structured
+
+                log_structured("close_app", success=False, process_name=process_name, attempts=attempts)
+            except Exception:
+                pass
+            return failure_result(
         "canonical_name": "PowerShell",
         "aliases": [
             "powershell",
@@ -93,6 +99,12 @@ _APP_CATALOG = {
         "aliases": [
             "task manager",
             "taskmgr",
+        try:
+            from core.metrics import log_structured
+
+            log_structured("close_app", success=True, process_name=process_name, attempts=attempts)
+        except Exception:
+            pass
             "\u0645\u062f\u064a\u0631 \u0627\u0644\u0645\u0647\u0627\u0645",
         ],
     },
@@ -731,6 +743,12 @@ def open_app_result(app_name):
                 details={"target": target, "query": query, "attempts": attempts},
                 error=error,
             )
+            try:
+                from core.metrics import log_structured
+
+                log_structured("open_app", success=False, target=target, attempts=attempts)
+            except Exception:
+                pass
             return failure_result(
                 _friendly_open_error(target, error),
                 error_code=error_code,
@@ -752,6 +770,12 @@ def open_app_result(app_name):
                 "resolution_status": resolution.get("status"),
             },
         )
+        try:
+            from core.metrics import log_structured
+
+            log_structured("open_app", success=True, target=target, attempts=attempts)
+        except Exception:
+            pass
         logger.info("Opened app via template PowerShell: %s", target)
         return success_result(
             f"Opening {app_name}.",
@@ -899,6 +923,16 @@ def close_app(app_name):
 
 
 def refresh_app_catalog_result(force=False):
+    from core.config import FEATURE_FLAGS
+
+    if not FEATURE_FLAGS.get("AUTO_APP_DISCOVERY_ENABLED", True):
+        try:
+            from core.metrics import log_structured
+
+            log_structured("app_catalog_refresh", success=False, reason="feature_disabled")
+        except Exception:
+            pass
+        return failure_result("Auto app discovery is disabled.", error_code="feature_disabled")
     try:
         refreshed_catalog = scan_installed_apps(_BASE_APP_CATALOG, force=bool(force))
         _apply_app_catalog(refreshed_catalog)
@@ -907,6 +941,12 @@ def refresh_app_catalog_result(force=False):
             "success",
             details={"force": bool(force), "app_count": len(_APP_CATALOG)},
         )
+        try:
+            from core.metrics import log_structured
+
+            log_structured("app_catalog_refresh", success=True, force=bool(force), app_count=len(_APP_CATALOG))
+        except Exception:
+            pass
         return success_result(
             f"Rescanned installed apps and found {len(_APP_CATALOG)} entries.",
             debug_info={"force": bool(force), "app_count": len(_APP_CATALOG)},
@@ -914,6 +954,12 @@ def refresh_app_catalog_result(force=False):
     except Exception as exc:
         logger.error("App catalog rescan failed: %s", exc)
         log_action("app_catalog_refresh", "failed", details={"force": bool(force)}, error=exc)
+        try:
+            from core.metrics import log_structured
+
+            log_structured("app_catalog_refresh", success=False, force=bool(force))
+        except Exception:
+            pass
         return failure_result(
             "I could not rescan installed apps.",
             error_code="execution_failed",

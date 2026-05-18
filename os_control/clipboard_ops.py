@@ -19,9 +19,15 @@ def read_clipboard():
         text = pyperclip.paste()
         if not text:
             return "Clipboard is empty."
-        if len(text) > 500:
-            return f"Clipboard ({len(text)} chars):\n{text[:500]}..."
-        return f"Clipboard:\n{text}"
+        if len(text) > 1000:
+            return text[:1000]
+        try:
+            from core.metrics import log_structured
+
+            log_structured("clipboard_read", length=len(text))
+        except Exception:
+            pass
+        return text
     except Exception as exc:
         logger.warning("Clipboard read failed: %s", exc)
         return f"Could not read clipboard: {exc}"
@@ -34,6 +40,12 @@ def write_clipboard(text):
         return "Clipboard access not available (pyperclip not installed)."
     try:
         pyperclip.copy(str(text or ""))
+        try:
+            from core.metrics import log_structured
+
+            log_structured("clipboard_write", length=len(str(text or "")))
+        except Exception:
+            pass
         return f"Copied to clipboard ({len(text)} chars)."
     except Exception as exc:
         logger.warning("Clipboard write failed: %s", exc)

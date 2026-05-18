@@ -930,3 +930,15 @@ class LatencyTracker:
 
 
 latency_tracker = LatencyTracker()
+
+
+def log_structured(event_name: str, **payload) -> None:
+    """Emit a structured metric/log line for observability and post-deploy
+    telemetry. Keeps the implementation lightweight so tests and local
+    deployments can inspect the event stream via normal logging handlers.
+    """
+    try:
+        _logger.info("METRIC_EVENT %s %s", str(event_name or "").strip(), payload or {})
+    except Exception:
+        # Never allow telemetry to raise during normal execution.
+        pass

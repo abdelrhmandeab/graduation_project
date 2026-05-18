@@ -20,7 +20,8 @@ Wake word → Streaming capture + STT → 4-tier intent router → Action / LLM 
   3. **Keyword NLP** — fuzzy match (rapidfuzz) for noisy STT
   4. **LLM fallback** — local Ollama (Qwen3 by default, Qwen2.5 supported) for conversational queries
 - **Action handlers**: 35+ system commands + timers, clipboard, sysinfo, settings,
-  Outlook email/calendar drafts, Windows Search Index, persona, knowledge base.
+  Outlook email/calendar drafts, Windows Search Index, persona, knowledge base,
+  advanced command chaining, batch operations, and semantic file search.
 - **TTS**:
   - Arabic: ElevenLabs TTS, falling back to edge-tts `ar-EG-SalmaNeural` when offline
   - English: edge-tts `en-US-AriaNeural`
@@ -132,3 +133,12 @@ nlp/          — semantic router, fuzzy matcher, keyword engine
 os_control/   — timer, clipboard, sysinfo, settings, file/app/system ops, email, calendar
 tools/        — weather (Open-Meteo), web_search (DuckDuckGo)
 ```
+
+## Implementation phases
+
+- **Phase 1** — NLU hardening: negation, entity types, pattern precedence, confidence scoring
+- **Phase 2** — Temporal engine: recurring reminders, file copy, email body composition
+- **Phase 3** — Advanced operations: command chaining, batch file ops, semantic search
+- **Phase 4** — QA and release: bilingual smoke tests, regression coverage, router polish, documentation updates
+
+All phases are implemented and validated in both English and Egyptian Arabic.

@@ -1,11 +1,14 @@
+import ctypes
 import re
 from difflib import SequenceMatcher
+from ctypes import wintypes
 
 from core.config import (
     ALLOW_DESTRUCTIVE_SYSTEM_COMMANDS,
     CONFIRMATION_TIMEOUT_SECONDS,
     SECOND_FACTOR_REQUIRED_FOR_DESTRUCTIVE,
 )
+from core.config import FEATURE_FLAGS
 from core.logger import logger
 from core.response_templates import format_confirmation_prompt
 from os_control.action_log import log_action
@@ -30,6 +33,14 @@ from os_control.native_ops import (
 from os_control.policy import policy_engine
 from os_control.powershell_bridge import run_template
 from os_control.risk_policy import risk_tier_for_system
+from core.metrics import log_structured
+
+
+_KEYEVENTF_KEYUP = 0x0002
+_VK_MEDIA_NEXT_TRACK = 0xB0
+_VK_MEDIA_PREV_TRACK = 0xB1
+_VK_MEDIA_STOP = 0xB2
+_VK_MEDIA_PLAY_PAUSE = 0xB3
 
 
 SYSTEM_COMMANDS = {
@@ -170,6 +181,12 @@ SYSTEM_COMMANDS = {
     "window_minimize": {
         "template": "window_minimize",
         "description": "Minimize active window",
+        "destructive": False,
+        "requires_confirmation": False,
+    },
+    "window_resize": {
+        "template": "window_resize",
+        "description": "Resize active window smaller",
         "destructive": False,
         "requires_confirmation": False,
     },
@@ -348,6 +365,12 @@ ALIASES = {
     "maximize this window": "window_maximize",
     "minimize window": "window_minimize",
     "minimize this window": "window_minimize",
+    "resize window smaller": "window_resize",
+    "resize this window smaller": "window_resize",
+    "make window smaller": "window_resize",
+    "shrink window": "window_resize",
+    "shrink this window": "window_resize",
+    "window resize smaller": "window_resize",
     "snap window left": "window_snap_left",
     "snap left": "window_snap_left",
     "snap window right": "window_snap_right",
@@ -408,6 +431,21 @@ ALIASES = {
     "\u0627\u0639\u0631\u0636 \u0627\u0644\u062a\u0637\u0628\u064a\u0642\u0627\u062a \u0627\u0644\u0634\u063a\u0627\u0644\u0629": "list_processes",
     "\u0643\u0628\u0631 \u0627\u0644\u0634\u0628\u0627\u0643": "window_maximize",
     "\u0635\u063a\u0631 \u0627\u0644\u0634\u0628\u0627\u0643": "window_minimize",
+    "\u0635\u063a\u0631 \u0627\u0644\u0646\u0627\u0641\u0630\u0629": "window_minimize",
+    "\u0627\u0637\u0648\u064a \u0627\u0644\u0634\u0628\u0627\u0643": "window_minimize",
+    "\u0627\u0637\u0648\u064a \u0627\u0644\u0646\u0627\u0641\u0630\u0629": "window_minimize",
+    "\u0627\u0637\u0648\u0651\u064a \u0627\u0644\u0634\u0628\u0627\u0643": "window_minimize",
+    "\u0627\u0637\u0648\u0651\u064a \u0627\u0644\u0646\u0627\u0641\u0630\u0629": "window_minimize",
+    "\u0635\u063a\u0631 \u0627\u0644\u0634\u0628\u0627\u0643 \u0627\u0643\u062a\u0631": "window_resize",
+    "\u0635\u063a\u0651\u0631 \u0627\u0644\u0634\u0628\u0627\u0643 \u0623\u0643\u062a\u0631": "window_resize",
+    "\u0635\u063a\u0631 \u0627\u0644\u0634\u0628\u0627\u0643 \u0634\u0648\u064a\u0629": "window_resize",
+    "\u0635\u063a\u0651\u0631 \u0627\u0644\u0634\u0628\u0627\u0643 \u0634\u0648\u064a\u0629": "window_resize",
+    "\u0635\u063a\u0631 \u0627\u0644\u0646\u0627\u0641\u0630\u0629 \u0627\u0643\u062a\u0631": "window_resize",
+    "\u0635\u063a\u0651\u0631 \u0627\u0644\u0646\u0627\u0641\u0630\u0629 \u0623\u0643\u062a\u0631": "window_resize",
+    "\u0627\u062e\u0641\u0651\u0641 \u062d\u062c\u0645 \u0627\u0644\u0634\u0628\u0627\u0643": "window_resize",
+    "\u0627\u062e\u0641\u0641 \u062d\u062c\u0645 \u0627\u0644\u0634\u0628\u0627\u0643": "window_resize",
+    "\u0627\u062e\u0641\u0651\u0641 \u062d\u062c\u0645 \u0627\u0644\u0646\u0627\u0641\u0630\u0629": "window_resize",
+    "\u0627\u062e\u0641\u0641 \u062d\u062c\u0645 \u0627\u0644\u0646\u0627\u0641\u0630\u0629": "window_resize",
     "\u062d\u0631\u0643 \u0627\u0644\u0634\u0628\u0627\u0643 \u064a\u0645\u064a\u0646": "window_snap_right",
     "\u062d\u0631\u0643 \u0627\u0644\u0634\u0628\u0627\u0643 \u0634\u0645\u0627\u0644": "window_snap_left",
     "\u0627\u0644\u0634\u0628\u0627\u0643 \u0627\u0644\u0644\u064a \u0628\u0639\u062f\u0647": "window_next",
@@ -799,7 +837,84 @@ def _render_system_description(action_key, fallback_description, normalized_args
     return fallback_description
 
 
-def _render_system_success_message(action_key, normalized_args, output):
+def _is_arabic_language(language):
+    return str(language or "").lower().startswith("ar")
+
+
+def _send_media_key(vk_code):
+    try:
+        user32 = ctypes.windll.user32
+        user32.keybd_event(vk_code, 0, 0, 0)
+        user32.keybd_event(vk_code, 0, _KEYEVENTF_KEYUP, 0)
+        return True
+    except Exception:
+        return False
+
+
+def _resize_active_window(amount_percent=10, language=None):
+    if not hasattr(ctypes, "windll"):
+        return False, "", {}
+
+    try:
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return False, "", {}
+
+        rect = wintypes.RECT()
+        if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            return False, "", {}
+
+        width = int(rect.right - rect.left)
+        height = int(rect.bottom - rect.top)
+        if width <= 0 or height <= 0:
+            return False, "", {}
+
+        if hasattr(user32, "IsIconic") and user32.IsIconic(hwnd):
+            user32.ShowWindow(hwnd, 9)
+
+        shrink_ratio = max(0.0, min(1.0, float(amount_percent) / 100.0))
+        new_width = max(320, int(round(width * (1.0 - shrink_ratio))))
+        new_height = max(240, int(round(height * (1.0 - shrink_ratio))))
+        if new_width >= width and new_height >= height:
+            new_width = max(320, width - 80)
+            new_height = max(240, height - 80)
+
+        ok = bool(user32.MoveWindow(hwnd, rect.left, rect.top, new_width, new_height, True))
+        if not ok:
+            return False, "", {}
+
+        if _is_arabic_language(language):
+            message = f"تمام، صغّرت الشبابك لـ {int(round((new_width / width) * 100))}%."
+        else:
+            message = f"Window resized to {int(round((new_width / width) * 100))}% of original size."
+        return True, message, {"method": "native_window", "width": new_width, "height": new_height}
+    except Exception as exc:
+        logger.debug("Native window resize failed: %s", exc)
+        return False, "", {}
+
+
+def _run_native_media_command(action_key, language=None):
+    if action_key == "media_play_pause":
+        if _send_media_key(_VK_MEDIA_PLAY_PAUSE):
+            return True, ("شغّلت أو وقفت الميديا." if _is_arabic_language(language) else "Toggled media play/pause."), {"method": "native_media"}
+        return False, "", {}
+    if action_key == "media_next_track":
+        if _send_media_key(_VK_MEDIA_NEXT_TRACK):
+            return True, ("الأغنية الجاية." if _is_arabic_language(language) else "Skipped to the next track."), {"method": "native_media"}
+        return False, "", {}
+    if action_key == "media_previous_track":
+        if _send_media_key(_VK_MEDIA_PREV_TRACK):
+            return True, ("رجعت للأغنية اللي قبلها." if _is_arabic_language(language) else "Went to the previous track."), {"method": "native_media"}
+        return False, "", {}
+    if action_key == "media_stop":
+        if _send_media_key(_VK_MEDIA_STOP):
+            return True, ("وقفت تشغيل الميديا." if _is_arabic_language(language) else "Stopped media playback."), {"method": "native_media"}
+        return False, "", {}
+    return False, "", {}
+
+
+def _render_system_success_message(action_key, normalized_args, output, language=None):
     if action_key == "browser_search_web":
         query = str((normalized_args or {}).get("search_query") or "").strip()
         return f"Searching the web for: {query}" if query else "Searching the web."
@@ -817,6 +932,18 @@ def _render_system_success_message(action_key, normalized_args, output):
         level = (normalized_args or {}).get("brightness_level")
         if level is not None:
             return f"Brightness set to {level}%."
+
+    if action_key == "media_play_pause":
+        return "شغّلت أو وقفت الميديا." if _is_arabic_language(language) else "Toggled media play/pause."
+
+    if action_key == "media_next_track":
+        return "الأغنية الجاية." if _is_arabic_language(language) else "Skipped to the next track."
+
+    if action_key == "media_previous_track":
+        return "رجعت للأغنية اللي قبلها." if _is_arabic_language(language) else "Went to the previous track."
+
+    if action_key == "media_stop":
+        return "وقفت تشغيل الميديا." if _is_arabic_language(language) else "Stopped media playback."
 
     if action_key in {"media_seek_forward", "media_seek_backward"}:
         seconds = (normalized_args or {}).get("seek_seconds")
@@ -951,7 +1078,7 @@ def is_system_command(text):
     return normalize_system_action(text) is not None
 
 
-def request_system_command_result(action_key, command_args=None):
+def request_system_command_result(action_key, command_args=None, language=None):
     if action_key not in SYSTEM_COMMANDS:
         return failure_result("Unsupported system command.", error_code="unsupported_action")
 
@@ -966,7 +1093,7 @@ def request_system_command_result(action_key, command_args=None):
     requires_confirmation = bool(cfg.get("requires_confirmation", cfg["destructive"]))
 
     if not requires_confirmation:
-        return execute_system_command_result(action_key, command_args=normalized_args)
+        return execute_system_command_result(action_key, command_args=normalized_args, language=language)
 
     require_second_factor = bool(cfg["destructive"] and SECOND_FACTOR_REQUIRED_FOR_DESTRUCTIVE)
     risk_tier = risk_tier_for_system(
@@ -1093,6 +1220,9 @@ def _run_native_system_command(action_key):
             return True, f"Screenshot saved to {path}", {"method": "native_screenshot", "path": path}
         return False, "", {}
 
+    if action_key == "window_resize":
+        return _resize_active_window(amount_percent=10)
+
     return False, "", {}
 
 
@@ -1124,7 +1254,7 @@ def _run_native_brightness_command(action_key, normalized_args):
     return False, "", {}
 
 
-def execute_system_command_result(action_key, command_args=None):
+def execute_system_command_result(action_key, command_args=None, language=None):
     if action_key not in SYSTEM_COMMANDS:
         return failure_result("Unsupported system command.", error_code="unsupported_action")
 
@@ -1147,21 +1277,47 @@ def execute_system_command_result(action_key, command_args=None):
 
     # Native-first volume/brightness control (falls through to PowerShell if unavailable)
     if action_key in {"volume_up", "volume_down", "volume_mute", "volume_set"}:
-        native_ok, native_msg, native_debug = _run_native_volume_command(action_key, normalized_args)
+        if FEATURE_FLAGS.get("SYSTEM_VOLUME_CONTROL", True):
+            native_ok, native_msg, native_debug = _run_native_volume_command(action_key, normalized_args)
+        else:
+            native_ok, native_msg, native_debug = False, "", {}
         if native_ok:
             log_action("system_command", "success", details={"action": action_key, **native_debug})
+            log_structured("system_command_executed", action=action_key, success=True, method=native_debug.get("method"), level="info")
+            return success_result(native_msg, debug_info={"action": action_key, **native_debug})
+
+    if action_key in {"media_play_pause", "media_next_track", "media_previous_track", "media_stop"}:
+        if FEATURE_FLAGS.get("MEDIA_DIRECT_DISPATCH_ENABLED", True):
+            native_ok, native_msg, native_debug = _run_native_media_command(action_key, language=language)
+        else:
+            native_ok, native_msg, native_debug = False, "", {}
+        if native_ok:
+            log_action("system_command", "success", details={"action": action_key, **native_debug})
+            log_structured("system_command_executed", action=action_key, success=True, method=native_debug.get("method"))
             return success_result(native_msg, debug_info={"action": action_key, **native_debug})
 
     if action_key in {"lock", "sleep", "screenshot"}:
         native_ok, native_msg, native_debug = _run_native_system_command(action_key)
         if native_ok:
             log_action("system_command", "success", details={"action": action_key, **native_debug})
+            log_structured("system_command_executed", action=action_key, success=True, method=native_debug.get("method"))
             return success_result(native_msg, debug_info={"action": action_key, **native_debug})
+
+    if action_key == "window_resize":
+        native_ok, native_msg, native_debug = _run_native_system_command(action_key)
+        if native_ok:
+            log_action("system_command", "success", details={"action": action_key, **native_debug})
+            log_structured("system_command_executed", action=action_key, success=True, method=native_debug.get("method"))
+            return success_result(native_msg, debug_info={"action": action_key, **native_debug})
+        log_action("system_command", "failed", details={"action": action_key}, error="Native window resize failed")
+        log_structured("system_command_executed", action=action_key, success=False, error="native_window_resize_failed")
+        return failure_result("Could not resize the active window.", error_code="execution_failed", debug_info={"action": action_key})
 
     if action_key in {"brightness_up", "brightness_down", "brightness_set"}:
         native_ok, native_msg, native_debug = _run_native_brightness_command(action_key, normalized_args)
         if native_ok:
             log_action("system_command", "success", details={"action": action_key, **native_debug})
+            log_structured("system_command_executed", action=action_key, success=True, method=native_debug.get("method"))
             return success_result(native_msg, debug_info={"action": action_key, **native_debug})
 
     ok, error, output, attempts = _run_system_template_with_safe_retry(
@@ -1170,7 +1326,7 @@ def execute_system_command_result(action_key, command_args=None):
         env_overrides=_template_env_overrides(action_key, normalized_args),
     )
     if ok:
-        message = _render_system_success_message(action_key, normalized_args, output)
+        message = _render_system_success_message(action_key, normalized_args, output, language=language)
         log_action(
             "system_command",
             "success",

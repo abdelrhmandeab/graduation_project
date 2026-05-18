@@ -4,7 +4,7 @@ import threading
 import time
 from collections import OrderedDict
 
-from core.command_parser import ParsedCommand, parse_command
+from core.command_parser import ParsedCommand, parse_command, parse_duration_from_text
 from core.config import (
     CLARIFICATION_CORRECTION_WINDOW_SECONDS,
     CODE_SWITCH_CONTINUITY_ENABLED,
@@ -52,6 +52,11 @@ from core.config import (
 from core.demo_mode import is_enabled as is_demo_mode_enabled
 from core.demo_mode import set_enabled as set_demo_mode
 from core.handlers import audit, batch, file_navigation
+from core.handlers.advanced_operations import (
+    handle_batch_file_operation,
+    handle_command_chain,
+    handle_semantic_search,
+)
 from core.handlers import job_queue as job_queue_handler
 from core.handlers import knowledge_base, memory, persona, policy, search_index, voice
 from core.intent_confidence import (
@@ -66,7 +71,7 @@ from core.persona import persona_manager
 from core.response_templates import anti_repetition_prefixes, detect_language_hint, normalize_language, render_template
 from core.response_shaper import response_shaper
 from core.session_memory import session_memory
-from llm.ollama_client import ask_llm, ask_llm_streaming, get_runtime_lightweight_num_ctx, get_runtime_model_tier
+from llm.ollama_client import ask_llm, ask_llm_streaming, get_runtime_lightweight_num_ctx, get_runtime_model_tier, get_runtime_num_ctx
 from llm.prompt_builder import build_prompt_package, build_lightweight_prompt, build_tool_augmented_prompt, build_claude_messages
 from tools.live_data import gather_live_data
 try:
@@ -121,6 +126,7 @@ _LLM_RESPONSE_CACHE_STATS = {
 
 _DRY_RUN_MUTATING_INTENTS = {
     "OS_FILE_NAVIGATION",
+    "OS_FILE_NAVIGATION_BATCH",
     "OS_APP_OPEN",
     "OS_APP_CLOSE",
     "OS_SYSTEM_COMMAND",
@@ -155,6 +161,9 @@ _PARSER_FASTPATH_INTENTS = {
     "OS_APP_CLOSE",
     "OS_FILE_SEARCH",
     "OS_FILE_NAVIGATION",
+    "OS_FILE_SEARCH_ADVANCED",
+    "OS_FILE_NAVIGATION_BATCH",
+    "COMMAND_CHAIN",
     "OS_SYSTEM_COMMAND",
     "OS_TIMER",
     "OS_REMINDER",
@@ -206,6 +215,9 @@ def _should_skip_nlu_llm_query(parser_candidate):
 def _should_try_tool_tier(original_text, parser_candidate):
     intent = str(getattr(parser_candidate, "intent", "") or "").strip().upper()
     if intent and intent != "LLM_QUERY":
+        return False
+
+    if _looks_keyword_nlp_informational_query(original_text):
         return False
 
     tier = get_runtime_model_tier()
@@ -1237,9 +1249,11 @@ _PERMISSION_MAP = {
     "OS_CONFIRMATION": "confirmation",
     "OS_ROLLBACK": "rollback",
     "OS_FILE_SEARCH": "file_search",
+    "OS_FILE_SEARCH_ADVANCED": "file_search",
     "OS_APP_OPEN": "app_open",
     "OS_APP_CLOSE": "app_close",
     "OS_SYSTEM_COMMAND": "system_command",
+    "OS_FILE_NAVIGATION_BATCH": "file_write",
     "METRICS_REPORT": "metrics",
     "AUDIT_LOG_REPORT": "audit_log",
     "AUDIT_VERIFY": "audit_log",
@@ -2199,6 +2213,123 @@ def _required_permission(parsed):
     return _PERMISSION_MAP.get(parsed.intent)
 
 
+def _is_arabic_language(language):
+    return str(language or "").lower().startswith("ar")
+
+
+def _format_chain_message(result, language):
+    commands_executed = int(result.get("commands_executed") or len(result.get("results") or []) or 0)
+    if _is_arabic_language(language):
+        if commands_executed == 1:
+            return "جاهز: أمر متسلسل واحد."
+        return f"جاهز: {commands_executed} أوامر متسلسلة."
+    if commands_executed == 1:
+        return "Ready: 1 chained action."
+    return f"Ready: {commands_executed} chained actions."
+
+
+def _format_batch_message(result, language):
+    operation = str(result.get("operation") or "batch").strip()
+    files = list(result.get("files") or [])
+    count = int(result.get("count") or len(files) or 0)
+    if _is_arabic_language(language):
+        if operation == "delete_multiple":
+            return f"جاهز: حذف {count} ملفات."
+        if operation == "copy_multiple":
+            return f"جاهز: نسخ {count} ملفات."
+        if operation == "move_multiple":
+            return f"جاهز: نقل {count} ملفات."
+        return f"جاهز: عملية جماعية لـ {count} عناصر."
+    if operation == "delete_multiple":
+        return f"Ready: delete {count} files."
+    if operation == "copy_multiple":
+        return f"Ready: copy {count} files."
+    if operation == "move_multiple":
+        return f"Ready: move {count} files."
+    return f"Ready: batch operation for {count} items."
+
+
+def _format_search_message(result, language):
+    matches = list(result.get("results") or [])
+    count = int(result.get("count") or len(matches) or 0)
+    query = str(result.get("query") or "").strip()
+    if _is_arabic_language(language):
+        if not matches:
+            return f"لا توجد نتائج مطابقة{' لـ ' + query if query else ''}."
+        lines = [f"نتائج البحث{' عن ' + query if query else ''}: {count} ملفات"]
+        lines.extend(f"- {match}" for match in matches)
+        return "\n".join(lines)
+    if not matches:
+        return f"No matches found{' for ' + query if query else ''}."
+    lines = [f"Search results{' for ' + query if query else ''}: {count} files"]
+    lines.extend(f"- {match}" for match in matches)
+    return "\n".join(lines)
+
+
+def _split_chained_command_text(command_text):
+    raw_text = str(command_text or "").strip()
+    if not raw_text:
+        return []
+    parts = re.split(r"(?:\s+(?:and|then|or)\s+|\s+(?:و|ثم|وبعدين|او|أو)(?:\s+|(?=[\u0600-\u06FFA-Za-z]))|\s+و(?=[\u0600-\u06FFA-Za-z]))", raw_text, flags=re.IGNORECASE)
+    return [part.strip() for part in parts if part and part.strip()]
+
+
+def _execute_chained_commands(command_text, language, *, on_sentence=None):
+    results = []
+    parts = _split_chained_command_text(command_text)
+    if not parts:
+        return False, "Could not parse chained command.", {"phase4_chain": {"commands_executed": 0, "results": []}}
+
+    for index, part in enumerate(parts):
+        parsed_part = parse_command(part)
+        parsed_part.raw = part
+        if parsed_part.intent == "LLM_QUERY":
+            results.append({
+                "command": part,
+                "intent": parsed_part.intent,
+                "action": parsed_part.action,
+                "args": dict(parsed_part.args or {}),
+                "success": False,
+                "message": "Unrecognized subcommand.",
+            })
+            message = "مش قادر أفهم التسلسل." if language == "ar" else "Could not parse chained command."
+            return False, message, {"phase4_chain": {"commands_executed": len(results), "results": results}}
+
+        try:
+            success, response, dispatch_meta = _dispatch(parsed_part, on_sentence=on_sentence)
+        except Exception as exc:
+            logger.error("Chained command step failed: %s", exc)
+            success, response, dispatch_meta = False, "Sorry, I had an internal error.", {}
+
+        result_entry = {
+            "command": part,
+            "intent": parsed_part.intent,
+            "action": parsed_part.action,
+            "args": dict(parsed_part.args or {}),
+            "success": bool(success),
+            "message": response,
+        }
+        if dispatch_meta:
+            result_entry["meta"] = dict(dispatch_meta)
+        results.append(result_entry)
+
+        if not success:
+            return False, response, {"phase4_chain": {"commands_executed": len(results), "results": results}}
+
+        if index < len(parts) - 1:
+            time.sleep(2.0)
+
+    message = f"تمام، نفذت {len(results)} أوامر متتالية." if language == "ar" else f"Done: executed {len(results)} chained actions."
+    return True, message, {"phase4_chain": {"commands_executed": len(results), "results": results}}
+
+
+def _infer_language_for_response(parsed, fallback_language):
+    raw_text = str(getattr(parsed, "raw", "") or "")
+    if re.search(r"[؀-ۿ]", raw_text):
+        return "ar"
+    return fallback_language
+
+
 def _execute_confirmed_payload(payload):
     kind = (payload or {}).get("kind")
     if kind == "system_command":
@@ -2845,7 +2976,7 @@ def _execute_job_command(command_text):
 
 def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True, on_sentence=None):
     logger.info("Command parsed: %s (%s)", parsed.intent, parsed.action or "no-action")
-    language = session_memory.get_preferred_language()
+    language = _infer_language_for_response(parsed, session_memory.get_preferred_language())
 
     if parsed.intent == "DEMO_MODE":
         if parsed.action == "on":
@@ -2892,6 +3023,30 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
     if parsed.intent == "OS_ROLLBACK":
         ok, message = undo_last_action()
         return ok, message, {}
+
+    if parsed.intent == "COMMAND_CHAIN":
+        return _execute_chained_commands(parsed.raw or parsed.normalized or "", language, on_sentence=on_sentence)
+
+    if parsed.intent == "OS_FILE_NAVIGATION_BATCH":
+        batch_result = handle_batch_file_operation(
+            parsed.action or "delete_multiple",
+            files=parsed.args.get("files", ""),
+            location=parsed.args.get("location", ""),
+            destination=parsed.args.get("destination", ""),
+        )
+        if batch_result.get("error"):
+            return False, str(batch_result.get("error") or "Batch operation failed."), {"phase4_batch": batch_result}
+        message = _format_batch_message(batch_result, language)
+        return True, message, {"phase4_batch": batch_result}
+
+    if parsed.intent == "OS_FILE_SEARCH_ADVANCED":
+        query = str(parsed.args.get("query") or parsed.args.get("filename") or parsed.raw or "").strip()
+        if not query:
+            return False, render_template("missing_filename_search", language), {}
+        root = parsed.args.get("search_path") or parsed.args.get("root") or get_current_directory()
+        search_result = handle_semantic_search(query, root=root)
+        message = _format_search_message(search_result, language)
+        return True, message, {"phase4_search": search_result}
 
     if parsed.intent == "OS_FILE_SEARCH":
         filename = parsed.args.get("filename", "")
@@ -2994,7 +3149,7 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
         elif action_key == "rescan_apps":
             return to_router_tuple(refresh_app_catalog_result(force=True))
         else:
-            return to_router_tuple(request_system_command_result(action_key, command_args=dict(parsed.args or {})))
+            return to_router_tuple(request_system_command_result(action_key, command_args=dict(parsed.args or {}), language=language))
 
     if parsed.intent == "OS_TIMER":
         action = parsed.action or ""
@@ -3032,7 +3187,8 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
         if parsed.action == "create":
             _msg = str(parsed.args.get("message") or "").strip()
             _ts = str(parsed.args.get("time_str") or "").strip()
-            return True, create_reminder(_msg, _ts, language=_rlang), {}
+            _recurrence = str(parsed.args.get("recurrence") or "").strip()
+            return True, create_reminder(_msg, _ts, language=_rlang, recurrence=_recurrence), {}
         if parsed.action == "list":
             return True, list_reminders(language=_rlang), {}
         if parsed.action == "cancel":
@@ -3063,7 +3219,7 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
         to = parsed.args.get("to", "")
         subject = parsed.args.get("subject", "")
         body = parsed.args.get("body", "")
-        return True, draft_email(to=to, subject=subject, body=body), {}
+        return True, draft_email(to=to, subject=subject, body=body, language=language), {}
 
     if parsed.intent == "OS_CALENDAR":
         subject = parsed.args.get("subject", "New Event")
@@ -3218,6 +3374,11 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
         if use_lightweight
         else None
     )
+    if tool_augmented and not use_lightweight:
+        llm_num_ctx = min(
+            int(llm_num_ctx or get_runtime_num_ctx(default=LLM_LIGHTWEIGHT_NUM_CTX)),
+            768,
+        )
     if not cache_hit:
         if LLM_BACKEND == "claude":
             from llm.claude_client import ask_claude_streaming
@@ -3464,6 +3625,10 @@ def route_command(
                 existing_args=saved_args,
             )
             saved_args.update(_slot_result.entities)
+        if missing_slot == "seconds":
+            parsed_seconds = parse_duration_from_text(effective_text)
+            if parsed_seconds is not None:
+                saved_args["seconds"] = parsed_seconds
         if missing_slot and not saved_args.get(missing_slot):
             saved_args[missing_slot] = effective_text.strip()
         filled_parsed = ParsedCommand(
@@ -3799,6 +3964,20 @@ def route_command(
         if keyword_nlp_parsed is not None:
             parsed = keyword_nlp_parsed
 
+    # Guardrail: informational/news/weather questions should stay in LLM_QUERY
+    # instead of being hard-routed to browser_search_web by semantic/keyword tiers.
+    if parsed is not None:
+        _intent = str(getattr(parsed, "intent", "") or "").strip().upper()
+        _action_key = str((getattr(parsed, "args", {}) or {}).get("action_key") or "").strip().lower()
+        if (
+            _intent == "OS_SYSTEM_COMMAND"
+            and _action_key == "browser_search_web"
+            and _looks_keyword_nlp_informational_query(original_text)
+            and str(getattr(parser_candidate, "intent", "") or "").strip().upper() == "LLM_QUERY"
+        ):
+            parsed = parser_candidate
+            nlu_meta["informational_query_preferred_llm"] = True
+
     if parsed is None and _should_try_tool_tier(original_text, parser_candidate):
         tool_result = (
             call_tool_tier_claude(original_text)
@@ -3866,7 +4045,7 @@ def route_command(
                 action=_tool_parsed.action or "",
                 success=bool(_tool_success),
                 latency_ms=_latency * 1000.0,
-                confidence=float(meta.get("intent_confidence") or 0.0),
+                confidence=float(tool_meta.get("intent_confidence") or 0.0),
                 clarified=False,
                 user_text=_truncate_text(original_text),
                 response_preview=_truncate_text(_tool_response),

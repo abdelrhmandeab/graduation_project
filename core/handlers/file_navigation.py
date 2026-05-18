@@ -6,6 +6,7 @@ from os_control.file_ops import (
     get_file_metadata_result,
     list_directory_result,
     list_drives_win32_result,
+    request_copy_item,
     request_delete_item,
     request_move_item,
     request_rename_item,
@@ -34,6 +35,8 @@ def handle(parsed):
         return to_router_tuple(request_delete_item(args.get("path", ""), permanent=True))
     if action == "move_item":
         return to_router_tuple(request_move_item(args.get("source", ""), args.get("destination", "")))
+    if action == "copy_item":
+        return to_router_tuple(request_copy_item(args.get("source", ""), args.get("destination", "")))
     if action == "rename_item":
         return to_router_tuple(request_rename_item(args.get("source", ""), args.get("new_name", "")))
 

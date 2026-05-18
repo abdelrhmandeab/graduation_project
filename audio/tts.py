@@ -1,17 +1,16 @@
 import asyncio
-import httpx
 import io
 import inspect
 import re
 import threading
 import time
 import wave
+import warnings
 
 from core.config import (
     BARGE_IN_VAD_ENABLED,
     ELEVENLABS_API_KEY,
     ELEVENLABS_BASE_URL,
-    TTS_ARABIC_BACKEND,
     TTS_ARABIC_SPOKEN_DIALECT,
     TTS_DEFAULT_BACKEND,
     TTS_EDGE_MIXED_SCRIPT_CHUNKING,
@@ -34,6 +33,17 @@ from audio.barge_in import BargeInMonitor
 from core.logger import logger
 from core.metrics import metrics
 from core.persona import persona_manager
+
+try:
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"Core Pydantic V1 functionality isn't compatible with Python 3\.14 or greater\.",
+            category=UserWarning,
+        )
+        from elevenlabs.client import ElevenLabs
+except Exception:  # pragma: no cover - optional dependency
+    ElevenLabs = None
 
 
 def _contains_arabic(text):
@@ -812,12 +822,16 @@ class SpeechEngine:
         voice_id = str(TTS_ELEVENLABS_ARABIC_VOICE_ID or "").strip()
         model_id = str(TTS_ELEVENLABS_ARABIC_MODEL_ID or "").strip()
         enabled = bool(TTS_ELEVENLABS_ARABIC_ENABLED)
+        sdk_available = ElevenLabs is not None
+        available = bool(enabled and api_key and voice_id and sdk_available)
         return {
             "enabled": enabled,
             "api_key_configured": bool(api_key),
             "voice_id": voice_id,
             "model_id": model_id,
-            "available_for_arabic": bool(enabled and api_key and voice_id),
+            "sdk_available": sdk_available,
+            "available_for_arabic": available,
+            "available_for_speech": available,
         }
 
     def run_voice_diagnostic(self):
@@ -834,8 +848,8 @@ class SpeechEngine:
         if active_backend == "edge_tts":
             device_label = edge_info.get("voice") or "edge_tts_voice"
         elif active_backend == "hybrid":
-            if elevenlabs_info.get("available_for_arabic"):
-                device_label = "elevenlabs_arabic_plus_edge"
+            if elevenlabs_info.get("available_for_speech"):
+                device_label = "elevenlabs_plus_edge"
             else:
                 device_label = edge_info.get("voice") or "hybrid_fallback"
         else:
@@ -855,11 +869,12 @@ class SpeechEngine:
             f"edge_tts_voice: {edge_info.get('voice')}",
             f"edge_tts_supports_output_format: {edge_info.get('supports_output_format')}",
             f"edge_tts_compressed_decode_available: {edge_info.get('compressed_decode_available')}",
-            f"elevenlabs_arabic_enabled: {elevenlabs_info.get('enabled')}",
+            f"elevenlabs_speech_enabled: {elevenlabs_info.get('enabled')}",
             f"elevenlabs_api_key_configured: {elevenlabs_info.get('api_key_configured')}",
-            f"elevenlabs_arabic_voice_id: {elevenlabs_info.get('voice_id') or 'not_set'}",
-            f"elevenlabs_arabic_model_id: {elevenlabs_info.get('model_id') or 'not_set'}",
-            f"elevenlabs_available_for_arabic: {elevenlabs_info.get('available_for_arabic')}",
+            f"elevenlabs_sdk_available: {elevenlabs_info.get('sdk_available')}",
+            f"elevenlabs_voice_id: {elevenlabs_info.get('voice_id') or 'not_set'}",
+            f"elevenlabs_model_id: {elevenlabs_info.get('model_id') or 'not_set'}",
+            f"elevenlabs_available_for_speech: {elevenlabs_info.get('available_for_speech')}",
             f"speech_attempt: {spoke_message}",
         ]
         if edge_info.get("error"):
@@ -875,11 +890,17 @@ class SpeechEngine:
             "edge_tts_voice": edge_info.get("voice"),
             "edge_tts_supports_output_format": bool(edge_info.get("supports_output_format")),
             "edge_tts_compressed_decode_available": bool(edge_info.get("compressed_decode_available")),
-            "elevenlabs_arabic_enabled": bool(elevenlabs_info.get("enabled")),
+            "elevenlabs_speech_enabled": bool(elevenlabs_info.get("enabled")),
             "elevenlabs_api_key_configured": bool(elevenlabs_info.get("api_key_configured")),
+            "elevenlabs_sdk_available": bool(elevenlabs_info.get("sdk_available")),
+            "elevenlabs_voice_id": elevenlabs_info.get("voice_id") or "",
+            "elevenlabs_model_id": elevenlabs_info.get("model_id") or "",
+            "elevenlabs_available_for_speech": bool(elevenlabs_info.get("available_for_speech")),
+            # Backward-compatible aliases for existing diagnostics / tooling.
+            "elevenlabs_arabic_enabled": bool(elevenlabs_info.get("enabled")),
             "elevenlabs_arabic_voice_id": elevenlabs_info.get("voice_id") or "",
             "elevenlabs_arabic_model_id": elevenlabs_info.get("model_id") or "",
-            "elevenlabs_available_for_arabic": bool(elevenlabs_info.get("available_for_arabic")),
+            "elevenlabs_available_for_arabic": bool(elevenlabs_info.get("available_for_speech")),
         }
         return True, "\n".join(lines), meta
 
@@ -997,22 +1018,14 @@ class SpeechEngine:
 
         try:
             if backend in {"auto", "hybrid"}:
-                if arabic_preferred:
-                    ar_backend = str(TTS_ARABIC_BACKEND or "edge").strip().lower()
-                    if ar_backend == "elevenlabs":
-                        if self._speak_elevenlabs_arabic(spoken_text):
-                            return
-                        logger.info("ElevenLabs Arabic TTS unavailable; falling back to edge-tts (ar-EG-SalmaNeural)")
-                    if self._speak_edge_tts(spoken_text, preferred_language="ar"):
-                        return
-                    logger.warning("Edge-TTS Arabic synthesis failed; using console fallback")
-                    self._speak_console(spoken_text, prefix="Arabic TTS fallback")
+                if self._speak_elevenlabs(spoken_text):
                     return
-
-                if self._speak_edge_tts(spoken_text, preferred_language="en"):
+                logger.info("ElevenLabs TTS unavailable; falling back to Edge-TTS")
+                fallback_language = "ar" if arabic_preferred else "en"
+                if self._speak_edge_tts(spoken_text, preferred_language=fallback_language):
                     return
-                logger.warning("Edge-TTS English synthesis failed")
-                self._speak_console(spoken_text, prefix="English TTS fallback")
+                logger.warning("Edge-TTS synthesis failed; using console fallback")
+                self._speak_console(spoken_text, prefix="TTS fallback")
                 return
 
             if backend == "edge_tts":
@@ -1579,7 +1592,7 @@ class SpeechEngine:
                 pass
             return False
 
-    def _speak_elevenlabs_arabic(self, text):
+    def _speak_elevenlabs(self, text):
         if not bool(TTS_ELEVENLABS_ARABIC_ENABLED):
             return False
 
@@ -1589,6 +1602,16 @@ class SpeechEngine:
 
         api_key = str(ELEVENLABS_API_KEY or "").strip()
         voice_id = str(TTS_ELEVENLABS_ARABIC_VOICE_ID or "").strip()
+        if ElevenLabs is None:
+            should_log = False
+            with self._lock:
+                if not self._elevenlabs_unavailable_logged:
+                    self._elevenlabs_unavailable_logged = True
+                    should_log = True
+            if should_log:
+                logger.warning("ElevenLabs SDK is unavailable; falling back to Edge-TTS.")
+            return False
+
         if not api_key or not voice_id:
             should_log = False
             with self._lock:
@@ -1596,58 +1619,45 @@ class SpeechEngine:
                     self._elevenlabs_unavailable_logged = True
                     should_log = True
             if should_log:
-                logger.warning(
-                    "ElevenLabs Arabic TTS is enabled but not fully configured (missing API key or voice id)."
-                )
+                logger.warning("ElevenLabs TTS is enabled but not fully configured (missing API key or voice id).")
             return False
 
-        payload = {
-            "text": normalized_text,
-            "model_id": str(TTS_ELEVENLABS_ARABIC_MODEL_ID or "eleven_multilingual_v2"),
-            "voice_settings": {
-                "stability": 0.45,
-                "similarity_boost": 0.75,
-            },
-        }
-        base_url = str(ELEVENLABS_BASE_URL or "https://api.elevenlabs.io").rstrip("/")
-        endpoint = f"{base_url}/v1/text-to-speech/{voice_id}"
-        headers = {
-            "xi-api-key": api_key,
-            "accept": "audio/mpeg",
-            "content-type": "application/json",
-        }
-
         try:
-            response = httpx.post(
-                endpoint,
-                headers=headers,
-                json=payload,
+            client = ElevenLabs(
+                api_key=api_key,
+                base_url=str(ELEVENLABS_BASE_URL or "https://api.elevenlabs.io").rstrip("/"),
                 timeout=float(TTS_ELEVENLABS_TIMEOUT_SECONDS),
             )
         except Exception as exc:
-            logger.warning("ElevenLabs Arabic TTS request failed (voice_id=%s): %s", voice_id, exc)
+            logger.warning("ElevenLabs client initialization failed: %s", exc)
             return False
 
-        if response.status_code >= 400:
-            error_preview = (response.text or "").strip().replace("\n", " ")
-            if len(error_preview) > 220:
-                error_preview = error_preview[:217] + "..."
-            logger.warning(
-                "ElevenLabs Arabic TTS failed status=%s voice_id=%s detail=%s",
-                response.status_code,
-                voice_id,
-                error_preview,
-            )
+        convert_kwargs = {
+            "voice_id": voice_id,
+            "text": normalized_text,
+            "model_id": str(TTS_ELEVENLABS_ARABIC_MODEL_ID or "eleven_multilingual_v2"),
+            "output_format": "wav_24000",
+            "optimize_streaming_latency": 1,
+        }
+
+        try:
+            response = client.text_to_speech.convert(**convert_kwargs)
+        except Exception as exc:
+            logger.warning("ElevenLabs TTS request failed (voice_id=%s): %s", voice_id, exc)
             return False
 
-        audio_bytes = bytes(response.content or b"")
+        try:
+            audio_bytes = b"".join(response)
+        except Exception as exc:
+            logger.warning("ElevenLabs TTS stream read failed (voice_id=%s): %s", voice_id, exc)
+            return False
         if not audio_bytes:
-            logger.warning("ElevenLabs Arabic TTS returned empty audio bytes (voice_id=%s)", voice_id)
+            logger.warning("ElevenLabs TTS returned empty audio bytes (voice_id=%s)", voice_id)
             return False
 
         decoded = self._decode_edge_audio_bytes(audio_bytes)
         if decoded is None:
-            logger.warning("ElevenLabs Arabic TTS audio decode failed; install soundfile for MP3 decoding support")
+            logger.warning("ElevenLabs TTS audio decode failed; install soundfile for audio decoding support")
             return False
 
         sample_rate, waveform = decoded

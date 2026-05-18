@@ -196,6 +196,42 @@ def _prepare_delete_path(path):
     return True, "", target
 
 
+def _prepare_copy_paths(source, destination):
+    """Validate and prepare paths for copy operation."""
+    src_raw_ok, src_raw_reason, src_raw = _validate_raw_path_input(source, "Source path")
+    if not src_raw_ok:
+        return False, src_raw_reason, None, None
+    dst_raw_ok, dst_raw_reason, dst_raw = _validate_raw_path_input(destination, "Destination path")
+    if not dst_raw_ok:
+        return False, dst_raw_reason, None, None
+    src_segments_ok, src_segments_reason = _validate_path_segments(src_raw, "Source path")
+    if not src_segments_ok:
+        return False, src_segments_reason, None, None
+    dst_segments_ok, dst_segments_reason = _validate_path_segments(dst_raw, "Destination path")
+    if not dst_segments_ok:
+        return False, dst_segments_reason, None, None
+
+    src = _resolve_path(src_raw)
+    dst = _resolve_path(dst_raw)
+    src_ok, src_reason = _check_path_policy(src, write=False)
+    if not src_ok:
+        return False, src_reason, None, None
+    dst_ok, dst_reason = _check_path_policy(dst, write=True)
+    if not dst_ok:
+        return False, dst_reason, None, None
+    if not os.path.exists(src):
+        return False, f"Source does not exist: {src}", None, None
+
+    if os.path.isdir(dst):
+        dst = os.path.join(dst, os.path.basename(src))
+
+    if os.path.exists(dst):
+        return False, f"Destination already exists: {dst}", None, None
+    if src == dst:
+        return False, "Source and destination are the same path.", None, None
+    return True, "", src, dst
+
+
 def _prepare_rename_paths(source, new_name):
     source_raw_ok, source_raw_reason, source_raw = _validate_raw_path_input(source, "Source path")
     if not source_raw_ok:
@@ -304,6 +340,38 @@ def _execute_move_item(src, dst, action_name="move_item"):
             error_code="execution_failed",
             debug_info={"source": src, "destination": dst, "operation": action_name},
         )
+
+
+def _execute_copy_item(src, dst):
+    """Copy a file or directory recursively."""
+    try:
+        destination_parent = os.path.dirname(dst)
+        if destination_parent:
+            os.makedirs(destination_parent, exist_ok=True)
+        
+        if os.path.isdir(src):
+            shutil.copytree(src, dst)
+        else:
+            shutil.copy2(src, dst)
+        
+        log_action(
+            "copy_item",
+            "success",
+            details={"source": src, "destination": dst},
+        )
+        return success_result(
+            f"Copied: {src} -> {dst}",
+            debug_info={"source": src, "destination": dst, "operation": "copy_item"},
+            executed_confirmed_action="file_operation",
+        )
+    except Exception as exc:
+        log_action("copy_item", "failed", details={"source": src, "destination": dst}, error=exc)
+        return failure_result(
+            f"Failed to copy item: {exc}",
+            error_code="execution_failed",
+            debug_info={"source": src, "destination": dst, "operation": "copy_item"},
+        )
+
 
 
 def _execute_delete_item(target, permanent=False):
@@ -818,6 +886,24 @@ def request_delete_item(path, permanent=False):
         {"path": target, "permanent": bool(permanent)},
     )
 
+
+def request_copy_item(source, destination):
+    """Request user confirmation to copy a file or directory."""
+    write_ok, write_reason = _validate_file_write_enabled()
+    if not write_ok:
+        return failure_result(write_reason, error_code="policy_blocked")
+
+    ok, reason, src, dst = _prepare_copy_paths(source, destination)
+    if not ok:
+        return failure_result(reason, error_code="validation_error")
+    description = f"Copy item from `{src}` to `{dst}`"
+    return _request_file_operation_confirmation(
+        "copy_item",
+        description,
+        {"source": src, "destination": dst},
+    )
+
+
 def execute_confirmed_file_operation(payload):
     write_ok, write_reason = _validate_file_write_enabled()
     if not write_ok:
@@ -872,6 +958,27 @@ def execute_confirmed_file_operation(payload):
         if not os.path.exists(src):
             return failure_result(f"Source does not exist: {src}", error_code="not_found")
         result = _execute_move_item(src, dst, action_name=operation)
+        if isinstance(result, dict):
+            result["risk_tier"] = risk_tier
+        return result
+
+    if operation == "copy_item":
+        src = resolved_args.get("source")
+        dst = resolved_args.get("destination")
+        if not src or not dst:
+            return failure_result(
+                "Invalid confirmation payload: missing source/destination.",
+                error_code="invalid_payload",
+            )
+        src_ok, src_reason = _check_path_policy(src, write=False)
+        if not src_ok:
+            return failure_result(src_reason, error_code="policy_blocked")
+        dst_ok, dst_reason = _check_path_policy(dst, write=True)
+        if not dst_ok:
+            return failure_result(dst_reason, error_code="policy_blocked")
+        if not os.path.exists(src):
+            return failure_result(f"Source does not exist: {src}", error_code="not_found")
+        result = _execute_copy_item(src, dst)
         if isinstance(result, dict):
             result["risk_tier"] = risk_tier
         return result

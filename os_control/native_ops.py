@@ -533,7 +533,7 @@ def get_volume():
 def set_volume(level: float):
     """Set the system volume to a 0.0-1.0 float level."""
     target = float(_clamp(float(level), 0.0, 1.0))
-    for setter in (_set_volume_pycaw, _set_volume_waveout, _set_volume_powershell):
+    for setter in (_set_volume_pycaw, _set_volume_powershell, _set_volume_waveout):
         try:
             if setter(target):
                 return True

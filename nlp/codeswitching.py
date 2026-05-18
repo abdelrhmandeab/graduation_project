@@ -34,9 +34,13 @@ _ARABIC_VERB_MAP = {
     # Volume / brightness control
     "ارفع": "increase",
     "زود": "increase",
+    "تزود": "increase",
+    "ترفع": "increase",
     "رفع": "increase",
     "اخفض": "decrease",
     "قلل": "decrease",
+    "تخفض": "decrease",
+    "تقلل": "decrease",
     "خفض": "decrease",
     "وطي": "decrease",
     "وطّي": "decrease",
