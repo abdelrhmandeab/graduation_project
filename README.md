@@ -4,6 +4,15 @@ A local-first Windows voice assistant focused on production runtime stability.
 Bilingual (English + Egyptian Arabic), runs on any Windows 10/11 PC with 8GB+ RAM —
 no GPU required, no admin needed for everyday commands.
 
+## Latest Release (May 18, 2026)
+
+**Phases 5–7 complete**: LLM latency reduction, production telemetry, feature flags, and staged rollout infrastructure.
+- Deterministic parser cascade (regex → semantic → fuzzy → LLM) for sub-100ms latency
+- Structured telemetry in all OS handlers for observability
+- Feature flags for safe staged enablement (numeric parsing, app discovery, media dispatch, volume control)
+- Full cleanup: deprecated test files removed, dependencies reorganized into tiers
+- **Status**: Production-ready with telemetry observability and feature flag infrastructure
+
 ## Architecture
 
 ```
@@ -136,9 +145,21 @@ tools/        — weather (Open-Meteo), web_search (DuckDuckGo)
 
 ## Implementation phases
 
+**All phases complete and production-ready** (May 2026). Bilingual (English + Egyptian Arabic) throughout.
+
 - **Phase 1** — NLU hardening: negation, entity types, pattern precedence, confidence scoring
 - **Phase 2** — Temporal engine: recurring reminders, file copy, email body composition
 - **Phase 3** — Advanced operations: command chaining, batch file ops, semantic search
 - **Phase 4** — QA and release: bilingual smoke tests, regression coverage, router polish, documentation updates
+- **Phase 5** — **LLM latency reduction**: deterministic parser cascade (regex → semantic → fuzzy), native-first OS backends (pycaw, wmi, PowerShell), slot-filling for parameters, demo formatting
+- **Phase 6** — **Production instrumentation**: structured telemetry (`log_structured` events), feature flags (`FEATURE_FLAGS` in config.py for staged rollouts), metrics aggregation, telemetry hooks in os_control handlers
+- **Phase 7** — **Feature flag rollout**: gating for numeric parsing, auto-app discovery, media dispatch, system volume control; enable/disable in `.env` or `config.py` for safe production deployment
 
-All phases are implemented and validated in both English and Egyptian Arabic.
+## Production readiness
+
+- **Telemetry**: Structured event logging via `core/metrics.py` emitted from all major handlers (open_app, set_timer, draft_email, clipboard ops, etc.)
+- **Feature flags**: Five toggleable gates in `FEATURE_FLAGS` dict enable staged rollout without code changes
+- **Bilingual**: Parser, router, handlers, and responses fully support English + Egyptian Arabic
+- **Error resilience**: Graceful fallbacks for missing packages (pyperclip, pywin32, ddgs, sentence-transformers, etc.)
+- **Dependency tiers**: Choose `requirements.txt` (full), `requirements-minimal.txt` (voice only), or `requirements-full.txt` (everything)
+

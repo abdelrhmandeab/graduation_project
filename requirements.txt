@@ -1,74 +1,94 @@
-# Jarvis — Core Runtime Dependencies
+# Jarvis — Production Runtime Dependencies
 # Install with: pip install -r requirements.txt
 #
-# This file is the BALANCED tier: everything needed for Jarvis to run with
-# all primary features (voice, LLM, web search, desktop commands, semantic NLU).
-# For a leaner install, see requirements-minimal.txt.
-# For everything including optional Outlook integrations, see requirements-full.txt.
+# TIER: PRODUCTION (balanced) — all primary features for desktop assistant
+# Default install for a full-featured Jarvis experience. Includes voice I/O,
+# local LLM, system control, telemetry, and feature flags for staged rollouts.
+# For a minimal install, use requirements-minimal.txt (voice + LLM only).
+# For full suite with optional tools, use requirements-full.txt.
+#
+# Phase 5–7 additions: pynput (media dispatch), telemetry hooks, feature flags
+
+# === TIER 1: VOICE PIPELINE (CORE) ===
+# Wake word → STT → TTS, streaming capture, energy VAD, transcript processing
 
 # Environment & config
 python-dotenv==1.2.2
 
-# Audio pipeline (REQUIRED)
+# Audio capture + processing
 numpy==2.4.2
 sounddevice==0.5.5
-onnxruntime==1.23.2
+onnxruntime==1.23.2  # Lightweight ONNX runtime for VAD + wake-word models
 
-# Speech-to-text — local fallback backend (REQUIRED)
+# Speech-to-text — local Faster-Whisper (Arabic + English)
 faster-whisper==1.2.1
 
-# Wake word detection (REQUIRED)
+# Wake word detection — ONNX model loader (default: English "Jarvis")
 openwakeword==0.6.0
 
-# Text-to-speech — neural TTS (REQUIRED)
+# Text-to-speech — edge-tts (free, no API key) + ElevenLabs fallback
 edge-tts>=6.1.12
-elevenlabs>=1.0.0
-# Edge stream decoder for older edge-tts versions that emit MP3 chunks
-soundfile>=0.12.1
+soundfile>=0.12.1  # MP3 stream decoder for edge-tts output
 
-# System monitoring (REQUIRED — battery/cpu/ram + hardware tier detection)
+# === TIER 2: ORCHESTRATION (CORE) ===
+# Routing, parsing, LLM dispatch, system monitoring
+
+# HTTP client for Ollama, LLM, external APIs
+httpx==0.28.1
+
+# System info (CPU, RAM, battery) — hardware tier detection
 psutil==7.2.2
 
-# Windows native control paths (volume + brightness)
+# NLP fuzzy matching for intent resolution
+rapidfuzz==3.14.3
+
+# === TIER 3: OPTIONAL LLM BACKENDS ===
+# Claude API support (Ollama is primary); telemetry & metrics
+
+# Claude API (optional backend; Ollama primary)
+anthropic>=0.40.0
+
+# Telemetry & metrics for production observability
+# (Included in core/ for phase 6-7 structured logging)
+
+# === TIER 4: INTELLIGENT FEATURES ===
+# Memory, embeddings, web search — graceful degradation if missing
+
+# Vector semantic memory (ChromaDB + local embeddings)
+chromadb>=0.5.0
+
+# Multilingual embeddings for semantic intent routing & paraphrase tolerance
+# Pin <5.0 to avoid torchcodec issues on some Windows/Python combinations
+sentence-transformers>=3.0.0,<5.0.0
+
+# Live web search (news, prices, weather context)
+duckduckgo-search>=7.0.0
+ddgs>=9.0.0
+
+# === TIER 5: OS INTEGRATION (WINDOWS-SPECIFIC) ===
+# Volume, brightness, clipboard, email, calendar, media control
+
+# Volume control via native Windows audio API (pycaw)
 comtypes>=1.4.8; platform_system == "Windows"
 pycaw>=20240210; platform_system == "Windows"
 wmi>=1.5.1; platform_system == "Windows"
 
-# HTTP (REQUIRED — Ollama client + general networking)
-httpx==0.28.1
-
-# Claude API (REQUIRED for LLM_BACKEND=claude)
-anthropic>=0.40.0
-
-# Vector memory (semantic long-term recall)
-chromadb>=0.5.0
-
-# NLP fuzzy matching for noisy STT intent parsing (REQUIRED)
-rapidfuzz==3.14.3
-
-# --- Recommended (project still runs without these, with reduced features) ---
-
-# Clipboard access (pure Python, all platforms)
-pyperclip>=1.9.0
-
-# Python-first brightness control (DDC/CI + WMI fallback)
+# Brightness control via DDC-CI (direct display protocol)
 screen-brightness-control>=0.23.0
 
-# Keyboard media key dispatch used for direct media control
+# Media key dispatch (play/pause/next/prev via native Windows API)
 pynput>=1.7.6
 
-# Semantic intent routing (multilingual embeddings for paraphrase-tolerant NLU)
-# Pin below v5 to avoid torchcodec runtime issues on some Windows/Python combos.
-sentence-transformers>=3.0.0,<5.0.0
+# Clipboard read/write (pure Python fallback if missing)
+pyperclip>=1.9.0
 
-# Web search (free, no API key — used for live data in LLM prompts)
-duckduckgo-search>=7.0.0
-ddgs>=9.0.0
-
-# Filesystem event watching for KB auto-sync (preferred over polling)
+# Knowledge base auto-sync via filesystem events (polling fallback if missing)
 watchdog>=3.0.0
 
-# Windows COM integrations (Outlook draft/calendar + Search Index acceleration)
+# Outlook email/calendar draft composition, Windows Search Index
 pywin32>=306; platform_system == "Windows"
+
+# ElevenLabs TTS (optional, requires API key; edge-tts used as fallback)
+elevenlabs>=1.0.0
 
 
