@@ -68,13 +68,7 @@ _APP_CATALOG = {
             "\u0637\u0631\u0641\u064a\u0629",
         ],
     },
-            try:
-                from core.metrics import log_structured
-
-                log_structured("close_app", success=False, process_name=process_name, attempts=attempts)
-            except Exception:
-                pass
-            return failure_result(
+    "powershell.exe": {
         "canonical_name": "PowerShell",
         "aliases": [
             "powershell",
@@ -99,12 +93,6 @@ _APP_CATALOG = {
         "aliases": [
             "task manager",
             "taskmgr",
-        try:
-            from core.metrics import log_structured
-
-            log_structured("close_app", success=True, process_name=process_name, attempts=attempts)
-        except Exception:
-            pass
             "\u0645\u062f\u064a\u0631 \u0627\u0644\u0645\u0647\u0627\u0645",
         ],
     },
