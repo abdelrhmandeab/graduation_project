@@ -160,6 +160,7 @@ class ConcurrentPipeline:
 
         self._early_executed = False
         self._early_response = ""
+        self._early_response_spoken = False  # NEW: Track if we've already spoken the early response
         self._early_intent_str: "str | None" = None
         self._early_execution_future = None
         self._prev_intent = None
@@ -207,12 +208,23 @@ class ConcurrentPipeline:
         with self._lock:
             return self._early_intent_str
 
+    def is_early_response_spoken(self) -> bool:
+        """Check if early response has already been spoken."""
+        with self._lock:
+            return self._early_response_spoken
+
+    def mark_early_response_spoken(self) -> None:
+        """Mark the early response as spoken to prevent duplicate TTS."""
+        with self._lock:
+            self._early_response_spoken = True
+
     def cancel_early_if_possible(self) -> None:
         """Best-effort cancel. Resets early-executed flag so _process_utterance re-routes."""
         with self._lock:
             future = self._early_execution_future
             self._early_executed = False
             self._early_intent_str = None
+            self._early_response_spoken = False
         if future is not None and not future.done():
             future.cancel()
 
@@ -312,6 +324,7 @@ class ConcurrentPipeline:
                     speech_engine.speak_async(safe, language=lang or None)
                 with self._lock:
                     self._early_response = response
+                    self._early_response_spoken = True  # Mark as spoken to prevent duplicate TTS
                 metrics.record_stage("early_execute", 0.0, success=True)
                 logger.info(
                     "ConcurrentPipeline: early-executed %s on partial '%s'",
@@ -865,7 +878,8 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_s
 
         if not is_compound:
             print(f"Jarvis: {response}")
-        if should_speak_response:
+        # NEW: Check if early execution already spoke the response to prevent duplicate TTS
+        if should_speak_response and not (pipeline is not None and pipeline.is_early_response_spoken()):
             safe_response = _speech_safe_response(response)
             speech_engine.speak_async(safe_response, language=tts_language)
     finally:

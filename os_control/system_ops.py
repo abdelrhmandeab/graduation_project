@@ -1287,6 +1287,15 @@ def execute_system_command_result(action_key, command_args=None, language=None):
             return success_result(native_msg, debug_info={"action": action_key, **native_debug})
 
     if action_key in {"media_play_pause", "media_next_track", "media_previous_track", "media_stop"}:
+        # NEW: Prevent media commands from interfering with TTS playback
+        # If TTS is currently speaking, wait a moment for it to finish
+        from audio.tts import speech_engine
+        import time
+        max_wait_time = 0.5  # Maximum time to wait for TTS to finish
+        start_time = time.time()
+        while speech_engine.is_speaking() and (time.time() - start_time) < max_wait_time:
+            time.sleep(0.05)
+        
         if FEATURE_FLAGS.get("MEDIA_DIRECT_DISPATCH_ENABLED", True):
             native_ok, native_msg, native_debug = _run_native_media_command(action_key, language=language)
         else:

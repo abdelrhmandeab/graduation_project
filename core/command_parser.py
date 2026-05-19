@@ -3341,7 +3341,7 @@ def _try_natural_media_control_command(raw, normalized):
     )
 
     direct_en = re.match(
-        r"^(?:play|start|resume|pause|stop)\s+(?:music|media|audio|song|track|songs|tracks)?$",
+        r"^(?:play|start|resume|pause|stop)(?:\s+(?:some|a|the|my|your|our|any))?\s*(?:music|media|audio|song|track|songs|tracks)?$",
         lowered,
         flags=re.IGNORECASE,
     )
