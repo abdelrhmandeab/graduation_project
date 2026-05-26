@@ -533,9 +533,28 @@ def get_volume():
 def set_volume(level: float):
     """Set the system volume to a 0.0-1.0 float level."""
     target = float(_clamp(float(level), 0.0, 1.0))
-    for setter in (_set_volume_pycaw, _set_volume_powershell, _set_volume_waveout):
+    # Prefer the Windows endpoint API first, then the device-level waveOut
+    # fallback, and keep the SendKeys-based path last because it is the least
+    # reliable on some desktops.
+    for setter in (_set_volume_pycaw, _set_volume_waveout, _set_volume_powershell):
         try:
             if setter(target):
+                actual = get_volume()
+                if actual is not None:
+                    actual_percent = int(round(float(actual) * 100.0))
+                    requested_percent = int(round(target * 100.0))
+                    if abs(actual_percent - requested_percent) > 2:
+                        logger.warning(
+                            "Volume set readback mismatch: requested=%s%% actual=%s%%",
+                            requested_percent,
+                            actual_percent,
+                        )
+                    else:
+                        logger.info(
+                            "Volume set readback confirmed: requested=%s%% actual=%s%%",
+                            requested_percent,
+                            actual_percent,
+                        )
                 return True
         except Exception as exc:
             logger.debug("Volume set fallback failed: %s", exc)
@@ -616,9 +635,25 @@ def get_brightness():
 def set_brightness(level: int):
     """Set the screen brightness to a 0-100 integer."""
     target = int(_clamp(int(level), 0, 100))
-    for setter in (_set_brightness_wmi, _set_brightness_sbc, _set_brightness_powershell):
+    # Prefer screen_brightness_control first because it often handles more
+    # laptop/monitor combinations correctly than raw WMI.
+    for setter in (_set_brightness_sbc, _set_brightness_wmi, _set_brightness_powershell):
         try:
             if setter(target):
+                actual = get_brightness()
+                if actual is not None:
+                    if abs(int(actual) - target) > 2:
+                        logger.warning(
+                            "Brightness set readback mismatch: requested=%s%% actual=%s%%",
+                            target,
+                            int(actual),
+                        )
+                    else:
+                        logger.info(
+                            "Brightness set readback confirmed: requested=%s%% actual=%s%%",
+                            target,
+                            int(actual),
+                        )
                 return True
         except Exception as exc:
             logger.debug("Brightness set fallback failed: %s", exc)
