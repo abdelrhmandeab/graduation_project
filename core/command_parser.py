@@ -259,6 +259,10 @@ def _looks_like_explicit_level_request(text: str) -> bool:
         flags=re.IGNORECASE,
     ):
         return True
+    if re.search(r"\b(?:في\s+)?الم(?:ية|ئه|ئة|يه|ائه)\b", normalized):
+        return True
+    if any(token in normalized.split() for token in ("نص", "نصف", "ربع", "تلت", "ثلث")):
+        return True
     return False
 
 
@@ -2161,7 +2165,10 @@ _REGEX_TABLE = [
     ),
     # Arabic brightness up variants
     (
-        re.compile(r"^(?:ارفع\s+السطوع|زود\s+الإضاءة|زود\s+الاضاءة|زود\s+الضوء|السطوع\s+واطي|الشاشة\s+مظلمة|مظلم\s+قوي)$", re.IGNORECASE),
+        re.compile(
+            r"^(?:ارفع\s+السطوع|زود\s+الإضاءة|زود\s+الاضاءة|زود\s+الضوء|زود\s+العضاءة|زود\s+العضرا|زود\s+العضره|السطوع\s+واطي|الشاشة\s+مظلمة|مظلم\s+قوي)$",
+            re.IGNORECASE,
+        ),
         False,
         "OS_SYSTEM_COMMAND",
         "",
@@ -2169,7 +2176,10 @@ _REGEX_TABLE = [
     ),
     # Arabic brightness down variants
     (
-        re.compile(r"^(?:خفض\s+السطوع|قلل\s+الإضاءة|قلل\s+الاضاءة|قلل\s+الضوء|السطوع\s+عالي\s+قوي|الشاشة\s+ناصعة)$", re.IGNORECASE),
+        re.compile(
+            r"^(?:خفض\s+السطوع|قلل\s+الإضاءة|قلل\s+الاضاءة|قلل\s+الضوء|قلل\s+العضاءة|قلل\s+العضرا|قلل\s+العضره|السطوع\s+عالي\s+قوي|الشاشة\s+ناصعة)$",
+            re.IGNORECASE,
+        ),
         False,
         "OS_SYSTEM_COMMAND",
         "",
@@ -2982,7 +2992,10 @@ def _try_open_command(raw, normalized):
         return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": system_action})
 
     open_match = re.match(
-        r"^(?:open|launch|start|\u0627\u0641\u062a\u062d|\u062a\u0641\u062a\u062d|\u0627\u0641\u062a\u062d\u0644\u064a|\u0634\u063a\u0644|\u0634\u063a\u0644\u0644\u064a)\s+(.+)$",
+        (
+            r"^(?:(?:\u0645\u0645\u0643\u0646|\u0644\u0648\u0020\u0633\u0645\u062d\u062a|\u0628\u0639\u062f\u0020\u0627\u0630\u0646\u0643)\s+)?"
+            r"(?:open|launch|start|\u0627\u0641\u062a\u062d|\u062a\u0641\u062a\u062d|\u0627\u0641\u062a\u062d\u0644\u064a|\u0641\u062a\u062d\u0644?\u064a?|\u0634\u063a\u0644|\u0634\u063a\u0644\u0644\u064a|\u062f\u0641\u062a\u062d|\u062f\u0641\u062a\u062d\u0644\u064a|\u062f\u0641\u062a\u062d\u0644?\u064a?)\s+(.+)$"
+        ),
         raw,
         flags=re.IGNORECASE,
     )

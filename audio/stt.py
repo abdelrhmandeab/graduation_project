@@ -20,6 +20,7 @@ from core.config import (
     STT_LANGUAGE_DETECT_MODEL,
     STT_LANGUAGE_HINT,
     STT_MIXED_TREAT_AS_ARABIC,
+    STT_PARTIAL_WHISPER_MODEL,
     WHISPER_MODEL,
 )
 from core.logger import logger
@@ -42,6 +43,19 @@ _BACKEND_ALIASES = {
     "faster whisper": _LOCAL_BACKEND,
 }
 
+_ELEVENLABS_COOLDOWN_UNTIL = 0.0
+
+
+def _elevenlabs_on_cooldown() -> bool:
+    return time.time() < _ELEVENLABS_COOLDOWN_UNTIL
+
+
+def _set_elevenlabs_cooldown(reason: str, *, seconds: float = 1800.0) -> None:
+    global _ELEVENLABS_COOLDOWN_UNTIL
+    duration = max(60.0, float(seconds))
+    _ELEVENLABS_COOLDOWN_UNTIL = max(_ELEVENLABS_COOLDOWN_UNTIL, time.time() + duration)
+    logger.warning("ElevenLabs STT cooldown enabled for %.0fs: %s", duration, reason)
+
 
 def _normalize_backend_name(name: str) -> str:
     raw = str(name or "").strip().lower()
@@ -58,6 +72,10 @@ _LOCAL_MODEL: Any = None
 _LANG_DETECT_MODEL_LOCK = threading.Lock()
 _LANG_DETECT_MODEL: Any = None
 _LANG_DETECT_MODEL_NAME = ""
+
+_PARTIAL_MODEL_LOCK = threading.Lock()
+_PARTIAL_MODEL: Any = None
+_PARTIAL_MODEL_NAME = ""
 
 
 def _runtime_language_hint() -> str:
@@ -218,6 +236,24 @@ def _get_local_whisper_model() -> Any:
         return _LOCAL_MODEL
 
 
+def _get_partial_whisper_model() -> Any:
+    global _PARTIAL_MODEL
+    global _PARTIAL_MODEL_NAME
+    model_name = str(STT_PARTIAL_WHISPER_MODEL or WHISPER_MODEL).strip() or str(WHISPER_MODEL)
+    if _PARTIAL_MODEL is not None and _PARTIAL_MODEL_NAME == model_name:
+        return _PARTIAL_MODEL
+
+    with _PARTIAL_MODEL_LOCK:
+        if _PARTIAL_MODEL is not None and _PARTIAL_MODEL_NAME == model_name:
+            return _PARTIAL_MODEL
+        from faster_whisper import WhisperModel
+
+        _PARTIAL_MODEL = WhisperModel(model_name, device="cpu", compute_type="int8")
+        _PARTIAL_MODEL_NAME = model_name
+        logger.info("Loaded partial faster-whisper model '%s'", model_name)
+        return _PARTIAL_MODEL
+
+
 def _get_language_detector_whisper_model() -> Any:
     global _LANG_DETECT_MODEL
     global _LANG_DETECT_MODEL_NAME
@@ -245,6 +281,7 @@ def preload_runtime_models() -> Dict[str, Any]:
     backend = get_runtime_stt_backend()
     local_loaded = bool(_LOCAL_MODEL)
     detector_loaded = bool(_LANG_DETECT_MODEL)
+    partial_loaded = bool(_PARTIAL_MODEL)
 
     if backend in {_LOCAL_BACKEND, _HYBRID_BACKEND}:
         _get_local_whisper_model()
@@ -252,11 +289,17 @@ def preload_runtime_models() -> Dict[str, Any]:
     if backend == _HYBRID_BACKEND:
         _get_language_detector_whisper_model()
         detector_loaded = True
+    try:
+        _get_partial_whisper_model()
+        partial_loaded = True
+    except Exception as exc:
+        logger.debug("Partial whisper model preload failed: %s", exc)
 
     return {
         "backend": backend,
         "local_model_loaded": local_loaded,
         "language_detector_model_loaded": detector_loaded,
+        "partial_model_loaded": partial_loaded,
     }
 
 
@@ -269,19 +312,16 @@ def _safe_partial_emit(on_partial: Optional[Callable[[str], None]], text: str) -
         pass
 
 
-def _transcribe_with_faster_whisper(
+def _transcribe_with_faster_whisper_model(
+    model: Any,
     audio_file: str,
     language_hint: Optional[str] = None,
     on_partial: Optional[Callable[[str], None]] = None,
     *,
     whisper_kwargs: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    model = _get_local_whisper_model()
-
     hint = _normalize_detected_language(language_hint or _runtime_language_hint())
     whisper_language = None
-    # Pin the detected language when we have a strong signal. This improves
-    # English quality significantly versus leaving faster-whisper in auto mode.
     if hint in {"ar", "en"}:
         whisper_language = hint
 
@@ -320,6 +360,39 @@ def _transcribe_with_faster_whisper(
         "method": _LOCAL_BACKEND,
         "fallback_used": False,
     }
+
+
+def _transcribe_with_faster_whisper(
+    audio_file: str,
+    language_hint: Optional[str] = None,
+    on_partial: Optional[Callable[[str], None]] = None,
+    *,
+    whisper_kwargs: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    model = _get_local_whisper_model()
+    return _transcribe_with_faster_whisper_model(
+        model,
+        audio_file,
+        language_hint=language_hint,
+        on_partial=on_partial,
+        whisper_kwargs=whisper_kwargs,
+    )
+
+
+def transcribe_partial_with_meta(
+    audio_file: str,
+    language_hint: Optional[str] = None,
+    *,
+    whisper_kwargs: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    model = _get_partial_whisper_model()
+    return _transcribe_with_faster_whisper_model(
+        model,
+        audio_file,
+        language_hint=language_hint,
+        on_partial=None,
+        whisper_kwargs=whisper_kwargs,
+    )
 
 
 def _detect_audio_language_with_whisper(audio_file: str, language_hint: Optional[str] = None) -> str:
@@ -397,6 +470,9 @@ def _transcribe_with_elevenlabs(
     if not bool(STT_ELEVENLABS_ENABLED):
         raise RuntimeError("ElevenLabs STT is disabled")
 
+    if _elevenlabs_on_cooldown():
+        raise RuntimeError("ElevenLabs STT cooldown active")
+
     api_key = str(ELEVENLABS_API_KEY or "").strip()
     if not api_key:
         raise RuntimeError("ELEVENLABS_API_KEY is not configured")
@@ -426,6 +502,8 @@ def _transcribe_with_elevenlabs(
         error_preview = (response.text or "").strip().replace("\n", " ")
         if len(error_preview) > 220:
             error_preview = error_preview[:217] + "..."
+        if response.status_code in {401, 429} or "quota_exceeded" in error_preview:
+            _set_elevenlabs_cooldown(f"http_{response.status_code}: {error_preview}")
         raise RuntimeError(f"ElevenLabs STT HTTP {response.status_code}: {error_preview}")
 
     payload = response.json() if response.content else {}
@@ -500,6 +578,8 @@ def _transcribe_with_hybrid_elevenlabs(
             logger.warning("ElevenLabs STT returned a weak transcript; falling back to local whisper")
         except Exception as exc:
             errors.append(f"elevenlabs:{exc}")
+            if "quota_exceeded" in str(exc) or "http 401" in str(exc).lower():
+                _set_elevenlabs_cooldown(f"exception:{exc}")
             logger.warning("ElevenLabs STT failed: %s", exc)
 
     local = _transcribe_with_faster_whisper(

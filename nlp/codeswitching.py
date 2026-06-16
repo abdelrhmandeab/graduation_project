@@ -80,6 +80,15 @@ _ARABIC_ENTITY_MAP = {
     "الكروم": "chrome",
     "جوجل كروم": "chrome",
     "السطوع": "brightness",
+    "الاضاءة": "brightness",
+    "الإضاءة": "brightness",
+    "اضاءة": "brightness",
+    "إضاءة": "brightness",
+    "الضوء": "brightness",
+    "النور": "brightness",
+    "العضاءة": "brightness",
+    "العضرا": "brightness",
+    "العضره": "brightness",
     "الصوت": "volume",
     "الفوليم": "volume",
     "صوت": "volume",
@@ -122,6 +131,68 @@ _STOPWORDS = {
     "and", "و", "then", "بعدها", "وبعدين",
     "for", "the", "a", "an", "of", "about", "to", "on", "in", "at",
     "عن", "على", "في", "من", "ل", "لي", "ال",
+}
+
+_ARABIC_NUMBER_WORDS = {
+    "صفر": 0,
+    "واحد": 1,
+    "واحدة": 1,
+    "اتنين": 2,
+    "اثنين": 2,
+    "اثنتين": 2,
+    "تلاتة": 3,
+    "تلاته": 3,
+    "ثلاثة": 3,
+    "اربعة": 4,
+    "أربعة": 4,
+    "خمسة": 5,
+    "ستة": 6,
+    "سبعة": 7,
+    "تمانية": 8,
+    "ثمانية": 8,
+    "تسعة": 9,
+    "عشرة": 10,
+    "عشرين": 20,
+    "تلاتين": 30,
+    "ثلاثين": 30,
+    "اربعين": 40,
+    "أربعين": 40,
+    "خمسين": 50,
+    "ستين": 60,
+    "سبعين": 70,
+    "تمانين": 80,
+    "ثمانين": 80,
+    "تسعين": 90,
+    "مية": 100,
+    "ميه": 100,
+    "مئة": 100,
+    "مئه": 100,
+    "مائه": 100,
+    "المية": 100,
+    "الميه": 100,
+    "المئة": 100,
+    "المئه": 100,
+    "المائه": 100,
+}
+
+_ARABIC_PERCENT_FRACTIONS = {
+    "نص": 50,
+    "نصف": 50,
+    "ربع": 25,
+    "تلت": 33,
+    "ثلث": 33,
+}
+
+_ARABIC_PERCENT_MARKERS = {
+    "المية",
+    "الميه",
+    "المئة",
+    "المئه",
+    "المائه",
+    "بالمية",
+    "بالمئه",
+    "بالمئة",
+    "بالمائه",
 }
 
 
@@ -184,6 +255,42 @@ def _normalize_token(token: str) -> str:
 def _extract_numbers(text: str) -> list[int | float]:
     """Extract all numeric values (Arabic-Indic or ASCII) from text."""
     normalized = convert_arabic_numerals(str(text or ""))
+    tokens = [tok for tok in _TOKEN_RE.findall(normalized) if tok.strip()]
+    rebuilt: list[str] = []
+    i = 0
+    while i < len(tokens):
+        raw_tok = tokens[i]
+        norm_tok = _normalize_token(raw_tok)
+        value = None
+        if norm_tok in _ARABIC_PERCENT_FRACTIONS:
+            value = _ARABIC_PERCENT_FRACTIONS[norm_tok]
+        elif norm_tok in _ARABIC_NUMBER_WORDS:
+            value = _ARABIC_NUMBER_WORDS[norm_tok]
+
+        if value is not None:
+            percent_consumed = False
+            if i + 1 < len(tokens):
+                next_norm = _normalize_token(tokens[i + 1])
+                if next_norm in _ARABIC_PERCENT_MARKERS:
+                    rebuilt.append(f"{value}%")
+                    i += 2
+                    percent_consumed = True
+                elif next_norm in {"في", "فى"} and i + 2 < len(tokens):
+                    next2_norm = _normalize_token(tokens[i + 2])
+                    if next2_norm in _ARABIC_PERCENT_MARKERS:
+                        rebuilt.append(f"{value}%")
+                        i += 3
+                        percent_consumed = True
+            if percent_consumed:
+                continue
+            rebuilt.append(str(value))
+            i += 1
+            continue
+
+        rebuilt.append(raw_tok)
+        i += 1
+
+    normalized = " ".join(rebuilt)
     results = []
     for m in re.finditer(r"\d+(?:\.\d+)?", normalized):
         val_str = m.group(0)

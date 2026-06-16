@@ -16,8 +16,12 @@ from core.config import (
     TTS_EDGE_MIXED_SCRIPT_CHUNKING,
     TTS_EDGE_MIXED_SCRIPT_MAX_CHUNKS,
     TTS_EDGE_MIXED_SCRIPT_MAX_TEXT_LENGTH,
+    TTS_EDGE_MIXED_SCRIPT_MIN_TEXT_LENGTH,
     TTS_EDGE_ARABIC_VOICE,
     TTS_EDGE_ARABIC_VOICE_FALLBACKS,
+    TTS_EDGE_ARABIC_RATE,
+    TTS_EDGE_ARABIC_PITCH,
+    TTS_EDGE_ARABIC_VOLUME,
     TTS_EDGE_RATE,
     TTS_EDGE_VOICE,
     TTS_ELEVENLABS_ARABIC_ENABLED,
@@ -45,6 +49,19 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     ElevenLabs = None
 
+_ELEVENLABS_TTS_COOLDOWN_UNTIL = 0.0
+
+
+def _elevenlabs_tts_on_cooldown():
+    return time.time() < _ELEVENLABS_TTS_COOLDOWN_UNTIL
+
+
+def _set_elevenlabs_tts_cooldown(reason: str, *, seconds: float = 1800.0) -> None:
+    global _ELEVENLABS_TTS_COOLDOWN_UNTIL
+    duration = max(60.0, float(seconds))
+    _ELEVENLABS_TTS_COOLDOWN_UNTIL = max(_ELEVENLABS_TTS_COOLDOWN_UNTIL, time.time() + duration)
+    logger.warning("ElevenLabs TTS cooldown enabled for %.0fs: %s", duration, reason)
+
 
 def _contains_arabic(text):
     for ch in str(text or ""):
@@ -65,6 +82,10 @@ def _contains_latin(text):
         if "a" <= ch.lower() <= "z":
             return True
     return False
+
+
+def _has_mixed_script(text):
+    return _contains_arabic(text) and _contains_latin(text)
 
 
 def _count_arabic_letters(text):
@@ -1341,10 +1362,14 @@ class SpeechEngine:
         return finalized or [{"script": default_script, "text": text}]
 
     def _edge_tts_chunk_audio_profile(self, is_arabic_chunk):
-        _ = is_arabic_chunk
-        rate = str(TTS_EDGE_RATE or "+0%").strip() or "+0%"
-        pitch = ""
-        volume = ""
+        if is_arabic_chunk:
+            rate = str(TTS_EDGE_ARABIC_RATE or TTS_EDGE_RATE or "+0%").strip() or "+0%"
+            pitch = str(TTS_EDGE_ARABIC_PITCH or "").strip()
+            volume = str(TTS_EDGE_ARABIC_VOLUME or "").strip()
+        else:
+            rate = str(TTS_EDGE_RATE or "+0%").strip() or "+0%"
+            pitch = ""
+            volume = ""
         return rate, pitch, volume
 
     def _speak_edge_tts_mixed_chunks(
@@ -1364,10 +1389,27 @@ class SpeechEngine:
         if len(chunks) <= 1:
             return False
 
-        if len(str(normalized_text or "")) > int(TTS_EDGE_MIXED_SCRIPT_MAX_TEXT_LENGTH):
+        shared_voice_candidates = self._edge_tts_voice_candidates(
+            normalized_text,
+            preferred_language=preferred_language,
+        )
+        shared_voice = shared_voice_candidates[0] if shared_voice_candidates else ""
+        if not shared_voice:
+            return False
+
+        text_length = len(str(normalized_text or ""))
+        if text_length < int(TTS_EDGE_MIXED_SCRIPT_MIN_TEXT_LENGTH):
+            logger.debug(
+                "Edge-TTS mixed chunk mode skipped: text_length=%s below min=%s",
+                text_length,
+                int(TTS_EDGE_MIXED_SCRIPT_MIN_TEXT_LENGTH),
+            )
+            return False
+
+        if text_length > int(TTS_EDGE_MIXED_SCRIPT_MAX_TEXT_LENGTH):
             logger.info(
                 "Edge-TTS mixed chunk mode skipped: text_length=%s exceeds max=%s",
-                len(str(normalized_text or "")),
+                text_length,
                 int(TTS_EDGE_MIXED_SCRIPT_MAX_TEXT_LENGTH),
             )
             return False
@@ -1422,7 +1464,7 @@ class SpeechEngine:
                 return None
             chunk_is_arabic = str(chunk.get("script") or "").strip().lower() == "arabic"
             chunk_language = "ar" if chunk_is_arabic else "en"
-            chunk_candidates = self._edge_tts_voice_candidates(chunk_text, preferred_language=chunk_language)
+            chunk_candidates = [shared_voice] + [v for v in shared_voice_candidates[1:] if v != shared_voice]
             first_voice = chunk_candidates[0] if chunk_candidates else ""
             last_error = ""
             for index, voice_name in enumerate(chunk_candidates):
@@ -1596,6 +1638,9 @@ class SpeechEngine:
         if not bool(TTS_ELEVENLABS_ARABIC_ENABLED):
             return False
 
+        if _elevenlabs_tts_on_cooldown():
+            return False
+
         normalized_text = " ".join(str(text or "").split()).strip()
         if not normalized_text:
             return False
@@ -1643,12 +1688,16 @@ class SpeechEngine:
         try:
             response = client.text_to_speech.convert(**convert_kwargs)
         except Exception as exc:
+            if "quota_exceeded" in str(exc) or "status_code: 401" in str(exc) or "http 401" in str(exc).lower():
+                _set_elevenlabs_tts_cooldown(f"convert:{exc}")
             logger.warning("ElevenLabs TTS request failed (voice_id=%s): %s", voice_id, exc)
             return False
 
         try:
             audio_bytes = b"".join(response)
         except Exception as exc:
+            if "quota_exceeded" in str(exc) or "status_code: 401" in str(exc) or "http 401" in str(exc).lower():
+                _set_elevenlabs_tts_cooldown(f"stream:{exc}")
             logger.warning("ElevenLabs TTS stream read failed (voice_id=%s): %s", voice_id, exc)
             return False
         if not audio_bytes:
@@ -1687,9 +1736,10 @@ class SpeechEngine:
         # Phase 5.3: Arabic synthesis is supported via ar-EG-SalmaNeural and the
         # configured fallback voices. The legacy English-only gate has been removed.
         voice_candidates = self._edge_tts_voice_candidates(normalized_text, preferred_language=preferred_language)
-        edge_rate = str(TTS_EDGE_RATE or "+0%").strip() or "+0%"
-        edge_pitch = ""
-        edge_volume = ""
+        wants_arabic = self._is_arabic_preferred_text(normalized_text, preferred_language=preferred_language)
+        edge_rate = str((TTS_EDGE_ARABIC_RATE if wants_arabic else TTS_EDGE_RATE) or "+0%").strip() or "+0%"
+        edge_pitch = str(TTS_EDGE_ARABIC_PITCH or "").strip() if wants_arabic else ""
+        edge_volume = str(TTS_EDGE_ARABIC_VOLUME or "").strip() if wants_arabic else ""
         supports_output_format = self._edge_tts_supports_output_format(edge_tts)
         supports_pitch = self._edge_tts_supports_parameter(edge_tts, "pitch")
         supports_volume = self._edge_tts_supports_parameter(edge_tts, "volume")

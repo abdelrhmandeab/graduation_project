@@ -60,6 +60,7 @@ from core.config import (
     REALTIME_MAX_PENDING_UTTERANCES,
     SPEECH_GUARD_SKIP_NON_RESPONSIVE_PROFILES,
     SEMANTIC_ROUTER_ENABLED,
+    STT_LANGUAGE_HINT,
     STARTUP_PARSER_NLP_PREWARM_ENABLED,
     TTS_PREWARM_ENABLED,
     KB_AUTO_SYNC_ENABLED,
@@ -347,11 +348,19 @@ def _is_stt_annotation_only(text):
 
 
 def _resolve_stt_language_hint(*, wake_source=None):
-    # Strict auto-detection mode: always defer to STT backend's language detector.
-    # This ensures the language detector model (Whisper) decides language based on
-    # audio content, without any orchestrator-level forcing.
+    hint = str(STT_LANGUAGE_HINT or "auto").strip().lower()
+    if hint in {"ar", "arabic"}:
+        return "ar"
+    if hint in {"en", "english"}:
+        return "en"
+
+    preferred = str(session_memory.get_preferred_language() or "").strip().lower()
+    if preferred in {"ar", "en"}:
+        return preferred
+
+    # Default to auto-detection: defer to STT backend's language detector.
     # Wake-word label (arabic/english) is NOT used as a hint — the detector alone
-    # determines if speech is Arabic, English, or mixed, enabling robust bilingual support.
+    # determines if speech is Arabic, English, or mixed.
     return "auto"
 
 
@@ -760,6 +769,8 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_s
             return
         logger.info("Transcript[%s]: %s", detected_language or "unknown", _safe_log_text(text))
 
+        
+
         # Demo mode: print intent/confidence overlay to console for presentations.
         if DEMO_MODE:
             try:
@@ -816,6 +827,8 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_s
         )
 
         tts_language = detected_language or session_memory.get_preferred_language()
+        if _ARABIC_CHAR_RE.search(str(text or "")):
+            tts_language = "ar"
         should_speak_response = not _is_interrupt_command(text)
 
         dialogue_manager.transition(DialogueState.RESPONDING)
@@ -829,6 +842,52 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_s
         if live_context:
             inject_precomputed_live_context(live_context)
         # ─────────────────────────────────────────────────────────────────────
+
+        stream_sentence_queue = None
+        stream_sentence_done = object()
+        streaming_tts_enabled = False
+
+        def _stream_sentence(sentence):
+            if stream_sentence_queue is None:
+                return
+            utterance = " ".join(str(sentence or "").split()).strip()
+            if not utterance:
+                return
+            try:
+                stream_sentence_queue.put_nowait(utterance)
+            except Exception:
+                pass
+
+        def _finish_streaming_tts():
+            if stream_sentence_queue is None:
+                return
+            try:
+                stream_sentence_queue.put_nowait(stream_sentence_done)
+            except Exception:
+                pass
+            # Give the queue consumer a short moment to drain before we fall
+            # back to the final response path or shutdown cleanup.
+            time.sleep(0.01)
+
+        if (
+            should_speak_response
+            and not is_compound
+            and str(getattr(precomputed_parser_candidate, "intent", "") or "") == "LLM_QUERY"
+            and str(tts_language or "").strip().lower() != "ar"
+        ):
+            stream_sentence_queue = queue.Queue()
+
+            def _sentence_iterator():
+                while True:
+                    sentence = stream_sentence_queue.get()
+                    if sentence is stream_sentence_done:
+                        return
+                    yield sentence
+
+            started, _ = speech_engine.speak_sentence_queue(_sentence_iterator(), language=tts_language)
+            streaming_tts_enabled = bool(started)
+            if not streaming_tts_enabled:
+                stream_sentence_queue = None
 
         try:
             if is_compound:
@@ -859,7 +918,7 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_s
                         text,
                         detected_language=detected_language,
                         realtime=True,
-                        on_sentence=None,
+                        on_sentence=_stream_sentence if streaming_tts_enabled else None,
                         precomputed_language_result=precomputed_language_result,
                         precomputed_parser_candidate=precomputed_parser_candidate,
                     )
@@ -873,13 +932,19 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_s
                     logger.error("Command routing failed: %s", exc)
                     response = "Sorry, I had an internal error."
         finally:
+            if streaming_tts_enabled:
+                _finish_streaming_tts()
             if live_context:
                 clear_precomputed_live_context()
 
         if not is_compound:
             print(f"Jarvis: {response}")
         # NEW: Check if early execution already spoke the response to prevent duplicate TTS
-        if should_speak_response and not (pipeline is not None and pipeline.is_early_response_spoken()):
+        if (
+            should_speak_response
+            and not streaming_tts_enabled
+            and not (pipeline is not None and pipeline.is_early_response_spoken())
+        ):
             safe_response = _speech_safe_response(response)
             speech_engine.speak_async(safe_response, language=tts_language)
     finally:
@@ -965,6 +1030,9 @@ def _prewarm_llm():
         logger.info("LLM prewarmed successfully.")
     except Exception as exc:
         logger.warning("LLM prewarm failed (will load on first query): %s", exc)
+
+
+
 
 
 def _ollama_version_endpoint() -> str:
@@ -1483,8 +1551,8 @@ def run():
                     if wake_source == "follow_up"
                     else None
                 ),
-                enable_partials=False,
-                on_partial=None,
+                enable_partials=True,
+                on_partial=_pipeline_partial,
             )
             metrics.record_stage(
                 "record_audio",

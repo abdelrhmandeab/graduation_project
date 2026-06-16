@@ -76,6 +76,32 @@ class DialogueManager:
         self._missing_slots: dict = {}
         self._conversation_turns = 0
         self._lock = threading.Lock()
+        self._state_listeners = []
+
+    def register_state_listener(self, listener) -> None:
+        """Register a callback invoked as listener(old_state, new_state)."""
+        if not callable(listener):
+            return
+        with self._lock:
+            if listener not in self._state_listeners:
+                self._state_listeners.append(listener)
+
+    def unregister_state_listener(self, listener) -> None:
+        """Remove a previously registered state listener if present."""
+        with self._lock:
+            try:
+                self._state_listeners.remove(listener)
+            except ValueError:
+                pass
+
+    def _notify_state_listeners(self, old_state: DialogueState, new_state: DialogueState) -> None:
+        with self._lock:
+            listeners = tuple(self._state_listeners)
+        for listener in listeners:
+            try:
+                listener(old_state, new_state)
+            except Exception:
+                logger.debug("Dialogue state listener failed", exc_info=True)
 
     @property
     def state(self) -> DialogueState:
@@ -122,6 +148,8 @@ class DialogueManager:
                 # "follow_up" after the window has already expired.
                 _follow_up_wake_event.clear()
         logger.debug("Dialogue: %s → %s", old.value, new_state.value)
+        if old != new_state:
+            self._notify_state_listeners(old, new_state)
 
     def should_skip_wake_word(self) -> bool:
         """True when the user may speak without the wake word."""

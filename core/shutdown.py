@@ -44,6 +44,13 @@ def perform_shutdown_cleanup():
         speech_engine.interrupt()
     except Exception as exc:
         logger.warning("Speech engine shutdown cleanup failed: %s", exc)
+
+    try:
+        from ui.tray import stop_tray
+
+        stop_tray()
+    except Exception as exc:
+        logger.debug("Tray shutdown cleanup skipped: %s", exc)
     return True
 
 

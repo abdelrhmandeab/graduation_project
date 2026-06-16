@@ -18,7 +18,7 @@ python-dotenv==1.2.2
 # Audio capture + processing
 numpy==2.4.2
 sounddevice==0.5.5
-onnxruntime==1.23.2  # Lightweight ONNX runtime for VAD + wake-word models
+onnxruntime>=1.26.0  # Lightweight ONNX runtime for VAD + wake-word models
 
 # Speech-to-text — local Faster-Whisper (Arabic + English)
 faster-whisper==1.2.1
@@ -90,5 +90,9 @@ pywin32>=306; platform_system == "Windows"
 
 # ElevenLabs TTS (optional, requires API key; edge-tts used as fallback)
 elevenlabs>=1.0.0
+
+# System tray UI
+pystray==0.19.5
+Pillow>=9.0.0
 
 

@@ -2283,18 +2283,6 @@ def _execute_chained_commands(command_text, language, *, on_sentence=None):
     for index, part in enumerate(parts):
         parsed_part = parse_command(part)
         parsed_part.raw = part
-        if parsed_part.intent == "LLM_QUERY":
-            results.append({
-                "command": part,
-                "intent": parsed_part.intent,
-                "action": parsed_part.action,
-                "args": dict(parsed_part.args or {}),
-                "success": False,
-                "message": "Unrecognized subcommand.",
-            })
-            message = "مش قادر أفهم التسلسل." if language == "ar" else "Could not parse chained command."
-            return False, message, {"phase4_chain": {"commands_executed": len(results), "results": results}}
-
         try:
             success, response, dispatch_meta = _dispatch(parsed_part, on_sentence=on_sentence)
         except Exception as exc:

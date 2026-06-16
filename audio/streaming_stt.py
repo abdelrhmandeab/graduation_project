@@ -5,6 +5,7 @@ import tempfile
 import threading
 import time
 import wave
+import os
 from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Optional
@@ -24,6 +25,7 @@ import re as _re
 from audio.mic import get_runtime_vad_settings
 from audio.stt import (
     normalize_arabic_post_transcript,
+    transcribe_partial_with_meta,
     transcribe_backend_direct_with_meta,
     transcribe_streaming_with_meta,
 )
@@ -32,6 +34,9 @@ from core.config import (
     AUDIO_CHUNK_SIZE,
     MAX_RECORD_DURATION,
     SAMPLE_RATE,
+    STT_PARTIAL_MIN_SECONDS,
+    STT_PARTIAL_INTERVAL_SECONDS,
+    STT_PARTIAL_WINDOW_SECONDS,
     VAD_CHAT_SILENCE_SECONDS,
     VAD_COMMAND_SILENCE_SECONDS,
     VAD_ENERGY_THRESHOLD,
@@ -53,12 +58,17 @@ _ARABIC_STREAMING_WHISPER_KWARGS = {
     "beam_size": 3,
     "vad_filter": False,
     "language": None,
-    "initial_prompt": "جارفيس",
+    "initial_prompt": "جارفيس، افتح، اقفل، شغل، وقف، search، play، weather، دلوقتي، عايز، ممكن، من فضلك",
 }
 
 
 def _is_arabic_text(text: str) -> bool:
     return bool(_ARABIC_CHAR_RE.search(str(text or "")))
+
+
+def _is_mixed_script_text(text: str) -> bool:
+    value = str(text or "")
+    return _is_arabic_text(value) and any("a" <= ch.lower() <= "z" for ch in value)
 
 
 _STREAMING_VAD: Optional[SileroVAD] = None
@@ -140,6 +150,7 @@ def _transcribe_buffer(
     language_hint: Optional[str],
     on_partial: Optional[Callable[[str], None]] = None,
     use_local_only: bool = False,
+    whisper_kwargs: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     if not chunks:
         return {
@@ -154,23 +165,23 @@ def _transcribe_buffer(
     audio = np.concatenate(chunks, axis=0).astype(np.int16, copy=False)
     _write_wav_file(filename, SAMPLE_RATE, audio)
 
-    # Use Arabic-optimised whisper params for Arabic streaming sessions.
-    ar_kwargs = (
-        dict(_ARABIC_STREAMING_WHISPER_KWARGS)
-        if str(language_hint or "").startswith("ar")
-        else None
-    )
+    # Use Arabic-optimised whisper params only when explicitly in Arabic mode.
+    hint = str(language_hint or "").strip().lower()
+    ar_kwargs = dict(_ARABIC_STREAMING_WHISPER_KWARGS) if hint.startswith("ar") else None
     if use_local_only:
         result = transcribe_backend_direct_with_meta(
             filename,
             backend="faster_whisper",
             on_partial=on_partial,
             language_hint=language_hint,
-            whisper_kwargs=ar_kwargs,
+            whisper_kwargs=whisper_kwargs or ar_kwargs,
         )
     else:
         result = transcribe_streaming_with_meta(
-            filename, on_partial=on_partial, language_hint=language_hint, whisper_kwargs=ar_kwargs
+            filename,
+            on_partial=on_partial,
+            language_hint=language_hint,
+            whisper_kwargs=whisper_kwargs or ar_kwargs,
         )
     result["samples"] = int(audio.shape[0])
     result["duration_seconds"] = float(audio.shape[0]) / float(SAMPLE_RATE)
@@ -192,7 +203,7 @@ class StreamingSTT:
         max_speech_seconds: Optional[float] = None,
         energy_threshold: Optional[float] = None,
         silero_threshold: Optional[float] = None,
-        partial_interval_seconds: float = 0.45,
+        partial_interval_seconds: float = STT_PARTIAL_INTERVAL_SECONDS,
         enable_partials: bool = False,
         on_partial: Optional[Callable[[str], None]] = None,
         on_final: Optional[Callable[[Dict[str, Any]], None]] = None,
@@ -242,16 +253,23 @@ class StreamingSTT:
             except queue.Full:
                 pass
 
-    def _transcribe_partial(self, chunks: List[np.ndarray], partial_file: str, last_text: str) -> str:
-        if not chunks:
+    def _transcribe_partial(self, chunks_snapshot: List[np.ndarray], last_text: str) -> str:
+        if not chunks_snapshot or self._stop_event.is_set():
             return last_text
+        partial_path = None
         try:
-            result = _transcribe_buffer(
-                chunks,
-                partial_file,
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as partial_tmp:
+                partial_path = partial_tmp.name
+            _write_wav_file(partial_path, SAMPLE_RATE, np.concatenate(chunks_snapshot, axis=0).astype(np.int16, copy=False))
+            result = transcribe_partial_with_meta(
+                partial_path,
                 language_hint=self.language_hint,
-                on_partial=None,
-                use_local_only=True,
+                whisper_kwargs={
+                    "beam_size": 1,
+                    "best_of": 1,
+                    "vad_filter": False,
+                    "temperature": 0.0,
+                },
             )
             text = str(result.get("text", "") or "").strip()
 
@@ -271,7 +289,8 @@ class StreamingSTT:
                 else:
                     self._ar_pending_partial = text
                     self._ar_pending_count = 1
-                if self._ar_pending_count >= 2 and text != last_text:
+                emit_threshold = 1 if _is_mixed_script_text(text) else 2
+                if self._ar_pending_count >= emit_threshold and text != last_text:
                     _safe_callback(self.on_partial, text)
                     return text
                 return last_text
@@ -281,6 +300,12 @@ class StreamingSTT:
                 return text
         except Exception:
             return last_text
+        finally:
+            if partial_path:
+                try:
+                    os.remove(partial_path)
+                except Exception:
+                    pass
         return last_text
 
     def run(self) -> Dict[str, Any]:
@@ -304,6 +329,17 @@ class StreamingSTT:
         partial_text = ""
         last_partial_emit = 0.0
         speech_started_index = -1
+        partial_executor = None
+        partial_future = None
+        partial_window_chunks = 0
+        if self.enable_partials:
+            partial_window_chunks = _seconds_to_chunks(float(STT_PARTIAL_WINDOW_SECONDS))
+            import concurrent.futures as _cf
+
+            partial_executor = _cf.ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="stt-partial",
+            )
 
         try:
             with sd.InputStream(
@@ -353,13 +389,27 @@ class StreamingSTT:
 
                     now = time.perf_counter()
                     if self.enable_partials:
+                        if partial_future is not None and partial_future.done():
+                            try:
+                                partial_text = partial_future.result()
+                            except Exception:
+                                pass
+                            partial_future = None
+
                         should_emit_partial = (
-                            speech_samples >= int(0.5 * SAMPLE_RATE)
+                            speech_samples >= int(max(0.0, float(STT_PARTIAL_MIN_SECONDS)) * SAMPLE_RATE)
                             and (now - last_partial_emit) >= self.partial_interval_seconds
                         )
-                        if should_emit_partial:
-                            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as partial_tmp:
-                                partial_text = self._transcribe_partial(captured_chunks, partial_tmp.name, partial_text)
+                        if should_emit_partial and partial_executor is not None and partial_future is None:
+                            if partial_window_chunks > 0:
+                                chunk_view = list(captured_chunks[-partial_window_chunks:])
+                            else:
+                                chunk_view = list(captured_chunks)
+                            partial_future = partial_executor.submit(
+                                self._transcribe_partial,
+                                chunk_view,
+                                partial_text,
+                            )
                             last_partial_emit = now
 
                     silence_target = _seconds_to_chunks(
@@ -375,6 +425,16 @@ class StreamingSTT:
                         break
         finally:
             self._stop_event.set()
+            if partial_future is not None:
+                try:
+                    partial_future.cancel()
+                except Exception:
+                    pass
+            if partial_executor is not None:
+                try:
+                    partial_executor.shutdown(wait=False)
+                except Exception:
+                    pass
 
         elapsed = time.perf_counter() - started_at
         if not speech_detected or not captured_chunks:
@@ -424,7 +484,7 @@ def record_utterance_streaming(
     start_timeout_seconds: Optional[float] = None,
     max_speech_seconds: Optional[float] = None,
     energy_threshold: Optional[float] = None,
-    partial_interval_seconds: float = 0.45,
+    partial_interval_seconds: float = STT_PARTIAL_INTERVAL_SECONDS,
     enable_partials: bool = False,
     on_partial: Optional[Callable[[str], None]] = None,
     on_final: Optional[Callable[[Dict[str, Any]], None]] = None,

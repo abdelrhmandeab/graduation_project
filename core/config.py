@@ -149,6 +149,17 @@ STT_LANGUAGE_DETECT_MODEL = _env("JARVIS_STT_LANGUAGE_DETECT_MODEL", "small").st
 STT_LANGUAGE_HINT = str(_env("JARVIS_STT_LANGUAGE_HINT", "auto")).strip().lower() or "auto"
 STT_MIXED_TREAT_AS_ARABIC = _env_bool("JARVIS_STT_MIXED_TREAT_AS_ARABIC", True)
 
+# Minimum seconds of captured speech before emitting a partial transcript.
+# Lowering this value makes partials appear sooner but may increase noisy/unstable fragments.
+STT_PARTIAL_MIN_SECONDS = max(0.15, _env_float("JARVIS_STT_PARTIAL_MIN_SECONDS", 0.35))
+# Maximum recent-audio window (seconds) used for partial transcription.
+# Smaller windows reduce partial latency and CPU usage; larger windows improve stability.
+STT_PARTIAL_WINDOW_SECONDS = max(0.6, _env_float("JARVIS_STT_PARTIAL_WINDOW_SECONDS", 1.6))
+# Minimum spacing (seconds) between partial transcription attempts.
+STT_PARTIAL_INTERVAL_SECONDS = max(0.2, _env_float("JARVIS_STT_PARTIAL_INTERVAL_SECONDS", 0.35))
+# Whisper model used for partial transcriptions (defaults to tiny for speed).
+STT_PARTIAL_WHISPER_MODEL = _env("JARVIS_STT_PARTIAL_WHISPER_MODEL", "tiny").strip() or "tiny"
+
 STT_ELEVENLABS_ENABLED = _env_bool("JARVIS_STT_ELEVENLABS_ENABLED", True)
 STT_ELEVENLABS_STT_MODEL = _env("JARVIS_STT_ELEVENLABS_MODEL", "scribe_v2").strip() or "scribe_v2"
 STT_ELEVENLABS_ARABIC_LANGUAGE = _env("JARVIS_STT_ELEVENLABS_ARABIC_LANG", "ara").strip() or "ara"
@@ -272,6 +283,10 @@ TTS_EDGE_ARABIC_VOLUME = _env("JARVIS_TTS_EDGE_ARABIC_VOLUME", "+4%")
 TTS_EDGE_MIXED_SCRIPT_CHUNKING = _env_bool("JARVIS_TTS_EDGE_MIXED_SCRIPT_CHUNKING", True)
 TTS_EDGE_MIXED_SCRIPT_MAX_CHUNKS = max(2, _env_int("JARVIS_TTS_EDGE_MIXED_SCRIPT_MAX_CHUNKS", 6))
 TTS_EDGE_MIXED_SCRIPT_MAX_TEXT_LENGTH = max(80, _env_int("JARVIS_TTS_EDGE_MIXED_SCRIPT_MAX_TEXT_LENGTH", 220))
+# Minimum text length (characters) required to enable mixed-script chunking.
+# Short responses (shorter than this) will be synthesized in a single shot
+# to avoid unnecessary chunk boundaries and playback gaps.
+TTS_EDGE_MIXED_SCRIPT_MIN_TEXT_LENGTH = max(24, _env_int("JARVIS_TTS_EDGE_MIXED_SCRIPT_MIN_TEXT_LENGTH", 120))
 TTS_ELEVENLABS_ARABIC_ENABLED = _env_bool("JARVIS_TTS_ELEVENLABS_ARABIC_ENABLED", False)
 TTS_ELEVENLABS_ARABIC_VOICE_ID = _env("JARVIS_TTS_ELEVENLABS_ARABIC_VOICE_ID", "").strip()
 TTS_ELEVENLABS_ARABIC_MODEL_ID = _env("JARVIS_TTS_ELEVENLABS_ARABIC_MODEL_ID", "eleven_multilingual_v2").strip() or "eleven_multilingual_v2"

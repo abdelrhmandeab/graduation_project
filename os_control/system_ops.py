@@ -651,21 +651,25 @@ def _parse_spoken_int(value):
     current = 0
     found = False
     for token in tokens:
+        if token.startswith("ال") and len(token) > 2:
+            candidate = token[2:]
+        else:
+            candidate = token
         if token in {"and", "\u0648"}:
             continue
-        if token in _NUMBER_ONES:
-            current += _NUMBER_ONES[token]
+        if candidate in _NUMBER_ONES:
+            current += _NUMBER_ONES[candidate]
             found = True
             continue
-        if token in _NUMBER_TENS:
-            current += _NUMBER_TENS[token]
+        if candidate in _NUMBER_TENS:
+            current += _NUMBER_TENS[candidate]
             found = True
             continue
-        if token in {"hundred", "\u0645\u0626\u0629", "\u0645\u0627\u064a\u0629", "\u0645\u064a\u0629"}:
+        if candidate in {"hundred", "\u0645\u0626\u0629", "\u0645\u0627\u064a\u0629", "\u0645\u064a\u0629"}:
             current = max(1, current) * 100
             found = True
             continue
-        if token in {"thousand", "\u0627\u0644\u0641", "\u0623\u0644\u0641"}:
+        if candidate in {"thousand", "\u0627\u0644\u0641", "\u0623\u0644\u0641"}:
             total += max(1, current) * 1000
             current = 0
             found = True
@@ -720,7 +724,17 @@ def _fuzzy_resolve_system_action(phrase):
 def _parse_percent_value(value):
     if value is None:
         return None
-    number = _parse_spoken_int(value)
+    text = _normalize_words(value)
+    if any(token in text.split() for token in {"نص", "نصف"}):
+        return 50
+    if "ربع" in text.split():
+        return 25
+    if any(token in text.split() for token in {"تلت", "ثلث"}):
+        return 33
+
+    text = re.sub(r"\b(?:في\s+)?الم(?:ية|ئه|ئة|يه|ائه)\b", "", text)
+    text = text.replace("بالمية", "").replace("بالمئة", "").replace("بالمئه", "")
+    number = _parse_spoken_int(text)
     if number is None:
         return None
     return max(0, min(100, number))
