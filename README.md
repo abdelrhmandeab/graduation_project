@@ -163,3 +163,5 @@ tools/        — weather (Open-Meteo), web_search (DuckDuckGo)
 - **Error resilience**: Graceful fallbacks for missing packages (pyperclip, pywin32, ddgs, sentence-transformers, etc.)
 - **Dependency tiers**: Choose `requirements.txt` (full), `requirements-minimal.txt` (voice only), or `requirements-full.txt` (everything)
 
+
+test for commit
