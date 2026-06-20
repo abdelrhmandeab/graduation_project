@@ -22,7 +22,7 @@ def read_clipboard():
         if len(text) > 1000:
             return text[:1000]
         try:
-            from core.metrics import log_structured
+            from core.logger import log_structured
 
             log_structured("clipboard_read", length=len(text))
         except Exception:
@@ -41,7 +41,7 @@ def write_clipboard(text):
     try:
         pyperclip.copy(str(text or ""))
         try:
-            from core.metrics import log_structured
+            from core.logger import log_structured
 
             log_structured("clipboard_write", length=len(str(text or "")))
         except Exception:

@@ -395,7 +395,7 @@ class VectorMemoryStore:
                 self._collection = collection
                 self._embedder = embedder
                 self._ready = True
-            logger.info("VectorMemoryStore ready (%d entries).", collection.count())
+            logger.debug("VectorMemoryStore ready (%d entries).", collection.count())
         except Exception as exc:
             logger.warning("VectorMemoryStore init failed (semantic recall disabled): %s", exc)
 

@@ -7,8 +7,7 @@ import time
 import wave
 import os
 from collections import deque
-from pathlib import Path
-from typing import Any, Callable, Deque, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import numpy as np
 
@@ -43,7 +42,6 @@ from core.config import (
     VAD_MIN_SPEECH_SECONDS,
     VAD_PREROLL_SECONDS,
     VAD_SILERO_THRESHOLD,
-    VAD_SILENCE_SECONDS,
     VAD_START_TIMEOUT_SECONDS,
 )
 
@@ -117,6 +115,14 @@ def _get_shared_streaming_vad() -> SileroVAD:
         energy_threshold=VAD_ENERGY_THRESHOLD,
         silero_threshold=VAD_SILERO_THRESHOLD,
     )
+
+
+def prewarm_streaming_vad() -> bool:
+    """Initialize the shared streaming VAD before the first microphone turn."""
+    try:
+        return _get_shared_streaming_vad().is_ready()
+    except Exception:
+        return False
 
 
 def _resolve_silence_seconds(vad_mode: str, explicit_silence_seconds: Optional[float] = None) -> float:
@@ -229,13 +235,11 @@ class StreamingSTT:
         self.on_speech_end = on_speech_end
         self._chunk_queue: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=128)
         self._stop_event = threading.Event()
-        self._speech_started = False
-        self._vad_detector: Optional[SileroVAD] = None
         # Arabic partial stability — emit only after 2 consecutive identical windows
         self._ar_pending_partial: str = ""
         self._ar_pending_count: int = 0
 
-    def _audio_callback(self, in_data, frames, time_info, status):  # pragma: no cover - called by sounddevice
+    def _audio_callback(self, in_data, frames, _time_info, status):  # pragma: no cover - called by sounddevice
         if in_data is None:
             return
         chunk = np.asarray(in_data).reshape(-1).astype(np.int16, copy=False)
@@ -258,7 +262,11 @@ class StreamingSTT:
             return last_text
         partial_path = None
         try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as partial_tmp:
+            with tempfile.NamedTemporaryFile(
+                delete=False,
+                prefix="jarvis_partial_",
+                suffix=".wav",
+            ) as partial_tmp:
                 partial_path = partial_tmp.name
             _write_wav_file(partial_path, SAMPLE_RATE, np.concatenate(chunks_snapshot, axis=0).astype(np.int16, copy=False))
             result = transcribe_partial_with_meta(

@@ -35,7 +35,7 @@ from core.config import (
 )
 from audio.barge_in import BargeInMonitor
 from core.logger import logger
-from core.metrics import metrics
+from core.metrics import metrics, record_stage_timing
 from core.persona import persona_manager
 
 try:
@@ -82,10 +82,6 @@ def _contains_latin(text):
         if "a" <= ch.lower() <= "z":
             return True
     return False
-
-
-def _has_mixed_script(text):
-    return _contains_arabic(text) and _contains_latin(text)
 
 
 def _count_arabic_letters(text):
@@ -1066,7 +1062,9 @@ class SpeechEngine:
             success = False
             raise
         finally:
-            metrics.record_stage("tts", time.perf_counter() - started, success=success)
+            tts_elapsed = time.perf_counter() - started
+            metrics.record_stage("tts", tts_elapsed, success=success)
+            record_stage_timing("tts_playback", tts_elapsed, backend=backend)
             with self._lock:
                 self._process = None
                 released_thread = False
@@ -1463,7 +1461,6 @@ class SpeechEngine:
             if not chunk_text:
                 return None
             chunk_is_arabic = str(chunk.get("script") or "").strip().lower() == "arabic"
-            chunk_language = "ar" if chunk_is_arabic else "en"
             chunk_candidates = [shared_voice] + [v for v in shared_voice_candidates[1:] if v != shared_voice]
             first_voice = chunk_candidates[0] if chunk_candidates else ""
             last_error = ""

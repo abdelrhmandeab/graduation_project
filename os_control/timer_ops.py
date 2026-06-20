@@ -138,7 +138,7 @@ def set_timer(seconds, label="Timer"):
 
     logger.info("Timer set: %s for %s (%s)", timer_id, human, label)
     try:
-        from core.metrics import log_structured
+        from core.logger import log_structured
 
         log_structured("timer_set", seconds=seconds, human=human)
     except Exception:

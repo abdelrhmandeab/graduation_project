@@ -17,11 +17,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from audio.streaming_stt import record_utterance_streaming
+from audio.streaming_stt import prewarm_streaming_vad, record_utterance_streaming
 from audio import stt as stt_runtime
 from audio.stt import transcribe_streaming
 from audio.tts import speech_engine
-from audio.vad import is_speech
+from audio.vad import is_speech, prewarm_batch_vad
 from audio.wake_word import (
     get_runtime_wake_word_behavior,
     listen_for_wake_word,
@@ -39,13 +39,18 @@ from core.knowledge_base import knowledge_base_service
 from core.doctor import collect_diagnostics
 from core.config import (
     DEMO_MODE,
+    BARGE_IN_VAD_ENABLED,
     EARLY_EXEC_CONFIDENCE_THRESHOLD,
     DOCTOR_INCLUDE_MODEL_LOAD_CHECKS,
     DOCTOR_SCHEDULE_INTERVAL_SECONDS,
+    DOCTOR_STARTUP_ASYNC,
     DOCTOR_STARTUP_ENABLED,
     FOLLOWUP_CHIME_ENABLED,
     FOLLOWUP_ENABLED,
-    FOLLOWUP_WINDOW_SECONDS,
+    GREETING_ENABLED,
+    GREETING_LANGUAGE,
+    GREETING_TEXT_AR,
+    GREETING_TEXT_EN,
     LLM_AUTO_SELECT_MODEL,
     LLM_MODEL,
     LLM_OLLAMA_AUTOSTART,
@@ -55,21 +60,37 @@ from core.config import (
     LLM_LIGHTWEIGHT_NUM_CTX,
     LLM_OLLAMA_NUM_CTX,
     MAX_RECORD_DURATION,
+    PREWARM_LLM_BLOCKING,
+    PREWARM_SEMANTIC_ROUTER_BLOCKING,
     REALTIME_BACKPRESSURE_POLL_SECONDS,
     REALTIME_DROP_WHEN_BUSY,
     REALTIME_MAX_PENDING_UTTERANCES,
     SPEECH_GUARD_SKIP_NON_RESPONSIVE_PROFILES,
     SEMANTIC_ROUTER_ENABLED,
+    STT_PARTIAL_WHISPER_MODEL,
     STT_LANGUAGE_HINT,
     STARTUP_PARSER_NLP_PREWARM_ENABLED,
+    STARTUP_BACKGROUND_PREWARM_ENABLED,
     TTS_PREWARM_ENABLED,
+    TTS_DEFAULT_BACKEND,
+    WAKE_WORD_MODE,
+    WHISPER_MODEL,
     KB_AUTO_SYNC_ENABLED,
 )
 from core.dialogue_manager import DialogueState, dialogue_manager, notify_follow_up_wake
 from core.intent_confidence import assess_intent_confidence
-from core.logger import logger
+from core.logger import get_logger, kv, logger, section
 from core.language_gate import detect_supported_language
-from core.metrics import latency_tracker, metrics
+from core.metrics import (
+    get_thread_stage_timing,
+    latency_tracker,
+    log_turn_summary,
+    log_warmup_table,
+    metrics,
+    record_stage_timing,
+    reset_thread_stage_timings,
+    stage_timer,
+)
 from core.session_memory import session_memory
 from core.shutdown import perform_shutdown_cleanup, setup_shutdown
 
@@ -87,7 +108,6 @@ _INTERRUPT_COMMANDS = {
 }
 
 _LOW_LATENCY_AUDIO_UX_PROFILES = {"responsive"}
-_TRANSCRIPT_TOKEN_RE = re.compile(r"[A-Za-z0-9\u0600-\u06FF]+")
 _ARABIC_CHAR_RE = re.compile(r"[\u0600-\u06FF]")
 _LATIN_CHAR_RE = re.compile(r"[A-Za-z]")
 _LAST_STT_LANGUAGE_CONFIDENCE = 0.0
@@ -163,6 +183,7 @@ class ConcurrentPipeline:
         self._early_response = ""
         self._early_response_spoken = False  # NEW: Track if we've already spoken the early response
         self._early_intent_str: "str | None" = None
+        self._early_timings = {"route": 0.0, "tts": 0.0}
         self._early_execution_future = None
         self._prev_intent = None
 
@@ -209,15 +230,14 @@ class ConcurrentPipeline:
         with self._lock:
             return self._early_intent_str
 
+    def get_early_timings(self) -> dict:
+        with self._lock:
+            return dict(self._early_timings)
+
     def is_early_response_spoken(self) -> bool:
         """Check if early response has already been spoken."""
         with self._lock:
             return self._early_response_spoken
-
-    def mark_early_response_spoken(self) -> None:
-        """Mark the early response as spoken to prevent duplicate TTS."""
-        with self._lock:
-            self._early_response_spoken = True
 
     def cancel_early_if_possible(self) -> None:
         """Best-effort cancel. Resets early-executed flag so _process_utterance re-routes."""
@@ -314,18 +334,26 @@ class ConcurrentPipeline:
         """Execute the command from a background thread and speak the response."""
         lang = self._language_hint or session_memory.get_preferred_language() or ""
         try:
+            route_started = time.perf_counter()
             response = route_command(
                 text,
                 detected_language=lang or None,
                 realtime=True,
             )
+            route_elapsed = time.perf_counter() - route_started
+            record_stage_timing("routing", route_elapsed, intent=getattr(parsed, "intent", "unknown"))
             if response:
                 safe = _speech_safe_response(response)
                 if safe:
-                    speech_engine.speak_async(safe, language=lang or None)
+                    with stage_timer("tts_first_word", lang=lang or "unknown") as tts_timing:
+                        speech_engine.speak_async(safe, language=lang or None)
                 with self._lock:
                     self._early_response = response
                     self._early_response_spoken = True  # Mark as spoken to prevent duplicate TTS
+                    self._early_timings = {
+                        "route": route_elapsed,
+                        "tts": tts_timing.elapsed if safe else 0.0,
+                    }
                 metrics.record_stage("early_execute", 0.0, success=True)
                 logger.info(
                     "ConcurrentPipeline: early-executed %s on partial '%s'",
@@ -467,57 +495,6 @@ def _extract_detected_language_from_stt(text):
     return ""
 
 
-def _looks_low_quality_transcript(text):
-    normalized = " ".join(str(text or "").split()).strip()
-    if not normalized:
-        return True
-
-    tokens = _TRANSCRIPT_TOKEN_RE.findall(normalized)
-    if not tokens:
-        return True
-
-    if len(tokens) == 1 and len(tokens[0]) <= 4:
-        return True
-
-    total_alpha = sum(len(token) for token in tokens)
-    if len(tokens) <= 2 and total_alpha <= 6:
-        return True
-
-    return False
-
-
-def _transcript_quality_score(text, detected_language, wake_source=None):
-    _ = wake_source
-    normalized = " ".join(str(text or "").split()).strip()
-    if not normalized:
-        return -100.0
-
-    lang = str(detected_language or "").strip().lower()
-    if lang not in {"ar", "en"}:
-        lang = "en"
-
-    parsed = parse_command(normalized)
-    assessment = assess_intent_confidence(normalized, parsed, language=lang)
-
-    score = float(assessment.confidence or 0.0) * 100.0
-    tokens = _TRANSCRIPT_TOKEN_RE.findall(normalized)
-    score += min(12.0, float(sum(len(token) for token in tokens)) / 4.0)
-
-    if bool(getattr(assessment, "should_clarify", False)):
-        reason = str(getattr(assessment, "reason", "") or "").strip().lower()
-        if reason == "low_confidence_unclear_query":
-            score -= 45.0
-        elif reason == "low_confidence_action_like_query":
-            score -= 22.0
-        else:
-            score -= 10.0
-
-    if _looks_low_quality_transcript(normalized):
-        score -= 18.0
-
-    return score
-
-
 def _transcribe_with_runtime_stt(audio_file, wake_source=None):
     global _LAST_STT_LANGUAGE_CONFIDENCE
     # Always use strict auto-detection: pass language_hint="auto" to let
@@ -546,10 +523,8 @@ def _precompute_post_stt_routing(text, *, detected_language=None):
 
     try:
         def _timed_parse(text):
-            _t = time.perf_counter()
-            _r = parse_command(text)
-            latency_tracker.record("intent_detection", time.perf_counter() - _t)
-            return _r
+            with stage_timer("intent_detection"):
+                return parse_command(text)
 
         with ThreadPoolExecutor(max_workers=2, thread_name_prefix="jarvis-route-precompute") as executor:
             language_future = executor.submit(
@@ -694,10 +669,22 @@ def _run_text_fallback_loop():
             )
 
 
-def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_summary=None, pipeline=None):
+def _process_utterance(
+    audio_file,
+    pipeline_started,
+    wake_source=None,
+    capture_summary=None,
+    pipeline=None,
+    turn_timing=None,
+):
     text = ""
     route_success = False
-    _utterance_process_started = time.perf_counter()
+    detected_language = ""
+    turn_intent = ""
+    timing_parts = dict(turn_timing or {})
+    reset_thread_stage_timings()
+    for stage_name in ("stt", "route", "llm", "tts"):
+        timing_parts.setdefault(stage_name, 0.0)
     try:
         active_audio_ux_profile = str(session_memory.get_audio_ux_profile() or "").strip().lower()
         skip_post_capture_guard = active_audio_ux_profile in _LOW_LATENCY_AUDIO_UX_PROFILES
@@ -729,7 +716,6 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_s
         # final result in capture_summary["text"].  Reuse it to skip the second
         # full STT pass that used to add 1–2 s of dead time after speech ended.
         stt_started = time.perf_counter()
-        latency_tracker.record("wake_to_stt_start", stt_started - _utterance_process_started)
         _streaming_text = str((capture_summary or {}).get("text", "") or "").strip()
         _streaming_lang = str((capture_summary or {}).get("language", "") or "").strip().lower()
 
@@ -741,7 +727,7 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_s
                 detected_language = _extract_detected_language_from_stt(text)
             _stt_duration = time.perf_counter() - stt_started
             metrics.record_stage("stt", _stt_duration, success=True)
-            latency_tracker.record("stt_total", _stt_duration)
+            record_stage_timing("stt_total", _stt_duration, lang=detected_language or "unknown")
             logger.debug("STT fast-path: reusing streaming transcript (skipped redundant STT pass)")
         else:
             # Fallback: no streaming transcript available (e.g. sounddevice unavailable,
@@ -753,7 +739,8 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_s
             )
             _stt_duration = time.perf_counter() - stt_started
             metrics.record_stage("stt", _stt_duration, success=bool(text))
-            latency_tracker.record("stt_total", _stt_duration)
+            record_stage_timing("stt_total", _stt_duration, lang=detected_language or "unknown")
+        timing_parts["stt"] = _stt_duration
         # ─────────────────────────────────────────────────────────────────────
 
         if detected_language in {"ar", "en"}:
@@ -801,6 +788,7 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_s
             try:
                 _final_parsed_check = parse_command(text)
                 final_intent_check = str(getattr(_final_parsed_check, "intent", "") or "")
+                turn_intent = final_intent_check
             except Exception:
                 final_intent_check = ""
             if early_intent and final_intent_check and early_intent != final_intent_check:
@@ -817,6 +805,7 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_s
                 if early_resp:
                     print(f"Jarvis (early): {early_resp}")
                 logger.info("ConcurrentPipeline: skipping full route — already handled via early execution.")
+                timing_parts.update(pipeline.get_early_timings())
                 route_success = True
                 return
         # ─────────────────────────────────────────────────────────────────────
@@ -825,6 +814,7 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_s
             text,
             detected_language=detected_language,
         )
+        turn_intent = str(getattr(precomputed_parser_candidate, "intent", "") or "")
 
         tts_language = detected_language or session_memory.get_preferred_language()
         if _ARABIC_CHAR_RE.search(str(text or "")):
@@ -845,6 +835,7 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_s
 
         stream_sentence_queue = None
         stream_sentence_done = object()
+        streamed_sentences = []
         streaming_tts_enabled = False
 
         def _stream_sentence(sentence):
@@ -855,12 +846,23 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_s
                 return
             try:
                 stream_sentence_queue.put_nowait(utterance)
+                streamed_sentences.append(utterance)
             except Exception:
                 pass
 
-        def _finish_streaming_tts():
+        def _finish_streaming_tts(final_response=""):
             if stream_sentence_queue is None:
-                return
+                return False
+            if streamed_sentences:
+                remainder = _remaining_after_streamed_sentences(
+                    final_response,
+                    streamed_sentences,
+                )
+                if remainder:
+                    try:
+                        stream_sentence_queue.put_nowait(remainder)
+                    except Exception:
+                        pass
             try:
                 stream_sentence_queue.put_nowait(stream_sentence_done)
             except Exception:
@@ -868,6 +870,7 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_s
             # Give the queue consumer a short moment to drain before we fall
             # back to the final response path or shutdown cleanup.
             time.sleep(0.01)
+            return bool(streamed_sentences)
 
         if (
             should_speak_response
@@ -884,7 +887,12 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_s
                         return
                     yield sentence
 
+            tts_started_at = time.perf_counter()
             started, _ = speech_engine.speak_sentence_queue(_sentence_iterator(), language=tts_language)
+            tts_start_elapsed = time.perf_counter() - tts_started_at
+            if started:
+                record_stage_timing("tts_first_word", tts_start_elapsed, lang=tts_language or "unknown")
+                timing_parts["tts"] = tts_start_elapsed
             streaming_tts_enabled = bool(started)
             if not streaming_tts_enabled:
                 stream_sentence_queue = None
@@ -932,8 +940,13 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_s
                     logger.error("Command routing failed: %s", exc)
                     response = "Sorry, I had an internal error."
         finally:
+            _route_duration = time.perf_counter() - route_started
+            timing_parts["route"] = _route_duration
+            record_stage_timing("routing", _route_duration, intent=turn_intent or "unknown")
+            if turn_intent == "LLM_QUERY":
+                timing_parts["llm"] = get_thread_stage_timing("llm_generation")
             if streaming_tts_enabled:
-                _finish_streaming_tts()
+                streaming_tts_enabled = _finish_streaming_tts(response)
             if live_context:
                 clear_precomputed_live_context()
 
@@ -946,9 +959,20 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_s
             and not (pipeline is not None and pipeline.is_early_response_spoken())
         ):
             safe_response = _speech_safe_response(response)
-            speech_engine.speak_async(safe_response, language=tts_language)
+            with stage_timer("tts_first_word", lang=tts_language or "unknown") as tts_timing:
+                speech_engine.speak_async(safe_response, language=tts_language)
+            timing_parts["tts"] = tts_timing.elapsed
     finally:
-        metrics.record_stage("pipeline", time.perf_counter() - pipeline_started, success=bool(text) and route_success)
+        total_elapsed = time.perf_counter() - pipeline_started
+        metrics.record_stage("pipeline", total_elapsed, success=bool(text) and route_success)
+        if turn_intent == "LLM_QUERY":
+            record_stage_timing("e2e_llm_query", total_elapsed, lang=detected_language or "unknown")
+        log_turn_summary(
+            total_elapsed,
+            timing_parts,
+            lang=detected_language or "unknown",
+            intent=turn_intent or "unknown",
+        )
         _safe_remove(audio_file)
         # Open a follow-up window whenever a real utterance was processed.
         # The main thread's listen_for_wake_word() will exit on this signal
@@ -959,36 +983,51 @@ def _process_utterance(audio_file, pipeline_started, wake_source=None, capture_s
 
 
 def _cleanup_stale_temp_files():
-    """Remove leftover jarvis_utterance_*.wav from the temp directory."""
+    """Remove stale utterance and partial-transcription WAVs created by Jarvis."""
     temp_dir = tempfile.gettempdir()
-    pattern = os.path.join(temp_dir, "jarvis_utterance_*.wav")
     removed = 0
-    for path in glob.glob(pattern):
-        try:
-            os.remove(path)
-            removed += 1
-        except Exception:
-            pass
+    for filename_pattern in ("jarvis_utterance_*.wav", "jarvis_partial_*.wav"):
+        pattern = os.path.join(temp_dir, filename_pattern)
+        for path in glob.glob(pattern):
+            try:
+                os.remove(path)
+                removed += 1
+            except Exception:
+                pass
     if removed:
         logger.info("Cleaned up %d stale temp audio file(s).", removed)
 
 
 def _run_doctor_diagnostics(trigger):
     started = time.perf_counter()
+    doctor_logger = get_logger("doctor")
     try:
         payload = collect_diagnostics(include_model_load_checks=bool(DOCTOR_INCLUDE_MODEL_LOAD_CHECKS))
         ok = bool(payload.get("ok"))
         metrics.record_diagnostic(f"doctor_{trigger}", ok, time.perf_counter() - started)
-        encoded = json.dumps(payload, ensure_ascii=True)
-        if len(encoded) > 2000:
-            encoded = encoded[:1997] + "..."
-        logger.info("Doctor diagnostics (%s): %s", trigger, encoded)
-        if not ok:
-            logger.warning("Doctor diagnostics reported failures for trigger=%s", trigger)
+        doctor_logger.debug(
+            "Doctor diagnostics (%s): %s",
+            trigger,
+            json.dumps(payload, ensure_ascii=False, sort_keys=True),
+        )
+        doctor_logger.info(
+            "Doctor: %d/%d checks OK (required %d/%d)",
+            int(payload.get("ok_count") or 0),
+            int(payload.get("check_count") or 0),
+            int(payload.get("required_ok_count") or 0),
+            int(payload.get("required_check_count") or 0),
+        )
+        failing = [
+            str(row.get("name") or "unknown")
+            for row in payload.get("checks", [])
+            if not row.get("ok")
+        ]
+        if failing:
+            doctor_logger.warning("Doctor failures: %s", ", ".join(failing) or "unknown")
         return payload
     except Exception as exc:
         metrics.record_diagnostic(f"doctor_{trigger}", False, time.perf_counter() - started)
-        logger.warning("Doctor diagnostics failed for trigger=%s: %s", trigger, exc)
+        doctor_logger.warning("Doctor diagnostics failed for trigger=%s: %s", trigger, exc)
         return {
             "ok": False,
             "error": str(exc),
@@ -997,12 +1036,31 @@ def _run_doctor_diagnostics(trigger):
 
 
 def _preload_stt_model():
-    """Warm the active STT runtime backend during startup prewarm."""
+    """Warm only the latency-critical STT model during startup."""
     try:
-        preload_snapshot = stt_runtime.preload_runtime_models()
-        logger.info("STT preload complete: %s", preload_snapshot)
+        preload_snapshot = stt_runtime.preload_critical_model()
+        logger.debug("Critical STT preload complete: %s", preload_snapshot)
     except Exception as exc:
         logger.warning("STT model preload failed (will load on first use): %s", exc)
+
+
+def _preload_optional_stt_models():
+    """Warm partial-transcription and language-detection models off-path."""
+    try:
+        preload_snapshot = stt_runtime.preload_optional_models()
+        logger.debug("Optional STT preload complete: %s", preload_snapshot)
+    except Exception as exc:
+        logger.warning("Optional STT preload failed (will load on first use): %s", exc)
+
+
+def _prewarm_streaming_vad():
+    if not prewarm_streaming_vad():
+        logger.debug("Streaming VAD prewarm unavailable; it will retry on first recording.")
+
+
+def _prewarm_batch_vad():
+    if not prewarm_batch_vad():
+        logger.debug("Batch VAD prewarm unavailable; it will retry on first speech guard.")
 
 
 
@@ -1024,12 +1082,34 @@ def _prewarm_llm():
     """Send a minimal prompt to Ollama so the model is loaded into memory before the user speaks."""
     try:
         from llm.ollama_client import ask_llm
-        warmup_response = ask_llm("Hi", num_ctx=64)
+        warmup_response = ask_llm(
+            "Hi",
+            num_ctx=64,
+            timeout_seconds=8.0,
+            allow_fallbacks=False,
+        )
         if _is_llm_prewarm_failure(warmup_response):
             raise RuntimeError(warmup_response)
         logger.info("LLM prewarmed successfully.")
     except Exception as exc:
         logger.warning("LLM prewarm failed (will load on first query): %s", exc)
+
+
+def _prepare_llm_runtime():
+    """Start Ollama, select/verify the runtime model, then warm one request."""
+    _ensure_ollama_running()
+    _detect_and_set_runtime_model()
+    _prewarm_llm()
+
+
+def _start_knowledge_base_auto_sync():
+    if not KB_AUTO_SYNC_ENABLED:
+        return
+    ok, message = knowledge_base_service.start_auto_sync()
+    if ok:
+        logger.debug("Knowledge-base auto-sync startup: %s", message)
+    else:
+        logger.warning("Knowledge-base auto-sync startup skipped: %s", message)
 
 
 
@@ -1096,7 +1176,7 @@ def _preload_wake_word_runtime():
     try:
         snapshot = preload_runtime_wake_word()
         metrics.record_stage("wake_word_prewarm", time.perf_counter() - started, success=True)
-        logger.info("Wake-word preload complete: %s", snapshot)
+        logger.debug("Wake-word preload complete: %s", snapshot)
     except Exception as exc:
         metrics.record_stage("wake_word_prewarm", time.perf_counter() - started, success=False)
         logger.warning("Wake-word preload failed (will retry on first listen): %s", exc)
@@ -1110,9 +1190,9 @@ def _prewarm_tts():
         warmed, backend = speech_engine.prewarm(preferred_language=preferred_language)
         metrics.record_stage("tts_prewarm", time.perf_counter() - started, success=bool(warmed))
         if warmed:
-            logger.info("TTS prewarmed successfully (%s).", backend)
+            logger.debug("TTS prewarmed successfully (%s).", backend)
         else:
-            logger.info("TTS prewarm skipped/unavailable (%s).", backend)
+            logger.debug("TTS prewarm skipped/unavailable (%s).", backend)
     except Exception as exc:
         metrics.record_stage("tts_prewarm", time.perf_counter() - started, success=False)
         logger.warning("TTS prewarm failed (will initialize on first response): %s", exc)
@@ -1143,9 +1223,9 @@ def _prewarm_parser_nlp():
     success = bool(parser_ready)
     metrics.record_stage("parser_nlp_prewarm", time.perf_counter() - started, success=success)
     if parser_ready and keyword_nlu_ready:
-        logger.info("Parser + keyword NLU prewarmed successfully.")
+        logger.debug("Parser + keyword NLU prewarmed successfully.")
     elif parser_ready:
-        logger.info("Parser prewarmed successfully (keyword NLU unavailable).")
+        logger.debug("Parser prewarmed successfully (keyword NLU unavailable).")
 
 
 def _prewarm_semantic_router():
@@ -1156,9 +1236,9 @@ def _prewarm_semantic_router():
         ok = sr_prewarm()
         metrics.record_stage("semantic_router_prewarm", time.perf_counter() - started, success=ok)
         if ok:
-            logger.info("Semantic router prewarmed successfully.")
+            logger.debug("Semantic router prewarmed successfully.")
         else:
-            logger.info("Semantic router prewarm skipped (unavailable).")
+            logger.debug("Semantic router prewarm skipped (unavailable).")
     except Exception as exc:
         metrics.record_stage("semantic_router_prewarm", time.perf_counter() - started, success=False)
         logger.warning("Semantic router prewarm failed (will try on first command): %s", exc)
@@ -1228,7 +1308,7 @@ def _ensure_model_available(model_name, ollama_url):
             models = [m.get("name", "") for m in r.json().get("models", [])]
             # Check if model is already available (exact or prefix match)
             if any(model_name in m for m in models):
-                logger.info("Model '%s' is available in Ollama.", model_name)
+                logger.debug("Model '%s' is available in Ollama.", model_name)
                 return
         logger.info("Model '%s' not found locally, pulling...", model_name)
         _pull_model(model_name)
@@ -1330,99 +1410,198 @@ def _play_follow_up_chime() -> None:
         pass  # Non-Windows or winsound absent — silent fallback
 
 
+def _speak_startup_greeting():
+    """Start the configured bilingual greeting without blocking the wake loop."""
+    if not GREETING_ENABLED or not speech_engine.is_enabled():
+        return False
+
+    configured_language = str(GREETING_LANGUAGE or "en").strip().lower()
+    if configured_language == "auto":
+        language = "ar" if str(STT_LANGUAGE_HINT or "").strip().lower() == "ar" else "en"
+    else:
+        language = configured_language if configured_language in {"ar", "en"} else "en"
+
+    text = GREETING_TEXT_AR if language == "ar" else GREETING_TEXT_EN
+    text = str(text or "").strip()
+    if not text:
+        return False
+
+    try:
+        started, _ = speech_engine.speak_async(text, language=language)
+        if started:
+            get_logger("startup").info("Greeting spoken (lang=%s)", language)
+        return bool(started)
+    except Exception as exc:
+        get_logger("startup").warning("Startup greeting failed: %s", exc)
+        return False
+
+
 def _calibrate_baseline_noise():
     """Measure ambient noise floor before any TTS plays; used for echo threshold."""
-    logger.info("Baseline noise calibration skipped (echo cancel disabled for STT debugging).")
+    logger.debug("Baseline noise calibration skipped (echo cancel disabled for STT debugging).")
     return
 
 
 def _run_startup_prewarm_blocking():
-    # Measure ambient noise before TTS or LLM prewarm to avoid contamination.
+    section("Startup")
     _calibrate_baseline_noise()
 
-    _ensure_ollama_running()
-    _detect_and_set_runtime_model()
-
-    tasks = [
+    critical_tasks = [
         ("wake_word", _preload_wake_word_runtime),
         ("stt", _preload_stt_model),
+        ("streaming_vad", _prewarm_streaming_vad),
+        ("batch_vad", _prewarm_batch_vad),
     ]
+    if TTS_PREWARM_ENABLED:
+        critical_tasks.append(("tts", _prewarm_tts))
+
+    background_tasks = [("stt_optional", _preload_optional_stt_models)]
+    if STARTUP_PARSER_NLP_PREWARM_ENABLED:
+        background_tasks.append(("parser_nlp", _prewarm_parser_nlp))
+    if SEMANTIC_ROUTER_ENABLED:
+        target = critical_tasks if PREWARM_SEMANTIC_ROUTER_BLOCKING else background_tasks
+        target.append(("semantic_router", _prewarm_semantic_router))
+    llm_target = critical_tasks if PREWARM_LLM_BLOCKING else background_tasks
+    llm_target.append(("llm", _prepare_llm_runtime))
+    if KB_AUTO_SYNC_ENABLED:
+        background_tasks.append(("knowledge_base", _start_knowledge_base_auto_sync))
+    if DOCTOR_STARTUP_ENABLED and DOCTOR_STARTUP_ASYNC:
+        background_tasks.append(("doctor", lambda: _run_doctor_diagnostics("startup")))
+
+    if not STARTUP_BACKGROUND_PREWARM_ENABLED:
+        critical_tasks.extend(
+            task for task in background_tasks if task[0] not in {"knowledge_base", "doctor"}
+        )
+        background_tasks = []
+
     cpu_cores = max(1, int(os.cpu_count() or 1))
     allow_sequential_prewarm = cpu_cores <= 4
-    allow_extended_prewarm = cpu_cores >= 6
-    allow_heavy_prewarm = cpu_cores >= 10
-
-    if STARTUP_PARSER_NLP_PREWARM_ENABLED and allow_extended_prewarm:
-        tasks.append(("parser_nlp", _prewarm_parser_nlp))
-    if SEMANTIC_ROUTER_ENABLED and allow_heavy_prewarm:
-        tasks.append(("semantic_router", _prewarm_semantic_router))
-    if TTS_PREWARM_ENABLED and allow_extended_prewarm:
-        tasks.append(("tts", _prewarm_tts))
-
-    if not tasks:
-        return
 
     logger.info(
-        "Startup prewarm started (cpu_cores=%d, sequential=%s, extended=%s, heavy=%s); waiting before wake-word listening begins.",
+        "Critical warmup started (cpu_cores=%d, sequential=%s).",
         cpu_cores,
         allow_sequential_prewarm,
-        allow_extended_prewarm,
-        allow_heavy_prewarm,
     )
     started = time.perf_counter()
+    warmup_rows = []
+
+    def _run_timed_task(task_name, task_fn):
+        task_started = time.perf_counter()
+        try:
+            return task_fn()
+        finally:
+            warmup_rows.append((task_name, time.perf_counter() - task_started))
 
     if allow_sequential_prewarm:
-        for task_name, task_fn in tasks:
+        for task_name, task_fn in critical_tasks:
             try:
-                task_fn()
+                _run_timed_task(task_name, task_fn)
             except Exception as exc:
-                logger.warning("Startup prewarm task '%s' crashed: %s", task_name, exc)
+                logger.warning("Critical warmup task '%s' crashed: %s", task_name, exc)
     else:
         with ThreadPoolExecutor(
-            max_workers=max(1, len(tasks)),
-            thread_name_prefix="jarvis-startup-prewarm",
+            max_workers=max(1, len(critical_tasks)),
+            thread_name_prefix="jarvis-critical-prewarm",
         ) as prewarm_executor:
             futures = {
-                prewarm_executor.submit(task_fn): task_name
-                for task_name, task_fn in tasks
+                prewarm_executor.submit(_run_timed_task, task_name, task_fn): task_name
+                for task_name, task_fn in critical_tasks
             }
             for future in as_completed(futures):
                 task_name = futures[future]
                 try:
                     future.result()
                 except Exception as exc:
-                    logger.warning("Startup prewarm task '%s' crashed: %s", task_name, exc)
+                    logger.warning("Critical warmup task '%s' crashed: %s", task_name, exc)
 
-    logger.info(
-        "Startup prewarm finished in %.2fs; entering wake-word loop.",
-        time.perf_counter() - started,
+    total_elapsed = time.perf_counter() - started
+    task_order = {name: index for index, (name, _) in enumerate(critical_tasks)}
+    ordered_rows = sorted(warmup_rows, key=lambda row: task_order[row[0]])
+    log_warmup_table(
+        [("Task", "Seconds")]
+        + [(name, f"{elapsed:.2f}") for name, elapsed in ordered_rows]
+        + [("TOTAL", f"{total_elapsed:.2f}")]
+    )
+    get_logger("startup").info("Critical warmup done in %.2fs — listening", total_elapsed)
+    kv(
+        "startup",
+        stt=WHISPER_MODEL,
+        partial=STT_PARTIAL_WHISPER_MODEL,
+        wake=WAKE_WORD_MODE,
+        tts=TTS_DEFAULT_BACKEND,
+        router=(
+            "loaded"
+            if PREWARM_SEMANTIC_ROUTER_BLOCKING or not STARTUP_BACKGROUND_PREWARM_ENABLED
+            else "background"
+        ),
     )
 
+    if not background_tasks:
+        return None
+    def _run_background_tasks():
+        background_started = time.perf_counter()
+        names = [name for name, _ in background_tasks]
 
-def _start_background_llm_prewarm():
-    """Warm the LLM in the background so wake-word listening can start immediately."""
-    thread = threading.Thread(target=_prewarm_llm, name="jarvis-llm-prewarm", daemon=True)
+        def _run_background_task(task_name, task_fn):
+            try:
+                task_fn()
+            except Exception as exc:
+                logger.warning("Background warmup task '%s' crashed: %s", task_name, exc)
+
+        workers = [
+            threading.Thread(
+                target=_run_background_task,
+                args=(task_name, task_fn),
+                name=f"jarvis-background-{task_name}",
+                daemon=True,
+            )
+            for task_name, task_fn in background_tasks
+        ]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join()
+        get_logger("startup").info(
+            "Background warmup done in %.2fs (%s)",
+            time.perf_counter() - background_started,
+            ", ".join(names),
+        )
+
+    thread = threading.Thread(
+        target=_run_background_tasks,
+        name="jarvis-background-prewarm-coordinator",
+        daemon=True,
+    )
     thread.start()
     return thread
 
 
 def run():
+    section("Jarvis")
+    kv(
+        "startup",
+        model=LLM_MODEL,
+        tier="auto" if LLM_AUTO_SELECT_MODEL else "configured",
+    )
+    kv(
+        "startup",
+        followup=FOLLOWUP_ENABLED,
+        barge_in=BARGE_IN_VAD_ENABLED,
+    )
     shutdown_event = setup_shutdown()
     _cleanup_stale_temp_files()
     initialize_command_services()
     stt_runtime.set_runtime_stt_settings(language_hint="auto")
 
-    # Block startup until warm-up completes so wake-word listening begins on a fully loaded runtime.
+    # Only latency-critical audio components block listening. Optional models,
+    # Ollama, knowledge sync, and doctor diagnostics continue in the background.
     _run_startup_prewarm_blocking()
 
-    if KB_AUTO_SYNC_ENABLED:
-        ok, message = knowledge_base_service.start_auto_sync()
-        if ok:
-            logger.info("Knowledge-base auto-sync startup: %s", message)
-        else:
-            logger.warning("Knowledge-base auto-sync startup skipped: %s", message)
-
-    if DOCTOR_STARTUP_ENABLED:
+    if not STARTUP_BACKGROUND_PREWARM_ENABLED:
+        _start_knowledge_base_auto_sync()
+    if DOCTOR_STARTUP_ENABLED and (
+        not DOCTOR_STARTUP_ASYNC or not STARTUP_BACKGROUND_PREWARM_ENABLED
+    ):
         _run_doctor_diagnostics("startup")
 
     doctor_interval_seconds = max(0.0, float(DOCTOR_SCHEDULE_INTERVAL_SECONDS))
@@ -1439,7 +1618,8 @@ def run():
             "Use `chcp 65001` and set `PYTHONUTF8=1` before starting Jarvis.",
             output_encoding or "unknown",
         )
-    logger.info("Jarvis started")
+    get_logger("startup").info("Jarvis ready — listening.")
+    _speak_startup_greeting()
 
     try:
         while not shutdown_event.is_set():
@@ -1464,13 +1644,16 @@ def run():
                 # listener entirely.  The dialogue manager's state acts as the
                 # gate; no need to run the ONNX wake-word model for this turn.
                 wake_source = "follow_up"
+                wake_elapsed = 0.0
                 metrics.record_stage("wake_word", 0.0, success=True)
             else:
                 try:
                     wake_source = listen_for_wake_word()
-                    metrics.record_stage("wake_word", time.perf_counter() - wake_started, success=True)
+                    wake_elapsed = time.perf_counter() - wake_started
+                    metrics.record_stage("wake_word", wake_elapsed, success=True)
                 except RuntimeError as exc:
-                    metrics.record_stage("wake_word", time.perf_counter() - wake_started, success=False)
+                    wake_elapsed = time.perf_counter() - wake_started
+                    metrics.record_stage("wake_word", wake_elapsed, success=False)
                     logger.error("Wake word unavailable: %s", exc)
                     print("Wake word/audio stack is unavailable in this environment.")
                     _run_text_fallback_loop()
@@ -1513,23 +1696,24 @@ def run():
                 dialogue_manager.transition(DialogueState.LISTENING)
                 logger.info("Wake word detected via %s", wake_source or "unknown")
             pipeline_started = time.perf_counter()
+            with stage_timer("wake_to_stt_start", source=wake_source or "unknown") as wake_to_stt_timing:
+                in_flight = _prune_futures(in_flight)
+                busy = len(in_flight) >= max(1, int(REALTIME_MAX_PENDING_UTTERANCES))
+                if busy and REALTIME_DROP_WHEN_BUSY:
+                    logger.warning("Dropping wake event due to pipeline backpressure.")
+                    metrics.record_stage("backpressure_drop", 0.0, success=False)
+                    continue
 
-            in_flight = _prune_futures(in_flight)
-            busy = len(in_flight) >= max(1, int(REALTIME_MAX_PENDING_UTTERANCES))
-            if busy and REALTIME_DROP_WHEN_BUSY:
-                logger.warning("Dropping wake event due to pipeline backpressure.")
-                metrics.record_stage("backpressure_drop", 0.0, success=False)
-                continue
+                audio_file = _create_utterance_audio_file()
 
-            audio_file = _create_utterance_audio_file()
+                # Task 1.3: create pipeline before recording so partials are
+                # processed concurrently while the user is still speaking.
+                concurrent_pipeline = ConcurrentPipeline(
+                    executor,
+                    language_hint=_resolve_stt_language_hint(wake_source=wake_source) or "",
+                )
+
             record_started = time.perf_counter()
-
-            # Task 1.3: create pipeline before recording so partials are
-            # processed concurrently while the user is still speaking.
-            concurrent_pipeline = ConcurrentPipeline(
-                executor,
-                language_hint=_resolve_stt_language_hint(wake_source=wake_source) or "",
-            )
 
             _partial_latency_recorded = False
 
@@ -1541,22 +1725,23 @@ def run():
                     _partial_latency_recorded = True
                     latency_tracker.record("stt_partial_latency", time.perf_counter() - record_started)
 
-            capture = record_utterance_streaming(
-                filename=audio_file,
-                max_duration=MAX_RECORD_DURATION,
-                vad_mode="chat" if wake_source == "follow_up" else "command",
-                language_hint="auto",
-                start_timeout_seconds=(
-                    max(1.0, dialogue_manager.time_remaining())
-                    if wake_source == "follow_up"
-                    else None
-                ),
-                enable_partials=True,
-                on_partial=_pipeline_partial,
-            )
+            with stage_timer("recording", source=wake_source or "unknown") as recording_timing:
+                capture = record_utterance_streaming(
+                    filename=audio_file,
+                    max_duration=MAX_RECORD_DURATION,
+                    vad_mode="chat" if wake_source == "follow_up" else "command",
+                    language_hint="auto",
+                    start_timeout_seconds=(
+                        max(1.0, dialogue_manager.time_remaining())
+                        if wake_source == "follow_up"
+                        else None
+                    ),
+                    enable_partials=True,
+                    on_partial=_pipeline_partial,
+                )
             metrics.record_stage(
                 "record_audio",
-                time.perf_counter() - record_started,
+                recording_timing.elapsed,
                 success=bool(capture.get("speech_detected")),
             )
 
@@ -1579,15 +1764,22 @@ def run():
                     wake_source,
                     capture,
                     concurrent_pipeline,
+                    {
+                        "wake": wake_elapsed,
+                        "rec": recording_timing.elapsed,
+                        "wake_to_stt": wake_to_stt_timing.elapsed,
+                    },
                 )
             )
     finally:
-        try:
-            knowledge_base_service.stop_auto_sync()
-        except Exception:
-            pass
-        perform_shutdown_cleanup()
-        executor.shutdown(wait=False, cancel_futures=False)
+        with stage_timer("shutdown") as shutdown_timing:
+            try:
+                knowledge_base_service.stop_auto_sync()
+            except Exception:
+                pass
+            perform_shutdown_cleanup()
+            executor.shutdown(wait=False, cancel_futures=False)
+        get_logger("shutdown").info("Shutdown complete in %.2fs", shutdown_timing.elapsed)
 
 
 if __name__ == "__main__":

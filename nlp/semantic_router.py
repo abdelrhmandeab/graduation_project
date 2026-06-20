@@ -22,6 +22,7 @@ from nlp.entity_types import EntityType
 _router = None
 _loaded = False
 _load_failed = False
+ROUTER_READY = False
 
 
 _ROUTE_ENTITY_TYPES: dict[str, tuple[EntityType, ...]] = {
@@ -439,7 +440,7 @@ def _ensure_loaded() -> bool:
 
     Returns True if ready, False if unavailable.
     """
-    global _router, _loaded, _load_failed
+    global _router, _loaded, _load_failed, ROUTER_READY
 
     if _loaded:
         return _router is not None
@@ -484,9 +485,10 @@ def _ensure_loaded() -> bool:
             "np": np,
         }
         _loaded = True
+        ROUTER_READY = True
 
         elapsed = time.perf_counter() - started
-        logger.info(
+        logger.debug(
             "Semantic router loaded in %.2fs (%d routes, %d total utterances).",
             elapsed,
             len(routes),
@@ -506,7 +508,7 @@ def classify_semantic(text: str) -> Optional[Tuple[str, float]]:
     Returns (intent_name, confidence) or None if unavailable/below threshold.
     Confidence is the cosine similarity to the best-matching route.
     """
-    if not text or not _ensure_loaded() or _router is None:
+    if not text or not is_router_ready() or _router is None:
         return None
 
     try:
@@ -546,7 +548,12 @@ def get_route_entity_types(intent_name: str) -> tuple[EntityType, ...]:
 
 def is_available() -> bool:
     """Check if the semantic router is loaded and ready."""
-    return _loaded and _router is not None
+    return is_router_ready()
+
+
+def is_router_ready() -> bool:
+    """Return True only after the model and route index are fully loaded."""
+    return bool(ROUTER_READY and _loaded and _router is not None)
 
 
 def prewarm() -> bool:

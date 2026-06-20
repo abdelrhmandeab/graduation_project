@@ -94,7 +94,7 @@ class SearchIndexService:
                 daemon=True,
             )
             self._thread.start()
-            logger.info("Search index worker started")
+            logger.debug("Search index worker started")
             return success_result("Search index worker started.", debug_info={"running": True})
 
     def stop(self):

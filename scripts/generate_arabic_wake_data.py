@@ -10,7 +10,6 @@ with white noise and simple room reverb to improve robustness.
 import argparse
 import asyncio
 import io
-import os
 import random
 from pathlib import Path
 

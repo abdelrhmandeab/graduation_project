@@ -30,7 +30,6 @@ from core.config import (
     LLM_RESPONSE_CACHE_MAX_SIZE,
     LLM_RESPONSE_CACHE_TTL_SECONDS,
     NLU_ENTITY_EXTRACTION_ENABLED,
-    NLU_LLM_QUERY_EXTRACTION_ENABLED,
     RESPONSE_SHAPER_ENABLED,
     NLU_PARSER_FASTPATH_CONFIDENCE_FLOOR,
     NLU_PARSER_FASTPATH_ENABLED,
@@ -41,7 +40,6 @@ from core.config import (
     SEMANTIC_ROUTER_CONFIDENCE_THRESHOLD,
     LIVE_DATA_FORCE_QUESTIONS,
     WEB_SEARCH_ENABLED,
-    WEB_SEARCH_MAX_RESULTS,
     PERSONA_LENGTH_TARGET_ENABLED,
     PERSONA_RESPONSE_MAX_WORDS,
     RESPONSE_MODE_FEATURE_ENABLED,
@@ -54,7 +52,6 @@ from core.demo_mode import set_enabled as set_demo_mode
 from core.handlers import audit, batch, file_navigation
 from core.handlers.advanced_operations import (
     handle_batch_file_operation,
-    handle_command_chain,
     handle_semantic_search,
 )
 from core.handlers import job_queue as job_queue_handler
@@ -79,9 +76,13 @@ try:
 except Exception:
     _classify_keyword_intent = None
 try:
-    from nlp.semantic_router import classify_semantic as _classify_semantic
+    from nlp.semantic_router import (
+        classify_semantic as _classify_semantic,
+        is_router_ready as _is_semantic_router_ready,
+    )
 except Exception:
     _classify_semantic = None
+    _is_semantic_router_ready = None
 try:
     from nlp.nlu import understand as _nlu_understand
 except Exception:
@@ -205,11 +206,6 @@ def _select_parser_fastpath_assessment(source_text, parser_candidate, language):
     if confidence >= fastpath_gate:
         return assessment
     return None
-
-
-def _should_skip_nlu_llm_query(parser_candidate):
-    intent = str(getattr(parser_candidate, "intent", "") or "").strip().upper()
-    return intent == "LLM_QUERY" and not NLU_LLM_QUERY_EXTRACTION_ENABLED
 
 
 def _should_try_tool_tier(original_text, parser_candidate):
@@ -352,6 +348,9 @@ def _try_semantic_routing(source_text, parser_candidate):
     if intent != "LLM_QUERY":
         return None, meta
     if not SEMANTIC_ROUTER_ENABLED or _classify_semantic is None:
+        return None, meta
+    if _is_semantic_router_ready is None or not _is_semantic_router_ready():
+        meta["semantic_pending"] = True
         return None, meta
 
     meta["semantic_used"] = True
@@ -2024,7 +2023,7 @@ def _apply_egyptian_dialect_style(response_text, parsed, language):
     return text
 
 
-def _repair_low_value_llm_response(response_text, parsed, language, original_text, *, allow_llm_rewrite=True):
+def _repair_low_value_llm_response(response_text, parsed, language, original_text):
     """Replace low-value LLM responses with a direct assist-first fallback.
 
     No longer calls the LLM for rewrites — the improved model + slim prompt
@@ -3993,7 +3992,7 @@ def route_command(
                     )
                 )
                 _tool_success, _tool_message, _ = planner.plan_and_execute(
-                    raw_tool_calls, original_text, language
+                    raw_tool_calls, original_text, language_result.language
                 )
             else:
                 # Single tool call — direct dispatch, no planner overhead.

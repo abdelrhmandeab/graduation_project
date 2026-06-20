@@ -15,7 +15,7 @@ import asyncio
 import shutil
 import sys
 from pathlib import Path
-from typing import Iterable, Iterator, Sequence
+from typing import Iterator, Sequence
 
 import numpy as np
 import scipy.io.wavfile as wavfile
@@ -188,14 +188,11 @@ def _write_positive_and_negative_clips(
     train_count: int,
     val_count: int,
     sample_rate: int,
-    sample_length_seconds: float,
     voices: Sequence[str],
     user_positive_dir: Path | None = None,
     user_positive_val_ratio: float = 0.2,
 ) -> dict[str, Path]:
     """Generate the training and validation WAV clips used by the trainer."""
-    sample_length = int(round(sample_rate * sample_length_seconds))
-
     positive_train_dir = output_root / "positive_train"
     positive_val_dir = output_root / "positive_val"
     negative_train_dir = output_root / "negative_train"
@@ -476,7 +473,6 @@ def main() -> None:
         train_count=args.train_count,
         val_count=args.val_count,
         sample_rate=16000,
-        sample_length_seconds=args.sample_length_seconds,
         voices=DEFAULT_VOICES,
         user_positive_dir=Path(args.user_positive_dir).resolve() if str(args.user_positive_dir).strip() else None,
         user_positive_val_ratio=args.user_positive_val_ratio,

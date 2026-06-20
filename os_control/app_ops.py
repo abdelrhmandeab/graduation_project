@@ -732,7 +732,7 @@ def open_app_result(app_name):
                 error=error,
             )
             try:
-                from core.metrics import log_structured
+                from core.logger import log_structured
 
                 log_structured("open_app", success=False, target=target, attempts=attempts)
             except Exception:
@@ -759,7 +759,7 @@ def open_app_result(app_name):
             },
         )
         try:
-            from core.metrics import log_structured
+            from core.logger import log_structured
 
             log_structured("open_app", success=True, target=target, attempts=attempts)
         except Exception:
@@ -915,7 +915,7 @@ def refresh_app_catalog_result(force=False):
 
     if not FEATURE_FLAGS.get("AUTO_APP_DISCOVERY_ENABLED", True):
         try:
-            from core.metrics import log_structured
+            from core.logger import log_structured
 
             log_structured("app_catalog_refresh", success=False, reason="feature_disabled")
         except Exception:
@@ -930,7 +930,7 @@ def refresh_app_catalog_result(force=False):
             details={"force": bool(force), "app_count": len(_APP_CATALOG)},
         )
         try:
-            from core.metrics import log_structured
+            from core.logger import log_structured
 
             log_structured("app_catalog_refresh", success=True, force=bool(force), app_count=len(_APP_CATALOG))
         except Exception:
@@ -943,7 +943,7 @@ def refresh_app_catalog_result(force=False):
         logger.error("App catalog rescan failed: %s", exc)
         log_action("app_catalog_refresh", "failed", details={"force": bool(force)}, error=exc)
         try:
-            from core.metrics import log_structured
+            from core.logger import log_structured
 
             log_structured("app_catalog_refresh", success=False, force=bool(force))
         except Exception:
