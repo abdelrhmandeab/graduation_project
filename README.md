@@ -162,6 +162,3 @@ tools/        — weather (Open-Meteo), web_search (DuckDuckGo)
 - **Bilingual**: Parser, router, handlers, and responses fully support English + Egyptian Arabic
 - **Error resilience**: Graceful fallbacks for missing packages (pyperclip, pywin32, ddgs, sentence-transformers, etc.)
 - **Dependency tiers**: Choose `requirements.txt` (full), `requirements-minimal.txt` (voice only), or `requirements-full.txt` (everything)
-
-
-test for commit
