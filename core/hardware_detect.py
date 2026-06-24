@@ -48,7 +48,6 @@ def detect_gpu_available(ollama_base_url="http://localhost:11434"):
             models = data.get("models", [])
             for m in models:
                 # If any model is using a GPU layer, GPU is available
-                details = m.get("details", {}) or {}
                 size_vram = m.get("size_vram", 0)
                 if size_vram and size_vram > 0:
                     return True

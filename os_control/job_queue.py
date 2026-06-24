@@ -43,7 +43,7 @@ class JobQueueService:
                 daemon=True,
             )
             self._thread.start()
-        logger.info("Job queue worker started")
+        logger.debug("Job queue worker started")
         return success_result("Job queue worker started.", debug_info={"running": True})
 
     def stop(self):

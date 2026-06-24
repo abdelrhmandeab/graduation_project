@@ -155,19 +155,10 @@ def _classify_language_by_script(text: str) -> str:
     return ""
 
 
-def _language_codes_from_hint(language_hint: Optional[str]) -> List[str]:
-    hint = _normalize_detected_language(str(language_hint or "auto"))
-    if hint == "ar":
-        return ["ar-EG", "en-US"]
-    if hint == "en":
-        return ["en-US", "ar-EG"]
-    return ["ar-EG", "en-US"]
-
-
 def _record_stt_metric(backend: str, latency_ms: float, text: str) -> None:
     stage_name = f"stt_{backend}"
     try:
-        metrics.record_stage(stage_name, float(latency_ms), success=bool(text.strip()))
+        metrics.record_stage(stage_name, float(latency_ms) / 1000.0, success=bool(text.strip()))
     except Exception:
         pass
 
@@ -232,7 +223,7 @@ def _get_local_whisper_model() -> Any:
         from faster_whisper import WhisperModel
 
         _LOCAL_MODEL = WhisperModel(str(WHISPER_MODEL), device="cpu", compute_type="int8")
-        logger.info("Loaded local faster-whisper model '%s'", WHISPER_MODEL)
+        logger.debug("Loaded local faster-whisper model '%s'", WHISPER_MODEL)
         return _LOCAL_MODEL
 
 
@@ -250,7 +241,7 @@ def _get_partial_whisper_model() -> Any:
 
         _PARTIAL_MODEL = WhisperModel(model_name, device="cpu", compute_type="int8")
         _PARTIAL_MODEL_NAME = model_name
-        logger.info("Loaded partial faster-whisper model '%s'", model_name)
+        logger.debug("Loaded partial faster-whisper model '%s'", model_name)
         return _PARTIAL_MODEL
 
 
@@ -273,19 +264,29 @@ def _get_language_detector_whisper_model() -> Any:
 
         _LANG_DETECT_MODEL = WhisperModel(detector_name, device="cpu", compute_type="int8")
         _LANG_DETECT_MODEL_NAME = detector_name
-        logger.info("Loaded STT language detector whisper model '%s'", detector_name)
+        logger.debug("Loaded STT language detector whisper model '%s'", detector_name)
         return _LANG_DETECT_MODEL
 
 
-def preload_runtime_models() -> Dict[str, Any]:
+def preload_critical_model() -> Dict[str, Any]:
     backend = get_runtime_stt_backend()
     local_loaded = bool(_LOCAL_MODEL)
-    detector_loaded = bool(_LANG_DETECT_MODEL)
-    partial_loaded = bool(_PARTIAL_MODEL)
 
     if backend in {_LOCAL_BACKEND, _HYBRID_BACKEND}:
         _get_local_whisper_model()
         local_loaded = True
+
+    return {
+        "backend": backend,
+        "local_model_loaded": local_loaded,
+    }
+
+
+def preload_optional_models() -> Dict[str, Any]:
+    backend = get_runtime_stt_backend()
+    detector_loaded = bool(_LANG_DETECT_MODEL)
+    partial_loaded = bool(_PARTIAL_MODEL)
+
     if backend == _HYBRID_BACKEND:
         _get_language_detector_whisper_model()
         detector_loaded = True
@@ -297,10 +298,16 @@ def preload_runtime_models() -> Dict[str, Any]:
 
     return {
         "backend": backend,
-        "local_model_loaded": local_loaded,
         "language_detector_model_loaded": detector_loaded,
         "partial_model_loaded": partial_loaded,
     }
+
+
+def preload_runtime_models() -> Dict[str, Any]:
+    """Compatibility wrapper that preloads both critical and optional STT models."""
+    snapshot = preload_critical_model()
+    snapshot.update(preload_optional_models())
+    return snapshot
 
 
 def _safe_partial_emit(on_partial: Optional[Callable[[str], None]], text: str) -> None:

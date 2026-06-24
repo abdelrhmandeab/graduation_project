@@ -3,7 +3,7 @@ import re
 from dataclasses import dataclass, field
 
 from core.config import CONFIRMATION_TOKEN_BYTES, CONFIRMATION_TOKEN_MIN_HEX_LEN
-from nlp.codeswitching import convert_arabic_numerals, normalize_codeswitched, normalize_arabic, normalize_arabic_preserve_digits
+from nlp.codeswitching import convert_arabic_numerals, normalize_codeswitched, normalize_arabic_preserve_digits
 from os_control.temporal_parser import parse_recurrence_spec
 from os_control.system_ops import normalize_system_action
 

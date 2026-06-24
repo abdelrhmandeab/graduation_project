@@ -55,7 +55,7 @@ pywin32>=306; platform_system == "Windows"
 
 # Knowledge base FAISS vector index (optional — falls back to in-memory cosine search)
 # Uncomment if you want fast KB lookups on large knowledge corpora.
-# faiss-cpu>=1.8.0
+faiss-cpu>=1.8.0
 
 # PDF reading for KB ingestion (optional)
-# pypdf>=4.0.0
+pypdf>=4.0.0

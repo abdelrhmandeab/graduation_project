@@ -1,10 +1,14 @@
-import logging
 import threading
 import time
 import re
 from collections import OrderedDict
+from contextlib import contextmanager
 
-_logger = logging.getLogger("jarvis")
+from core.config import TIMING_LOG_ENABLED
+from core.logger import get_logger, summary_table
+
+_logger = get_logger("timing")
+_thread_stage_timings = threading.local()
 
 
 def _percentile(values, p):
@@ -932,13 +936,71 @@ class LatencyTracker:
 latency_tracker = LatencyTracker()
 
 
-def log_structured(event_name: str, **payload) -> None:
-    """Emit a structured metric/log line for observability and post-deploy
-    telemetry. Keeps the implementation lightweight so tests and local
-    deployments can inspect the event stream via normal logging handlers.
-    """
+class _StageMeasurement:
+    def __init__(self):
+        self.elapsed = 0.0
+
+
+@contextmanager
+def stage_timer(stage: str, **fields):
+    """Measure one pipeline stage and feed the shared latency tracker."""
+    measurement = _StageMeasurement()
+    started = time.perf_counter()
     try:
-        _logger.info("METRIC_EVENT %s %s", str(event_name or "").strip(), payload or {})
-    except Exception:
-        # Never allow telemetry to raise during normal execution.
-        pass
+        yield measurement
+    finally:
+        measurement.elapsed = time.perf_counter() - started
+        record_stage_timing(stage, measurement.elapsed, **fields)
+
+
+def record_stage_timing(stage: str, elapsed: float, **fields) -> None:
+    latency_tracker.record(stage, elapsed)
+    latest = getattr(_thread_stage_timings, "latest", None)
+    if latest is None:
+        latest = {}
+        _thread_stage_timings.latest = latest
+    latest[str(stage)] = max(0.0, float(elapsed))
+    if TIMING_LOG_ENABLED:
+        suffix = " ".join(f"{key}={value}" for key, value in fields.items())
+        get_logger("timing").info(
+            "⏱ %-14s %6.2fs%s",
+            stage,
+            elapsed,
+            f" {suffix}" if suffix else "",
+        )
+
+
+def reset_thread_stage_timings() -> None:
+    _thread_stage_timings.latest = {}
+
+
+def get_thread_stage_timing(stage: str, default=0.0) -> float:
+    latest = getattr(_thread_stage_timings, "latest", {})
+    return max(0.0, float(latest.get(str(stage), default) or 0.0))
+
+
+def log_warmup_table(rows) -> None:
+    if not TIMING_LOG_ENABLED:
+        return
+    summary_table("Warmup", list(rows))
+
+
+def log_turn_summary(total, parts: dict, **fields) -> None:
+    if not TIMING_LOG_ENABLED:
+        return
+    ordered = ("wake", "rec", "stt", "route", "llm", "tts")
+    def _display_duration(value):
+        duration = max(0.0, float(value or 0.0))
+        return max(0.01, duration) if duration > 0.0 else 0.0
+
+    breakdown = " ".join(
+        f"{name} {_display_duration(parts.get(name)):.2f}"
+        for name in ordered
+    )
+    suffix = " ".join(f"{key}={value}" for key, value in fields.items() if value not in (None, ""))
+    get_logger("timing").info(
+        "⏱ turn wake→speak %.2fs │ %s%s",
+        max(0.0, float(total or 0.0)),
+        breakdown,
+        f" │ {suffix}" if suffix else "",
+    )

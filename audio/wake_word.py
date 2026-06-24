@@ -214,7 +214,6 @@ def _get_arabic_onnx_model(model_path: str):
         return _arabic_onnx_model
 
     try:
-        import openwakeword
         from openwakeword.model import Model
     except Exception as exc:
         raise RuntimeError(
@@ -228,7 +227,7 @@ def _get_arabic_onnx_model(model_path: str):
     _ensure_onnx_resources()
     _arabic_onnx_model = Model(wakeword_models=[str(path)], inference_framework="onnx")
     _arabic_onnx_model_path = candidate_path
-    logger.info("Loaded custom Arabic wake-word ONNX model from %s", candidate_path)
+    logger.debug("Loaded custom Arabic wake-word ONNX model from %s", candidate_path)
     return _arabic_onnx_model
 
 

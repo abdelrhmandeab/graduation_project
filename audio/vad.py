@@ -148,7 +148,7 @@ class SileroVAD:
                 self._session = ort.InferenceSession(str(self.model_path), sess_options=session_options)
             self._fallback_only = False
             self.reset()
-            logger.info("Loaded Silero VAD ONNX model from %s", self.model_path)
+            logger.debug("Loaded Silero VAD ONNX model from %s", self.model_path)
         except Exception as exc:
             self._session = None
             self._fallback_only = True

@@ -5,7 +5,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 import httpx
 
-from core.config import LLM_BACKEND, LLM_MODEL, LLM_OLLAMA_BASE_URL, LLM_TIMEOUT_SECONDS
+from core.config import LLM_MODEL, LLM_OLLAMA_BASE_URL, LLM_TIMEOUT_SECONDS
 from core.logger import logger
 
 _OLLAMA_BASE_URL = str(LLM_OLLAMA_BASE_URL or "http://localhost:11434").rstrip("/")

@@ -23,7 +23,6 @@ from os_control.native_ops import (
     adjust_system_volume_percent,
     adjust_system_brightness_percent,
     capture_primary_screen_screenshot,
-    get_system_brightness_percent,
     lock_workstation,
     set_system_volume_percent,
     set_system_brightness_percent,
@@ -33,7 +32,7 @@ from os_control.native_ops import (
 from os_control.policy import policy_engine
 from os_control.powershell_bridge import run_template
 from os_control.risk_policy import risk_tier_for_system
-from core.metrics import log_structured
+from core.logger import log_structured
 
 
 _KEYEVENTF_KEYUP = 0x0002
@@ -595,7 +594,6 @@ _NUMBER_ONES = {
     "nineteen": 19,
     "\u0635\u0641\u0631": 0,
     "\u0648\u0627\u062d\u062f": 1,
-    "\u0627\u062b\u0646\u064a\u0646": 2,
     "\u0627\u062b\u0646\u064a\u0646": 2,
     "\u062b\u0644\u0627\u062b\u0629": 3,
     "\u0627\u0631\u0628\u0639\u0629": 4,

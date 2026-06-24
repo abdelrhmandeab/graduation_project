@@ -6,7 +6,6 @@ Handles command chaining, batch file operations, and semantic search.
 import re
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
-from os_control.adapter_result import to_router_tuple
 from core.logger import logger
 
 
@@ -167,7 +166,6 @@ class SemanticSearchManager:
     def search(self, query: str, root: Optional[str] = None) -> Dict[str, Any]:
         """Perform semantic search on files."""
         import os
-        import glob
         
         if not root:
             root = os.path.expanduser("~")

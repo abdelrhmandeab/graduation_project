@@ -32,7 +32,7 @@ def draft_email(to="", subject="", body="", language=None):
         if subject:
             parts.append(("الموضوع" if _is_arabic_language(language) else "subject") + f": {subject}")
         try:
-            from core.metrics import log_structured
+            from core.logger import log_structured
 
             log_structured("email_compose_opened", app="Outlook", success=True, language=language)
         except Exception:
@@ -46,7 +46,7 @@ def draft_email(to="", subject="", body="", language=None):
     try:
         webbrowser.open("https://mail.google.com/mail/u/0/#compose")
         try:
-            from core.metrics import log_structured
+            from core.logger import log_structured
 
             log_structured("email_compose_opened", app="Gmail", success=True, language=language)
         except Exception:

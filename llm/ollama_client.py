@@ -12,7 +12,7 @@ from core.config import (
     LLM_TIMEOUT_SECONDS,
 )
 from core.logger import logger
-from core.metrics import metrics
+from core.metrics import metrics, record_stage_timing
 from llm.sentence_buffer import SentenceBuffer
 
 _OLLAMA_BASE_URL = str(LLM_OLLAMA_BASE_URL or "http://localhost:11434").rstrip("/")
@@ -94,7 +94,7 @@ def set_runtime_model(model_name, num_ctx=None, lightweight_num_ctx=None, tier=N
         _runtime_lightweight_num_ctx = int(lightweight_num_ctx)
     if tier is not None:
         _runtime_model_tier = str(tier).strip().lower()
-    logger.info(
+    logger.debug(
         "Runtime LLM model set to '%s' (tier=%s, num_ctx=%s, lightweight_num_ctx=%s)",
         _runtime_model,
         _runtime_model_tier or "auto",
@@ -162,22 +162,6 @@ def _resolve_model_candidates(primary_model: str):
     return ordered
 
 
-def _flush_sentence_buffer(buf, on_sentence):
-    """Emit any complete sentences from buf; return leftover fragment."""
-    text = buf.strip()
-    if not text:
-        return ""
-
-    chunks = detect_sentence_boundaries(text, is_arabic=bool(_ARABIC_CHAR_RE.search(text)))
-    if not chunks:
-        return buf
-
-    for chunk in chunks:
-        if chunk:
-            on_sentence(chunk)
-    return ""
-
-
 def detect_sentence_boundaries(text: str, is_arabic: bool) -> list[str]:
     """Split streamed text into speakable chunks.
 
@@ -222,6 +206,14 @@ def ask_llm_streaming(prompt, on_sentence=None, num_ctx=None, is_arabic=False):
     sb = SentenceBuffer(is_arabic=bool(is_arabic))
     hard_timeout_seconds = max(5.0, float(LLM_TIMEOUT_SECONDS or 30.0))
     hard_timeout_hit = False
+    first_token_recorded = False
+
+    def _record_first_token():
+        nonlocal first_token_recorded
+        if first_token_recorded:
+            return
+        first_token_recorded = True
+        record_stage_timing("llm_first_token", time.perf_counter() - started, model=model_name)
 
     effective_num_ctx = int(num_ctx or _runtime_num_ctx or LLM_OLLAMA_NUM_CTX)
     payload = _build_request_payload(model_name, prompt, effective_num_ctx, stream=True)
@@ -286,11 +278,13 @@ def ask_llm_streaming(prompt, on_sentence=None, num_ctx=None, is_arabic=False):
                             token = token[open_idx + len("<think>"):]
                             inside_think_block = True
                             if pre:
+                                _record_first_token()
                                 accumulated.append(pre)
                                 result = sb.add_token(pre)
                                 if result:
                                     on_sentence(result)
                 if token:
+                    _record_first_token()
                     accumulated.append(token)
                     result = sb.add_token(token)
                     if result:
@@ -356,16 +350,19 @@ def ask_llm_streaming(prompt, on_sentence=None, num_ctx=None, is_arabic=False):
         logger.error("LLM streaming failed: %s", exc)
         return "Sorry, I had an internal error."
     finally:
-        metrics.record_stage("llm", time.perf_counter() - started, success=success)
+        llm_elapsed = time.perf_counter() - started
+        metrics.record_stage("llm", llm_elapsed, success=success)
+        record_stage_timing("llm_generation", llm_elapsed, model=model_name)
 
 
-def ask_llm(prompt, num_ctx=None):
+def ask_llm(prompt, num_ctx=None, timeout_seconds=None, allow_fallbacks=True):
     started = time.perf_counter()
     success = False
     try:
         model_name = _resolve_model_name()
         effective_num_ctx = int(num_ctx or _runtime_num_ctx or LLM_OLLAMA_NUM_CTX)
-        candidates = _resolve_model_candidates(model_name)
+        candidates = _resolve_model_candidates(model_name) if allow_fallbacks else [model_name]
+        request_timeout = float(timeout_seconds or LLM_TIMEOUT_SECONDS)
         timeout_seen = False
         connect_seen = False
 
@@ -375,7 +372,7 @@ def ask_llm(prompt, num_ctx=None):
                 response = httpx.post(
                     _GENERATE_ENDPOINT,
                     json=payload,
-                    timeout=LLM_TIMEOUT_SECONDS,
+                    timeout=request_timeout,
                 )
             except httpx.TimeoutException:
                 timeout_seen = True
@@ -383,7 +380,7 @@ def ask_llm(prompt, num_ctx=None):
                     "LLM timeout after %.2fs (model=%s, timeout=%ss)",
                     time.perf_counter() - started,
                     candidate_model,
-                    LLM_TIMEOUT_SECONDS,
+                    request_timeout,
                 )
                 continue
             except httpx.ConnectError:
@@ -400,6 +397,7 @@ def ask_llm(prompt, num_ctx=None):
                 if _is_thinking_mode_model(candidate_model):
                     text = _strip_thinking_tags(text)
                 if text:
+                    record_stage_timing("llm_first_token", time.perf_counter() - started, model=candidate_model)
                     if idx > 0:
                         logger.warning("LLM fallback used: %s -> %s", model_name, candidate_model)
                     success = True
@@ -429,4 +427,6 @@ def ask_llm(prompt, num_ctx=None):
         logger.error("LLM failed: %s", exc)
         return "Sorry, I had an internal error."
     finally:
-        metrics.record_stage("llm", time.perf_counter() - started, success=success)
+        llm_elapsed = time.perf_counter() - started
+        metrics.record_stage("llm", llm_elapsed, success=success)
+        record_stage_timing("llm_generation", llm_elapsed, model=_resolve_model_name())

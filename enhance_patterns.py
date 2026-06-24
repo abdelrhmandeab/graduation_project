@@ -1,5 +1,4 @@
-﻿import re
-
+﻿
 # Read the file
 with open("core/command_parser.py", "r", encoding="utf-8") as f:
     content = f.read()

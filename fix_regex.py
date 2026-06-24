@@ -1,5 +1,4 @@
-﻿import sys
-import re
+﻿import re
 
 filepath = r"core/command_parser.py"
 with open(filepath, "r", encoding="utf-8") as f:
