@@ -58,6 +58,12 @@ def _env_list(key, default_values):
     return tuple(parts)
 
 
+# UI Bridge (WebSocket server for desktop UI)
+UI_BRIDGE_ENABLED = _env_bool("JARVIS_UI_BRIDGE_ENABLED", True)
+UI_BRIDGE_PORT = _env_int("JARVIS_UI_BRIDGE_PORT", 9720)
+UI_BRIDGE_HOST = _env("JARVIS_UI_BRIDGE_HOST", "127.0.0.1")
+
+
 # Audio
 SAMPLE_RATE = 16000
 MAX_RECORD_DURATION = max(3.0, min(20.0, _env_float("JARVIS_MAX_RECORD_DURATION", 8.0)))

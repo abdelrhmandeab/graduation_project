@@ -92,4 +92,10 @@ elevenlabs>=1.0.0
 pystray==0.19.5
 Pillow>=9.0.0
 
+# === TIER 6: DESKTOP UI BRIDGE (OPTIONAL) ===
+# WebSocket server connecting the engine to the desktop UI. Engine runs without these.
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+websockets>=15.0
+
 

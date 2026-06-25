@@ -29,4 +29,9 @@ if __name__ == "__main__":
             start_tray()
     except Exception:
         pass
+    try:
+        from ui.bridge import start_bridge
+        start_bridge()
+    except Exception:
+        pass
     run()

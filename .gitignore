@@ -28,3 +28,8 @@ models/
 input.wav
 jarvis_utterance_*.wav
 hf_e2e_test.wav
+
+# Desktop UI
+desktop/node_modules/
+desktop/dist/
+desktop/src-tauri/target/
