@@ -8,7 +8,6 @@ import wave
 import warnings
 
 from core.config import (
-    BARGE_IN_VAD_ENABLED,
     ELEVENLABS_API_KEY,
     ELEVENLABS_BASE_URL,
     TTS_ARABIC_SPOKEN_DIALECT,
@@ -33,7 +32,6 @@ from core.config import (
     TTS_QUALITY_MODE,
     TTS_SIMULATED_CHAR_DELAY,
 )
-from audio.barge_in import BargeInMonitor
 from core.logger import logger
 from core.metrics import metrics, record_stage_timing
 from core.persona import persona_manager
@@ -569,37 +567,6 @@ class SpeechEngine:
         self._edge_tts_unsupported_voices = set()
         self._elevenlabs_unavailable_logged = False
         self._enabled = bool(TTS_ENABLED)
-        # Phase 2.11 — VAD barge-in monitor (started/stopped around speak calls).
-        self._barge_in_monitor = BargeInMonitor(
-            on_barge_in=self._on_barge_in_detected,
-            is_active=self.is_speaking,
-        )
-
-    def _on_barge_in_detected(self):
-        """Stop active TTS when the VAD monitor flags user speech.
-
-        Runs on the monitor thread; ``interrupt()`` is thread-safe.
-        """
-        logger.info("Barge-in: stopping TTS so the user can speak.")
-        self.interrupt()
-        try:
-            metrics.record_stage("barge_in_interrupt", 0.0, success=True)
-        except Exception:
-            pass
-
-    def _start_barge_in_monitor(self):
-        if not BARGE_IN_VAD_ENABLED:
-            return
-        try:
-            self._barge_in_monitor.start()
-        except Exception as exc:
-            logger.debug("Could not start barge-in monitor: %s", exc)
-
-    def _stop_barge_in_monitor(self):
-        try:
-            self._barge_in_monitor.stop()
-        except Exception as exc:
-            logger.debug("Could not stop barge-in monitor: %s", exc)
 
     def _normalize_backend(self, backend):
         raw = str(backend or "auto").strip().lower()
@@ -694,10 +661,6 @@ class SpeechEngine:
             self._thread = None
             self._queue_thread = None
 
-        # Stop the barge-in monitor first so it doesn't fire while we're tearing
-        # the playback thread down.
-        self._stop_barge_in_monitor()
-
         if process is not None:
             try:
                 process.terminate()
@@ -735,8 +698,6 @@ class SpeechEngine:
         with self._lock:
             self._thread = thread
         thread.start()
-        # Start the VAD barge-in monitor so the user can talk over the assistant.
-        self._start_barge_in_monitor()
         return True, "Speech started."
 
     def speak_sentence_queue(self, sentences_iterator, language=None):
@@ -770,9 +731,6 @@ class SpeechEngine:
                         and self._queue_thread.ident == threading.current_thread().ident
                     ):
                         self._queue_thread = None
-                # Sentence queue done — release the barge-in monitor.
-                self._stop_barge_in_monitor()
-
         thread = threading.Thread(
             target=_run_sentence_queue,
             name="jarvis-speech-queue",
@@ -781,8 +739,6 @@ class SpeechEngine:
         with self._lock:
             self._queue_thread = thread
         thread.start()
-        # Phase 2.11 — barge-in monitor is shared across speak_async + queue paths.
-        self._start_barge_in_monitor()
         return True, "Speech queue started."
 
     def _resolve_backend(self):
@@ -1074,11 +1030,6 @@ class SpeechEngine:
                 queue_thread_active = bool(
                     self._queue_thread and self._queue_thread.is_alive()
                 )
-            # Stop the barge-in monitor only when no other speech path is still
-            # active — the queue path manages its own teardown.
-            if released_thread and not queue_thread_active:
-                self._stop_barge_in_monitor()
-
     def _speak_console(self, text, prefix):
         words = text.split()
         if not words:
@@ -1580,24 +1531,13 @@ class SpeechEngine:
 
         playback_rate = max(8000, int(sample_rate or 0))
 
-        # Report TTS RMS to the barge-in monitor so it can gate out speaker echo.
-        try:
-            import numpy as _np
-            _flat = _np.asarray(samples, dtype=_np.float32).reshape(-1)
-            _tts_rms = float(_np.sqrt(_np.mean(_np.square(_flat)))) if _flat.size else 0.0
-            self._barge_in_monitor.set_tts_rms(_tts_rms)
-        except Exception:
-            pass
-
         try:
             sd.stop()
             if blocking:
                 if self._stop_event.is_set():
                     sd.stop()
-                    self._barge_in_monitor.set_tts_rms(0.0)
                     return False
                 sd.play(samples, samplerate=playback_rate, blocking=True)
-                self._barge_in_monitor.set_tts_rms(0.0)
                 return True
 
             sd.play(samples, samplerate=playback_rate, blocking=False)
@@ -1607,7 +1547,6 @@ class SpeechEngine:
             while True:
                 if self._stop_event.is_set():
                     sd.stop()
-                    self._barge_in_monitor.set_tts_rms(0.0)
                     return False
                 if time.perf_counter() >= playback_deadline:
                     logger.warning("TTS playback watchdog reached; forcing stream stop")
@@ -1620,10 +1559,8 @@ class SpeechEngine:
                 if not stream or not getattr(stream, "active", False):
                     break
                 time.sleep(0.05)
-            self._barge_in_monitor.set_tts_rms(0.0)
             return True
         except Exception as exc:
-            self._barge_in_monitor.set_tts_rms(0.0)
             logger.error("Waveform playback failed: %s", exc)
             try:
                 sd.stop()

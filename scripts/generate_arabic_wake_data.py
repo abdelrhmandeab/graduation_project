@@ -1,10 +1,18 @@
-"""Generate Arabic wake-word training WAVs for openWakeWord.
+"""Generate unified English/Arabic wake-word WAVs for openWakeWord.
 
 Outputs 16 kHz mono WAVs organized as:
   <output_dir>/<keyword>/...
 
-The generated audio is synthesized with edge-tts Arabic voices and augmented
-with white noise and simple room reverb to improve robustness.
+Despite its legacy filename, this script now replaces the Arabic-only data
+flow and builds the unified ``jarvis_unified`` bilingual corpus. English text
+is synthesized only with English voices and Arabic text only with Arabic
+voices. Generated clips are augmented with white noise and simple room reverb.
+
+NOTES
+-----
+Old partial corpora under ``data/openwakeword/jarvis_ar/`` are user data. This
+script neither reads nor deletes them; remove or archive them manually only
+after the unified model has been validated.
 """
 
 import argparse
@@ -22,15 +30,49 @@ except Exception as exc:
     raise RuntimeError("edge-tts is required to run this script.") from exc
 
 
-DEFAULT_VOICES = [
+EN_VOICES = [
+    "en-US-GuyNeural",
+    "en-US-AriaNeural",
+    "en-GB-RyanNeural",
+    "en-US-ChristopherNeural",
+]
+AR_VOICES = [
     "ar-EG-SalmaNeural",
     "ar-EG-ShakirNeural",
     "ar-SA-HamedNeural",
 ]
-DEFAULT_PHRASES = [
+EN_POSITIVE_PHRASES = [
+    "hi jarvis",
+    "hey jarvis",
+    "hello jarvis",
+    "jarvis",
+]
+AR_POSITIVE_PHRASES = [
+    "جارفس",
+    "يا جارفس",
+    "اهلا جارفس",
+    "مرحبا جارفس",
     "جارفيس",
     "يا جارفيس",
+    "اهلا جارفيس",
+    "مرحبا جارفيس",
+    "أهلا جارفيس",
+    "مرحباً جارفيس",
 ]
+LANGUAGE_GROUPS = {
+    "en": EN_POSITIVE_PHRASES,
+    "ar": AR_POSITIVE_PHRASES,
+}
+VOICE_GROUPS = {
+    "en": EN_VOICES,
+    "ar": AR_VOICES,
+}
+DEFAULT_PHRASES = EN_POSITIVE_PHRASES + AR_POSITIVE_PHRASES
+DEFAULT_VOICES = EN_VOICES + AR_VOICES
+
+
+def _phrase_language(phrase: str) -> str:
+    return "ar" if any("\u0600" <= char <= "\u06ff" for char in str(phrase)) else "en"
 
 
 def _ensure_dir(path: Path):
@@ -110,7 +152,8 @@ async def _synthesize_phrase(text: str, voice: str) -> np.ndarray:
 async def generate_samples(
     *,
     phrases,
-    voices,
+    voices=None,
+    voice_groups=None,
     output_dir: Path,
     keyword: str,
     samples_per_phrase: int,
@@ -118,12 +161,27 @@ async def generate_samples(
     snr_db_choices,
     apply_reverb: bool,
 ):
+    """Synthesize clips, optionally selecting voices by phrase language.
+
+    ``voices`` preserves the legacy flat-list API. Passing ``voice_groups``
+    maps ``"en"`` and ``"ar"`` to their respective voices and prevents
+    cross-language synthesis.
+    """
     keyword_dir = output_dir / keyword
     _ensure_dir(keyword_dir)
 
+    if voice_groups is None and voices is None:
+        raise ValueError("Either voices or voice_groups must be provided")
+
     total = 0
     for phrase in phrases:
-        for voice in voices:
+        phrase_voices = voices
+        if voice_groups is not None:
+            phrase_voices = voice_groups.get(_phrase_language(phrase), ())
+        if not phrase_voices:
+            raise ValueError(f"No voices configured for phrase: {phrase!r}")
+
+        for voice in phrase_voices:
             for idx in range(samples_per_phrase):
                 audio, sr = await _synthesize_phrase(phrase, voice)
                 audio = _resample_linear(audio, sr, sample_rate)
@@ -146,9 +204,9 @@ async def generate_samples(
 
 
 def _parse_args():
-    parser = argparse.ArgumentParser(description="Generate Arabic wake-word training WAVs.")
+    parser = argparse.ArgumentParser(description="Generate unified English/Arabic wake-word training WAVs.")
     parser.add_argument("--output", default="data/openwakeword", help="Output root directory")
-    parser.add_argument("--keyword", default="jarvis_ar", help="Keyword folder name")
+    parser.add_argument("--keyword", default="jarvis_unified", help="Keyword folder name")
     parser.add_argument("--samples-per-phrase", type=int, default=20, help="Samples per phrase+voice")
     parser.add_argument("--sample-rate", type=int, default=16000, help="Target sample rate")
     parser.add_argument("--snr-db", default="18,22,26", help="Comma-separated SNR values")
@@ -168,7 +226,7 @@ def main():
     total = asyncio.run(
         generate_samples(
             phrases=DEFAULT_PHRASES,
-            voices=DEFAULT_VOICES,
+            voice_groups=VOICE_GROUPS,
             output_dir=output_dir,
             keyword=str(args.keyword),
             samples_per_phrase=max(1, int(args.samples_per_phrase)),

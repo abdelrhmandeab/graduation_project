@@ -10,9 +10,7 @@ then saves a calibration file at:
 
     data/wake_calibration/<username>.json
 
-The calibration offset is loaded automatically by wake_word.py on startup and
-adjusts the detection threshold so your voice triggers reliably without raising
-false-positive rate for other voices.
+The command prints the unified threshold to add to ``.env`` after scoring.
 """
 from __future__ import annotations
 
@@ -91,13 +89,14 @@ def _save_sample(audio: np.ndarray, username: str, index: int) -> pathlib.Path:
 def _score_samples(samples: list[np.ndarray]) -> list[float]:
     """Run each sample through the openWakeWord model and return peak scores."""
     try:
-        from audio.wake_word import _get_model, WAKE_WORD
+        from audio.wake_word import _get_unified_model
+        from core.config import WAKE_WORD_UNIFIED_ONNX_PATH
     except Exception as exc:
         print(f"WARNING: Could not load wake-word model: {exc}")
         return []
 
     try:
-        model = _get_model()
+        model = _get_unified_model(WAKE_WORD_UNIFIED_ONNX_PATH)
     except Exception as exc:
         print(f"WARNING: Wake-word model unavailable: {exc}")
         return []
@@ -113,10 +112,11 @@ def _score_samples(samples: list[np.ndarray]) -> list[float]:
             if len(chunk) < _CHUNK_SIZE:
                 break
             try:
-                preds = model.predict(chunk.reshape(1, -1))
-                score = preds.get(WAKE_WORD)
+                preds = model.predict(chunk)
+                prediction_key = next(iter(getattr(model, "prediction_buffer", {}) or {}), None)
+                score = preds.get(prediction_key) if prediction_key else None
                 if score is None and preds:
-                    score = max(preds.values())
+                    score = next(iter(preds.values()))
                 if score is not None:
                     peak = max(peak, float(score))
             except Exception:
@@ -152,7 +152,7 @@ def _save_calibration(username: str, scores: list[float], base_threshold: float)
         "min_peak_score": round(min_peak, 4),
         "base_threshold": round(base_threshold, 4),
         "threshold_offset": round(offset, 4),
-        "recommended_en_threshold": round(max(0.10, base_threshold + offset), 4),
+        "recommended_threshold": round(max(0.10, base_threshold + offset), 4),
     }
 
     calibration_path.write_text(json.dumps(calibration, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -161,43 +161,10 @@ def _save_calibration(username: str, scores: list[float], base_threshold: float)
 
 def _apply_calibration_to_env(username: str, calibration: dict) -> None:
     """Print the .env line the user should add, and optionally apply it."""
-    recommended = calibration.get("recommended_en_threshold", 0.35)
+    recommended = calibration.get("recommended_threshold", 0.55)
     print(f"\nRecommended threshold for your voice: {recommended:.3f}")
     print("Add this to your .env to apply permanently:")
-    print(f"  JARVIS_WAKE_WORD_EN_THRESHOLD={recommended:.3f}")
-    print(f"  JARVIS_WAKE_WORD_AR_THRESHOLD={recommended:.3f}")
-
-
-def load_calibration(username: str | None = None) -> dict | None:
-    """Load calibration for `username` (or current user). Returns dict or None."""
-    name = username or _get_username()
-    path = _CALIBRATION_DIR / f"{name}.json"
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-
-
-def apply_calibration_to_runtime(username: str | None = None) -> bool:
-    """Apply saved calibration offset to the runtime wake-word settings.
-
-    Called automatically at Jarvis startup if a calibration file exists.
-    Returns True if calibration was applied.
-    """
-    cal = load_calibration(username)
-    if cal is None:
-        return False
-    en_t = cal.get("recommended_en_threshold")
-    if en_t is None:
-        return False
-    try:
-        from audio.wake_word import set_runtime_wake_word_settings
-        set_runtime_wake_word_settings(en_threshold=float(en_t), ar_threshold=float(en_t))
-        return True
-    except Exception:
-        return False
+    print(f"  JARVIS_WAKE_WORD_THRESHOLD={recommended:.3f}")
 
 
 def run_enrollment() -> None:

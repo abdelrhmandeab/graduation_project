@@ -154,9 +154,10 @@ _AUDIO_UX_PROFILE_PRESETS = {
         },
         "speech_guard_threshold": 0.012,
         "wake_word": {
-            "threshold": 0.35,
+            "threshold": 0.45,
             "audio_gain": 1.4,
-            "detection_cooldown_seconds": 1.0,
+            "detection_cooldown_seconds": 1.5,
+            "confirm_frames": 1,
         },
         "wake_behavior": {
             "ignore_while_speaking": True,
@@ -178,9 +179,10 @@ _AUDIO_UX_PROFILE_PRESETS = {
         },
         "speech_guard_threshold": 0.009,
         "wake_word": {
-            "threshold": 0.30,
+            "threshold": 0.35,
             "audio_gain": 1.55,
-            "detection_cooldown_seconds": 0.6,
+            "detection_cooldown_seconds": 0.8,
+            "confirm_frames": 1,
         },
         "wake_behavior": {
             "ignore_while_speaking": False,
@@ -202,9 +204,10 @@ _AUDIO_UX_PROFILE_PRESETS = {
         },
         "speech_guard_threshold": 0.020,
         "wake_word": {
-            "threshold": 0.46,
+            "threshold": 0.60,
             "audio_gain": 1.2,
-            "detection_cooldown_seconds": 1.4,
+            "detection_cooldown_seconds": 1.5,
+            "confirm_frames": 2,
         },
         "wake_behavior": {
             "ignore_while_speaking": True,
@@ -321,13 +324,8 @@ def _normalize_audio_ux_profile(value):
 
 def _normalize_wake_mode(value):
     mode = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
-    aliases = {
-        "en": "english",
-        "ar": "arabic",
-        "dual": "both",
-        "bilingual": "both",
-    }
-    return aliases.get(mode, mode)
+    legacy_modes = {"en", "english", "ar", "arabic", "dual", "both", "bilingual", "unified"}
+    return "unified" if mode in legacy_modes else mode
 
 
 def _stt_runtime_snapshot():
@@ -390,7 +388,7 @@ def _audio_ux_runtime_snapshot():
     }
 
 
-def _apply_audio_ux_profile(profile_name, *, persist=True):
+def _apply_audio_ux_profile(profile_name, *, persist=True, preserve_wake_detection=False):
     global _ACTIVE_AUDIO_UX_PROFILE
     profile = _normalize_audio_ux_profile(profile_name)
     preset = _AUDIO_UX_PROFILE_PRESETS.get(profile)
@@ -406,7 +404,11 @@ def _apply_audio_ux_profile(profile_name, *, persist=True):
 
     mic_capture.set_runtime_vad_settings(**dict(preset["mic"]))
     vad_runtime.set_energy_fallback_threshold(float(preset["speech_guard_threshold"]))
-    wake_word_runtime.set_runtime_wake_word_settings(**dict(preset["wake_word"]))
+    wake_settings = dict(preset["wake_word"])
+    if preserve_wake_detection:
+        wake_settings.pop("threshold", None)
+        wake_settings.pop("confirm_frames", None)
+    wake_word_runtime.set_runtime_wake_word_settings(**wake_settings)
     wake_word_runtime.set_runtime_wake_word_behavior(**dict(preset["wake_behavior"]))
     speech_engine.set_quality_mode(str(preset["tts"].get("quality_mode") or "natural"))
     speech_engine.set_tuning_settings(
@@ -451,7 +453,11 @@ def initialize_runtime_profiles(force=False):
 
     persisted_audio_ux = _normalize_audio_ux_profile(session_memory.get_audio_ux_profile())
     if persisted_audio_ux:
-        ok, message, _snapshot = _apply_audio_ux_profile(persisted_audio_ux, persist=False)
+        ok, message, _snapshot = _apply_audio_ux_profile(
+            persisted_audio_ux,
+            persist=False,
+            preserve_wake_detection=True,
+        )
         if ok:
             logger.info("Restored persisted audio UX profile: %s", persisted_audio_ux)
             summary.append(f"restored_audio_ux:{persisted_audio_ux}")
@@ -461,7 +467,11 @@ def initialize_runtime_profiles(force=False):
             summary.append("failed_audio_ux_restore")
             restored_ok = False
     else:
-        ok, _message, _snapshot = _apply_audio_ux_profile("balanced", persist=False)
+        ok, _message, _snapshot = _apply_audio_ux_profile(
+            "balanced",
+            persist=False,
+            preserve_wake_detection=True,
+        )
         if ok:
             summary.append("default_audio_ux:balanced")
         else:
@@ -545,9 +555,9 @@ def _format_audio_ux_status():
         f"wake_word_threshold: {float(snapshot['wake_word']['threshold']):.2f}",
         f"wake_word_gain: {float(snapshot['wake_word']['audio_gain']):.2f}",
         f"wake_word_cooldown_s: {float(snapshot['wake_word']['detection_cooldown_seconds']):.2f}",
+        f"wake_word_confirm_frames: {int(snapshot['wake_word']['confirm_frames'])}",
         f"wake_mode: {snapshot['wake_phrase']['mode']}",
-        f"wake_arabic_enabled: {snapshot['wake_phrase']['arabic_enabled']}",
-        f"wake_arabic_onnx_path: {snapshot['wake_phrase'].get('arabic_onnx_path') or 'not_set'}",
+        f"wake_unified_onnx_path: {snapshot['wake_phrase'].get('unified_onnx_path') or 'not_set'}",
         f"wake_ignore_while_speaking: {snapshot['wake_behavior']['ignore_while_speaking']}",
         f"wake_barge_in_on_wake: {snapshot['wake_behavior']['barge_in_interrupt_on_wake']}",
         f"voice_quality_mode: {snapshot['voice_quality_mode']}",
@@ -620,8 +630,7 @@ def _format_wake_status():
     lines = [
         "Wake Word Status",
         f"wake_mode: {snapshot.get('mode')}",
-        f"wake_phrase_enabled: {snapshot.get('arabic_enabled')}",
-        f"wake_arabic_onnx_path: {snapshot.get('arabic_onnx_path') or 'not_set'}",
+        f"wake_unified_onnx_path: {snapshot.get('unified_onnx_path') or 'not_set'}",
     ]
     return "\n".join(lines), snapshot
 
@@ -685,7 +694,7 @@ def handle(parsed):
             f"wake_word_threshold: {float(audio_ux['wake_word']['threshold']):.2f}",
             f"wake_word_gain: {float(audio_ux['wake_word']['audio_gain']):.2f}",
             f"wake_mode: {audio_ux['wake_phrase']['mode']}",
-            f"wake_arabic_onnx_path: {audio_ux['wake_phrase'].get('arabic_onnx_path') or 'not_set'}",
+            f"wake_unified_onnx_path: {audio_ux['wake_phrase'].get('unified_onnx_path') or 'not_set'}",
             f"wake_barge_in_on_wake: {audio_ux['wake_behavior']['barge_in_interrupt_on_wake']}",
             f"tts_rate_offset: {int(audio_ux['tts_tuning']['rate_offset'])}",
         ]
@@ -773,8 +782,8 @@ def handle(parsed):
     if action == "wake_mode_set":
         requested_mode = args.get("mode", "")
         normalized_mode = _normalize_wake_mode(requested_mode)
-        if normalized_mode not in {"english", "arabic", "both"}:
-            return False, "Unsupported wake mode. Use: english, arabic, or both.", {}
+        if normalized_mode != "unified":
+            return False, "Unsupported wake mode. Use: unified.", {}
         active_mode = wake_word_runtime.set_runtime_wake_mode(normalized_mode)
         _mark_audio_ux_custom_profile()
         message, snapshot = _format_wake_status()

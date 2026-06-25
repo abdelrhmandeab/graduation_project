@@ -962,7 +962,9 @@ def record_stage_timing(stage: str, elapsed: float, **fields) -> None:
     latest[str(stage)] = max(0.0, float(elapsed))
     if TIMING_LOG_ENABLED:
         suffix = " ".join(f"{key}={value}" for key, value in fields.items())
-        get_logger("timing").info(
+        timing_log = get_logger("timing")
+        log_method = timing_log.debug if str(stage) == "wake_inference" else timing_log.info
+        log_method(
             "⏱ %-14s %6.2fs%s",
             stage,
             elapsed,

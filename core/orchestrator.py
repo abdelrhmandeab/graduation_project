@@ -23,9 +23,15 @@ from audio.stt import transcribe_streaming
 from audio.tts import speech_engine
 from audio.vad import is_speech, prewarm_batch_vad
 from audio.wake_word import (
-    get_runtime_wake_word_behavior,
+    get_last_detection_audio,
     listen_for_wake_word,
     preload_runtime_wake_word,
+)
+from core.adaptive_wake import (
+    record_confirmed as _adaptive_record_confirmed,
+    record_false_positive as _adaptive_record_false_positive,
+    start_daemon as _adaptive_start_daemon,
+    stop_daemon as _adaptive_stop_daemon,
 )
 from core.command_parser import parse_command
 from core.command_router import (
@@ -39,7 +45,6 @@ from core.knowledge_base import knowledge_base_service
 from core.doctor import collect_diagnostics
 from core.config import (
     DEMO_MODE,
-    BARGE_IN_VAD_ENABLED,
     EARLY_EXEC_CONFIDENCE_THRESHOLD,
     DOCTOR_INCLUDE_MODEL_LOAD_CHECKS,
     DOCTOR_SCHEDULE_INTERVAL_SECONDS,
@@ -59,6 +64,7 @@ from core.config import (
     LLM_OLLAMA_EXECUTABLE,
     LLM_LIGHTWEIGHT_NUM_CTX,
     LLM_OLLAMA_NUM_CTX,
+    LLM_TIMEOUT_SECONDS,
     MAX_RECORD_DURATION,
     PREWARM_LLM_BLOCKING,
     PREWARM_SEMANTIC_ROUTER_BLOCKING,
@@ -73,7 +79,6 @@ from core.config import (
     STARTUP_BACKGROUND_PREWARM_ENABLED,
     TTS_PREWARM_ENABLED,
     TTS_DEFAULT_BACKEND,
-    WAKE_WORD_MODE,
     WHISPER_MODEL,
     KB_AUTO_SYNC_ENABLED,
 )
@@ -91,6 +96,7 @@ from core.metrics import (
     reset_thread_stage_timings,
     stage_timer,
 )
+from core.runtime_coordinator import RuntimePhase, coordinator
 from core.session_memory import session_memory
 from core.shutdown import perform_shutdown_cleanup, setup_shutdown
 
@@ -387,7 +393,7 @@ def _resolve_stt_language_hint(*, wake_source=None):
         return preferred
 
     # Default to auto-detection: defer to STT backend's language detector.
-    # Wake-word label (arabic/english) is NOT used as a hint — the detector alone
+    # The unified wake-word model does not label language; the detector alone
     # determines if speech is Arabic, English, or mixed.
     return "auto"
 
@@ -710,6 +716,7 @@ def _process_utterance(
                 return
 
         dialogue_manager.transition(DialogueState.PROCESSING)
+        coordinator.set_phase(RuntimePhase.TRANSCRIBING)
 
         # ── Task 1.1: streaming STT fast-path ────────────────────────────────
         # StreamingSTT transcribes the audio *during* recording and stores the
@@ -826,6 +833,7 @@ def _process_utterance(
         sub_commands = _split_compound_utterance(text)
         route_started = time.perf_counter()
         is_compound = len(sub_commands) > 1
+        coordinator.set_phase(RuntimePhase.ROUTING)
 
         # ── Task 1.3: inject pre-fetched live context for LLM queries ─────────
         live_context = pipeline.get_live_context() if pipeline is not None else ""
@@ -887,6 +895,7 @@ def _process_utterance(
                         return
                     yield sentence
 
+            coordinator.set_phase(RuntimePhase.SPEAKING)
             tts_started_at = time.perf_counter()
             started, _ = speech_engine.speak_sentence_queue(_sentence_iterator(), language=tts_language)
             tts_start_elapsed = time.perf_counter() - tts_started_at
@@ -897,8 +906,12 @@ def _process_utterance(
             if not streaming_tts_enabled:
                 stream_sentence_queue = None
 
+        _is_llm_query = str(getattr(precomputed_parser_candidate, "intent", "") or "") == "LLM_QUERY"
+        coordinator.set_phase(RuntimePhase.THINKING if _is_llm_query else RuntimePhase.EXECUTING_COMMAND)
+
         try:
             if is_compound:
+                coordinator.set_phase(RuntimePhase.EXECUTING_COMMAND)
                 try:
                     all_responses = []
                     for sub_text in sub_commands:
@@ -952,17 +965,21 @@ def _process_utterance(
 
         if not is_compound:
             print(f"Jarvis: {response}")
-        # NEW: Check if early execution already spoke the response to prevent duplicate TTS
+        interrupted = coordinator.current_phase == RuntimePhase.LISTENING
         if (
             should_speak_response
             and not streaming_tts_enabled
+            and not interrupted
             and not (pipeline is not None and pipeline.is_early_response_spoken())
         ):
+            coordinator.set_phase(RuntimePhase.SPEAKING)
             safe_response = _speech_safe_response(response)
             with stage_timer("tts_first_word", lang=tts_language or "unknown") as tts_timing:
                 speech_engine.speak_async(safe_response, language=tts_language)
             timing_parts["tts"] = tts_timing.elapsed
     finally:
+        if not speech_engine.is_speaking():
+            coordinator.set_phase(RuntimePhase.IDLE)
         total_elapsed = time.perf_counter() - pipeline_started
         metrics.record_stage("pipeline", total_elapsed, success=bool(text) and route_success)
         if turn_intent == "LLM_QUERY":
@@ -1064,35 +1081,17 @@ def _prewarm_batch_vad():
 
 
 
-def _is_llm_prewarm_failure(response_text):
-    text = " ".join(str(response_text or "").strip().lower().split())
-    if not text:
-        return True
-
-    failure_markers = (
-        "timed out",
-        "cannot connect to ollama",
-        "could not run the local model",
-        "internal error",
-    )
-    return any(marker in text for marker in failure_markers)
-
-
 def _prewarm_llm():
-    """Send a minimal prompt to Ollama so the model is loaded into memory before the user speaks."""
+    """Load the Ollama model without generating a throwaway response."""
     try:
-        from llm.ollama_client import ask_llm
-        warmup_response = ask_llm(
-            "Hi",
-            num_ctx=64,
-            timeout_seconds=8.0,
-            allow_fallbacks=False,
+        from llm.ollama_client import prewarm_model
+
+        model_name = prewarm_model(
+            timeout_seconds=min(60.0, max(10.0, float(LLM_TIMEOUT_SECONDS))),
         )
-        if _is_llm_prewarm_failure(warmup_response):
-            raise RuntimeError(warmup_response)
-        logger.info("LLM prewarmed successfully.")
+        logger.info("LLM model loaded and ready (%s).", model_name)
     except Exception as exc:
-        logger.warning("LLM prewarm failed (will load on first query): %s", exc)
+        logger.debug("LLM load-only prewarm skipped; first query will load the model: %s", exc)
 
 
 def _prepare_llm_runtime():
@@ -1176,7 +1175,7 @@ def _preload_wake_word_runtime():
     try:
         snapshot = preload_runtime_wake_word()
         metrics.record_stage("wake_word_prewarm", time.perf_counter() - started, success=True)
-        logger.debug("Wake-word preload complete: %s", snapshot)
+        get_logger("wakeword").info("Wake-word preload complete: %s", snapshot)
     except Exception as exc:
         metrics.record_stage("wake_word_prewarm", time.perf_counter() - started, success=False)
         logger.warning("Wake-word preload failed (will retry on first listen): %s", exc)
@@ -1527,7 +1526,7 @@ def _run_startup_prewarm_blocking():
         "startup",
         stt=WHISPER_MODEL,
         partial=STT_PARTIAL_WHISPER_MODEL,
-        wake=WAKE_WORD_MODE,
+        wake="unified",
         tts=TTS_DEFAULT_BACKEND,
         router=(
             "loaded"
@@ -1586,7 +1585,7 @@ def run():
     kv(
         "startup",
         followup=FOLLOWUP_ENABLED,
-        barge_in=BARGE_IN_VAD_ENABLED,
+        wake_interrupt=True,
     )
     shutdown_event = setup_shutdown()
     _cleanup_stale_temp_files()
@@ -1618,8 +1617,13 @@ def run():
             "Use `chcp 65001` and set `PYTHONUTF8=1` before starting Jarvis.",
             output_encoding or "unknown",
         )
+    coordinator.attach_speech_engine(speech_engine)
+    from llm.ollama_client import llm_cancel_event
+    coordinator.attach_llm_cancel_event(llm_cancel_event)
+
     get_logger("startup").info("Jarvis ready — listening.")
     _speak_startup_greeting()
+    _adaptive_start_daemon()
 
     try:
         while not shutdown_event.is_set():
@@ -1633,11 +1637,11 @@ def run():
                 time.sleep(float(REALTIME_BACKPRESSURE_POLL_SECONDS))
                 metrics.record_stage("backpressure_wait", float(REALTIME_BACKPRESSURE_POLL_SECONDS), success=True)
                 continue
-            wake_behavior = get_runtime_wake_word_behavior()
-            if wake_behavior.get("ignore_while_speaking") and speech_engine.is_speaking():
-                time.sleep(0.1)
-                continue
-
+            if coordinator.current_phase in (RuntimePhase.IDLE, RuntimePhase.LISTENING):
+                if speech_engine.is_speaking():
+                    coordinator.set_phase(RuntimePhase.SPEAKING)
+                else:
+                    coordinator.set_phase(RuntimePhase.LISTENING)
             wake_started = time.perf_counter()
             if dialogue_manager.should_skip_wake_word():
                 # Already in FOLLOW_UP or CONFIRMING — bypass the wake-word
@@ -1682,16 +1686,6 @@ def run():
                     logger.info("Follow-up window expired; returning to IDLE.")
                     dialogue_manager.transition(DialogueState.IDLE)
                     continue
-            elif wake_source == "barge_in":
-                # VAD barge-in already interrupted TTS; log and skip to recording.
-                dialogue_manager.transition(DialogueState.LISTENING)
-                logger.info("VAD barge-in: TTS interrupted, entering listening mode directly.")
-                metrics.record_stage("barge_in_interrupt", 0.0, success=True)
-            elif wake_behavior.get("barge_in_interrupt_on_wake") and speech_engine.is_speaking():
-                dialogue_manager.transition(DialogueState.LISTENING)
-                speech_engine.interrupt()
-                logger.info("Speech interrupted due to wake-word barge-in.")
-                metrics.record_stage("barge_in_interrupt", 0.0, success=True)
             else:
                 dialogue_manager.transition(DialogueState.LISTENING)
                 logger.info("Wake word detected via %s", wake_source or "unknown")
@@ -1713,6 +1707,9 @@ def run():
                     language_hint=_resolve_stt_language_hint(wake_source=wake_source) or "",
                 )
 
+            coordinator.set_phase(RuntimePhase.RECORDING)
+            from llm.ollama_client import llm_cancel_event as _llm_cancel
+            _llm_cancel.clear()
             record_started = time.perf_counter()
 
             _partial_latency_recorded = False
@@ -1749,12 +1746,19 @@ def run():
                 _safe_remove(audio_file)
                 break
 
+            _wake_audio = get_last_detection_audio() if wake_source == "wake" else None
+
             if not capture.get("speech_detected"):
+                if _wake_audio and wake_source == "wake":
+                    _adaptive_record_false_positive(_wake_audio)
                 _safe_remove(audio_file)
                 if wake_source == "follow_up":
                     logger.info("No speech in follow-up window; returning to IDLE.")
                     dialogue_manager.transition(DialogueState.IDLE)
                 continue
+
+            if _wake_audio and wake_source == "wake":
+                _adaptive_record_confirmed(_wake_audio)
 
             in_flight.append(
                 executor.submit(
@@ -1773,6 +1777,7 @@ def run():
             )
     finally:
         with stage_timer("shutdown") as shutdown_timing:
+            _adaptive_stop_daemon()
             try:
                 knowledge_base_service.stop_auto_sync()
             except Exception:

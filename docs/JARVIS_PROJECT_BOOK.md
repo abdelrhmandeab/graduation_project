@@ -97,8 +97,8 @@ In short, `main.py` starts the assistant, `core/orchestrator.py` runs the loop, 
 
 - `core/doctor.py` - environment and dependency health check.
 - `scripts/setup_windows.ps1` - Windows bootstrap script for dependency installation and checks.
-- `scripts/generate_arabic_wake_data.py` - synthesizes Arabic wake-word training clips.
-- `scripts/train_arabic_wake_model.py` - trains and exports the Arabic wake-word model.
+- `scripts/generate_arabic_wake_data.py` - synthesizes unified English/Arabic wake-word training clips.
+- `scripts/train_arabic_wake_model.py` - trains and exports the unified bilingual wake-word model.
 - `CHANGELOG.md` - release history and notable changes.
 - `requirements.txt`, `requirements-minimal.txt`, `requirements-full.txt` - dependency tiers.
 
@@ -258,7 +258,7 @@ This module is the wake-word listener itself. It loads the English openWakeWord 
 - `listen_for_wake_word()` is the main blocking listener used by the runtime loop.
 - `set_runtime_wake_word_settings()` and `set_runtime_wake_word_phrase_settings()` control thresholds and language mode.
 - `_save_wake_activation_sample()` records a wake-trigger sample for later analysis or enrollment.
-- `_get_model()` and `_get_arabic_onnx_model()` manage the English and Arabic model loading paths.
+- `_get_unified_model()` loads the single bilingual custom ONNX model.
 
 Important control points:
 
@@ -739,8 +739,8 @@ What this folder contributes: it is the physical actuator of the assistant. Anyt
 
 This folder contains operational and training scripts rather than runtime modules.
 
-- `generate_arabic_wake_data.py` - synthesizes and augments Arabic wake-word training data.
-- `train_arabic_wake_model.py` - builds the Arabic wake-word classifier and exports ONNX.
+- `generate_arabic_wake_data.py` - synthesizes and augments unified English/Arabic wake-word data.
+- `train_arabic_wake_model.py` - builds the unified bilingual wake-word classifier and exports ONNX.
 - `setup_windows.ps1` - one-command Windows setup and validation.
 
 What this folder contributes: it supports installation, model training, and maintenance outside the assistant runtime.

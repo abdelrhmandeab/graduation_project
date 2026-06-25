@@ -18,6 +18,10 @@ from llm.sentence_buffer import SentenceBuffer
 _OLLAMA_BASE_URL = str(LLM_OLLAMA_BASE_URL or "http://localhost:11434").rstrip("/")
 _GENERATE_ENDPOINT = f"{_OLLAMA_BASE_URL}/api/generate"
 
+import threading
+
+llm_cancel_event = threading.Event()
+
 # Resolved at startup by set_runtime_model(); falls back to config value.
 _runtime_model = None
 _runtime_num_ctx = None
@@ -162,6 +166,31 @@ def _resolve_model_candidates(primary_model: str):
     return ordered
 
 
+def prewarm_model(timeout_seconds=None):
+    """Load the active Ollama model into memory without generating text.
+
+    Ollama treats an empty prompt as a load-only request. This avoids spending
+    startup time generating a throwaway response and works reliably on slower
+    CPU-only machines.
+    """
+    model_name = _resolve_model_name()
+    effective_num_ctx = int(_runtime_lightweight_num_ctx or _runtime_num_ctx or LLM_OLLAMA_NUM_CTX)
+    request_timeout = float(timeout_seconds or LLM_TIMEOUT_SECONDS)
+    response = httpx.post(
+        _GENERATE_ENDPOINT,
+        json={
+            "model": model_name,
+            "prompt": "",
+            "stream": False,
+            "keep_alive": "30m",
+            "options": {"num_ctx": effective_num_ctx},
+        },
+        timeout=request_timeout,
+    )
+    response.raise_for_status()
+    return model_name
+
+
 def detect_sentence_boundaries(text: str, is_arabic: bool) -> list[str]:
     """Split streamed text into speakable chunks.
 
@@ -186,7 +215,7 @@ def detect_sentence_boundaries(text: str, is_arabic: bool) -> list[str]:
     return []
 
 
-def ask_llm_streaming(prompt, on_sentence=None, num_ctx=None, is_arabic=False):
+def ask_llm_streaming(prompt, on_sentence=None, num_ctx=None, is_arabic=False, cancel_event=None):
     """Stream tokens from Ollama; call on_sentence(text) at each sentence boundary.
 
     Returns the complete accumulated response text, or an error string.
@@ -195,9 +224,14 @@ def ask_llm_streaming(prompt, on_sentence=None, num_ctx=None, is_arabic=False):
     Args:
         is_arabic: When True, uses Arabic-aware sentence splitting (splits on ؟،؛
                    and performs soft/hard char-count flushes for un-punctuated text).
+        cancel_event: Optional threading.Event checked after each token chunk.
+                      When set, the stream is closed and partial text returned.
     """
     if on_sentence is None:
         return ask_llm(prompt, num_ctx=num_ctx)
+
+    if cancel_event is None:
+        cancel_event = llm_cancel_event
 
     started = time.perf_counter()
     success = False
@@ -241,6 +275,10 @@ def ask_llm_streaming(prompt, on_sentence=None, num_ctx=None, is_arabic=False):
                 return "I could not run the local model."
 
             for raw_line in stream_response.iter_lines():
+                if cancel_event is not None and cancel_event.is_set():
+                    logger.info("LLM stream cancelled by wake-word interrupt.")
+                    break
+
                 elapsed = time.perf_counter() - started
                 if elapsed >= hard_timeout_seconds:
                     hard_timeout_hit = True

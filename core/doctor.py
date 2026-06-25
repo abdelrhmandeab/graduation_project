@@ -183,10 +183,11 @@ def collect_diagnostics(*, include_model_load_checks=False):
         )
 
     try:
-        from audio.wake_word import _get_model
+        from audio.wake_word import _get_unified_model
+        from core.config import WAKE_WORD_UNIFIED_ONNX_PATH
 
         if include_model_load_checks:
-            model = _get_model()
+            model = _get_unified_model(WAKE_WORD_UNIFIED_ONNX_PATH)
             details = f"loaded={list(getattr(model, 'models', {}).keys())}"
         else:
             details = "check_skipped(model_load=False)"

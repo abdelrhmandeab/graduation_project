@@ -87,13 +87,19 @@ SPEECH_GUARD_SKIP_NON_RESPONSIVE_PROFILES = _env_bool(
 )
 
 # Wake Word
-WAKE_WORD = "hey_jarvis"
-WAKE_WORD_THRESHOLD = 0.35
-WAKE_WORD_EN_THRESHOLD = float(_env("JARVIS_WAKE_WORD_EN_THRESHOLD", str(WAKE_WORD_THRESHOLD)))
-WAKE_WORD_AR_THRESHOLD = float(_env("JARVIS_WAKE_WORD_AR_THRESHOLD", str(WAKE_WORD_THRESHOLD)))
-WAKE_WORD_CHUNK_SIZE = 1280
-WAKE_WORD_INPUT_DEVICE = None  # None, device index (int), or name substring (str)
-WAKE_WORD_AUDIO_GAIN = 1.4
+WAKE_WORD_UNIFIED_ONNX_PATH = _env(
+    "JARVIS_WAKE_WORD_UNIFIED_ONNX_PATH",
+    "models/jarvis_unified/jarvis_unified.onnx",
+).strip()
+WAKE_WORD_THRESHOLD = max(-100.0, min(1.0, _env_float("JARVIS_WAKE_WORD_THRESHOLD", 0.45)))
+WAKE_WORD_CONFIRM_FRAMES = max(
+    1,
+    _env_int("JARVIS_WAKE_WORD_CONFIRM_FRAMES", 1),
+)
+WAKE_WORD_CHUNK_SIZE = max(320, _env_int("JARVIS_WAKE_WORD_CHUNK_SIZE", 1280))
+WAKE_WORD_INPUT_DEVICE = _env("JARVIS_WAKE_WORD_INPUT_DEVICE", "").strip() or None
+WAKE_WORD_AUDIO_GAIN = max(0.5, min(3.0, _env_float("JARVIS_WAKE_WORD_AUDIO_GAIN", 1.4)))
+WAKE_WORD_MIN_RMS = max(0.0, _env_float("JARVIS_WAKE_WORD_MIN_RMS", 0.015))
 WAKE_WORD_USER_SPEAKER_ID = _env(
     "JARVIS_WAKE_WORD_SPEAKER_ID",
     getpass.getuser(),
@@ -102,15 +108,49 @@ WAKE_WORD_USER_SAMPLES_DIR = _env(
     "JARVIS_WAKE_WORD_USER_SAMPLES_DIR",
     _project_path("data", "wake_samples", "user_positive"),
 ).strip()
-WAKE_WORD_SCORE_DEBUG = False
-WAKE_WORD_SCORE_DEBUG_INTERVAL_SECONDS = 1.0
-WAKE_WORD_DETECTION_COOLDOWN_SECONDS = 1.0
-WAKE_WORD_MODE = str(_env("JARVIS_WAKE_MODE", "both")).strip().lower()
-if WAKE_WORD_MODE not in {"english", "arabic", "both"}:
-    WAKE_WORD_MODE = "both"
+WAKE_WORD_SCORE_DEBUG = _env_bool("JARVIS_WAKE_WORD_SCORE_DEBUG", False)
+WAKE_WORD_SCORE_DEBUG_INTERVAL_SECONDS = max(
+    1.0,
+    _env_float("JARVIS_WAKE_WORD_SCORE_DEBUG_INTERVAL_SECONDS", 10.0),
+)
+WAKE_WORD_DETECTION_COOLDOWN_SECONDS = max(
+    0.2,
+    _env_float("JARVIS_WAKE_WORD_DETECTION_COOLDOWN_SECONDS", 1.5),
+)
+# Adaptive wake-word retraining: accumulate confirmed detections and
+# periodically retrain the ONNX model in the background.
+ADAPTIVE_WAKE_ENABLED = _env_bool("JARVIS_ADAPTIVE_WAKE_ENABLED", True)
+ADAPTIVE_WAKE_MIN_CONFIRMED = max(5, _env_int("JARVIS_ADAPTIVE_WAKE_MIN_CONFIRMED", 15))
+ADAPTIVE_WAKE_RETRAIN_INTERVAL_SECONDS = max(
+    300.0,
+    _env_float("JARVIS_ADAPTIVE_WAKE_RETRAIN_INTERVAL_SECONDS", 3600.0),
+)
+ADAPTIVE_WAKE_EPOCHS = max(3, _env_int("JARVIS_ADAPTIVE_WAKE_EPOCHS", 10))
+ADAPTIVE_WAKE_MIN_VAL_ACC = max(0.80, min(1.0, _env_float("JARVIS_ADAPTIVE_WAKE_MIN_VAL_ACC", 0.95)))
+ADAPTIVE_WAKE_CONFIRMED_DIR = _env(
+    "JARVIS_ADAPTIVE_WAKE_CONFIRMED_DIR",
+    _project_path("data", "wake_samples", "confirmed_positive"),
+).strip()
+ADAPTIVE_WAKE_FALSE_POSITIVE_DIR = _env(
+    "JARVIS_ADAPTIVE_WAKE_FALSE_POSITIVE_DIR",
+    _project_path("data", "wake_samples", "confirmed_negative"),
+).strip()
 
-WAKE_WORD_AR_ENABLED = _env_bool("JARVIS_WAKE_WORD_AR_ENABLED", True)
-WAKE_WORD_AR_ONNX_PATH = _env("JARVIS_WAKE_WORD_AR_ONNX_PATH", "").strip()
+# Legacy language modes all map to the single bilingual model.
+WAKE_WORD_MODE = "unified"
+WAKE_WORD_DEPRECATED_KEYS = tuple(
+    key
+    for key in (
+        "JARVIS_WAKE_WORD",
+        "JARVIS_WAKE_WORD_AR_ONNX_PATH",
+        "JARVIS_WAKE_WORD_AR_ENABLED",
+        "JARVIS_WAKE_WORD_MODE",
+        "JARVIS_WAKE_MODE",
+        "JARVIS_WAKE_WORD_EN_THRESHOLD",
+        "JARVIS_WAKE_WORD_AR_THRESHOLD",
+    )
+    if key in os.environ
+)
 
 # STT
 STT_BACKEND = _env(
@@ -285,39 +325,14 @@ if TTS_ARABIC_SPOKEN_DIALECT not in {"egyptian", "msa", "auto"}:
     TTS_ARABIC_SPOKEN_DIALECT = "egyptian"
 TTS_EGYPTIAN_COLLOQUIAL_REWRITE = _env_bool("JARVIS_TTS_EGYPTIAN_COLLOQUIAL_REWRITE", True)
 TTS_SIMULATED_CHAR_DELAY = 0.02
-BARGE_IN_INTERRUPT_ON_WAKE = True
-WAKE_WORD_IGNORE_WHILE_SPEAKING = _env_bool("JARVIS_WAKE_WORD_IGNORE_WHILE_SPEAKING", True)
-
-# Phase 2.11 — VAD-based barge-in: detect user speech while TTS is playing
-# and treat it as an implicit interrupt (user wants to override the assistant).
-BARGE_IN_VAD_ENABLED = _env_bool("JARVIS_BARGE_IN_VAD_ENABLED", True)
-# Energy floor (0..1 normalized RMS). Higher = harder to trigger; quieter rooms
-# may need a value around 0.018, noisy rooms around 0.04.
-BARGE_IN_VAD_ENERGY_THRESHOLD = max(
-    0.005,
-    _env_float("JARVIS_BARGE_IN_VAD_ENERGY_THRESHOLD", 0.030),
-)
-# Minimum sustained speech duration (seconds) that must be observed before the
-# monitor decides a true barge-in is happening — keeps coughs and clicks from
-# stopping speech mid-sentence.
-BARGE_IN_VAD_MIN_SPEECH_SECONDS = max(
-    0.10,
-    _env_float("JARVIS_BARGE_IN_VAD_MIN_SPEECH_SECONDS", 0.45),
-)
-# How long after TTS starts before the monitor begins listening. Prevents
-# the speaker's own audio (echoed through the mic) from triggering an instant
-# self-interrupt on systems without echo cancellation.
-BARGE_IN_VAD_GRACE_SECONDS = max(
-    0.0,
-    _env_float("JARVIS_BARGE_IN_VAD_GRACE_SECONDS", 0.6),
-)
-# Echo-rejection ratio: mic_rms must exceed (tts_rms * ratio) to be counted as
-# real speech rather than speaker echo.  1.8 works well in typical rooms;
-# increase toward 2.5 in very echoey spaces.
-BARGE_IN_ENERGY_RATIO = max(1.0, _env_float("JARVIS_BARGE_IN_ENERGY_RATIO", 1.8))
-# Post-interrupt cooldown (seconds). The monitor stays silent for this period
-# after firing so echo decay cannot re-trigger a second barge-in.
-BARGE_IN_COOLDOWN_SECONDS = max(0.1, _env_float("JARVIS_BARGE_IN_COOLDOWN_SECONDS", 0.5))
+# Wake-word interrupt replaces the old VAD-based barge-in.  The wake word
+# itself is now the only mechanism that can interrupt TTS or LLM streaming.
+WAKE_INTERRUPT_ACK_SOUND = _env_bool("JARVIS_WAKE_INTERRUPT_ACK_SOUND", True)
+WAKE_INTERRUPT_ACK_FREQ_HZ = max(200, min(2000, _env_int("JARVIS_WAKE_INTERRUPT_ACK_FREQ_HZ", 880)))
+WAKE_INTERRUPT_ACK_DURATION_MS = max(40, min(400, _env_int("JARVIS_WAKE_INTERRUPT_ACK_DURATION_MS", 100)))
+WAKE_INTERRUPT_BLOCKED_TONE_ENABLED = _env_bool("JARVIS_WAKE_INTERRUPT_BLOCKED_TONE_ENABLED", False)
+WAKE_INTERRUPT_BLOCKED_TONE_FREQ_HZ = max(100, min(1000, _env_int("JARVIS_WAKE_INTERRUPT_BLOCKED_TONE_FREQ_HZ", 220)))
+WAKE_INTERRUPT_BLOCKED_TONE_DURATION_MS = max(30, min(300, _env_int("JARVIS_WAKE_INTERRUPT_BLOCKED_TONE_DURATION_MS", 80)))
 
 
 # Dialogue state machine — follow-up window
