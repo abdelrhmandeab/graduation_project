@@ -21,10 +21,6 @@ Date: 2026-06-20
 - `faiss-cpu` and `pypdf` are explicit full-install dependencies because their imports are optional knowledge-base features. Deptry requires the package-to-module mapping `faiss-cpu=faiss`.
 - No automated test suite exists in the repository. Static checks and a bounded runtime smoke test are the available automated verification; real English/Arabic microphone wake-word checks remain manual hardware tests.
 
-## Awaiting approval
-
-- Wake-word Phase 2 supersedes `data/openwakeword/jarvis_ar/` and `models/arabic_wake_test_tiny/` with the unified corpus/model. Both legacy folders remain untouched pending explicit approval after English and Arabic manual validation; model artifacts are never deleted automatically.
-
 ## Verification
 
 - `python -m ruff check --select F .` — pass
@@ -79,7 +75,40 @@ All had zero consumers after Phase 4 refactored their call sites:
 - `WAKE_WORD_AUDIO_GAIN` config key — imported and stored in `_runtime_wake_word_settings` dict but no longer applied at inference time (gain augmentation during training made runtime gain unnecessary). Kept for the settings API surface.
 - `WAKE_WORD_MODE` in `core/config.py` — hardcoded to `"unified"`. Only consumed by the deprecated-keys warning system. Kept for back-compat warning when users set `JARVIS_WAKE_WORD_MODE` in their `.env`.
 
-## Awaiting approval
+---
 
-- **`models/arabic_wake_test_tiny/`** — contains `jarvis_ar_custom_test_tiny.onnx` (2,009 bytes) + `jarvis_ar_custom_test_tiny.onnx.data` (2,080,768 bytes). Superseded by `models/jarvis_unified/jarvis_unified.onnx`. Safe to delete.
-- **`data/openwakeword/jarvis_ar/`** — empty directory. Old Arabic-only training corpus holder. Safe to delete.
+# Component 3 — STT Cleanup (Phase 6)
+
+Date: 2026-06-26
+
+## Removed (with reference proof)
+
+### STT detector and stale language workaround
+- Removed `STT_MIXED_TREAT_AS_ARABIC` from `core/config.py`.
+- Removed `JARVIS_STT_MIXED_TREAT_AS_ARABIC` from `.env` and `.env.example`.
+- Proof: repo-wide grep found no remaining `STT_MIXED_TREAT_AS_ARABIC` / `JARVIS_STT_MIXED_TREAT_AS_ARABIC` references after removal.
+- Confirmed the Phase 2 detector removals remain clean: repo-wide grep found no `STT_LANGUAGE_DETECT`, `JARVIS_STT_LANGUAGE_DETECT`, `_detect_audio_language_with_whisper`, `_read_audio_bytes`, `JARVIS_STT_ELEVENLABS_TIMEOUT_SECONDS`, or `JARVIS_STT_ELEVENLABS_ARABIC_LANG` references.
+
+### Static cleanup from the STT sweep
+- `audio/tts.py`: removed two unused locals (`released_thread`, `queue_thread_active`) reported by Ruff `F841`. They were assigned in cleanup code but never read.
+- `core/adaptive_wake.py`: removed unused `WAKE_WORD_UNIFIED_ONNX_PATH` import reported by Ruff `F401`.
+- `core/orchestrator.py`: extended stale temp cleanup to include `jarvis_stt_probe_*.wav`, matching the Phase 1 tiny-probe temp files.
+- `docs/JARVIS_PROJECT_BOOK.md` and `core/orchestrator.py`: updated stale references to the removed Whisper language-detector model; wording now points to the locked-language picker and tiny probe path.
+
+## Needs review (kept)
+
+- `utils/language_detector.py` remains live. It is a text/script language helper used after STT, not the removed Whisper detector model.
+- Deptry still reports non-STT/package-metadata issues:
+  - `core/adaptive_wake.py` local training-script imports (`train_arabic_wake_model`) are not package dependencies.
+  - `torch`/`scipy` are training/runtime optional heavy dependencies and currently classified by Deptry as transitive.
+  - `faiss` and `pypdf` are optional knowledge-base imports with package/module naming differences.
+  - `anthropic` is still reported as dependency-defined-but-unused by Deptry; Claude backend cleanup/restoration remains a separate decision.
+- No dependency was removed in this STT sweep because the findings are outside the STT runtime surface or require packaging-policy decisions.
+
+## Verification
+
+- `python -m vulture audio core --min-confidence 80` — pass (no findings)
+- `python -m ruff check --select F audio core` — pass
+- `python -m compileall -q audio core main.py` — pass
+- `python -m deptry .` — reports the non-STT/package-metadata items listed in Needs review
+- Config audit: every `JARVIS_STT_*` / `JARVIS_WHISPER_*` key read by `core/config.py` appears in `.env.example`; no extras found.

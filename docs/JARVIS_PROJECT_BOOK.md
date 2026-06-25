@@ -187,13 +187,13 @@ This module abstracts the STT backend selection and the language-handling behavi
 
 - `set_runtime_stt_backend()` and `get_runtime_stt_backend()` control the active backend.
 - `set_runtime_stt_settings()` and `get_runtime_stt_settings()` hold runtime language preferences.
-- `preload_runtime_models()` warms the language detector, partial model, and local model.
+- `preload_runtime_models()` warms the local model and optional partial/probe model; language is picked by the lightweight locked-language picker.
 - `transcribe_streaming_with_meta()` and related helpers return both text and metadata.
 
 Important control points:
 
 - It normalizes backend names so multiple aliases resolve to the same runtime choice.
-- It detects Arabic vs English vs mixed-script text.
+- It locks STT to Arabic or English before transcription and validates transcripts by script.
 - It can temporarily cool down ElevenLabs when a service error is detected.
 - It records latency and success information to `core/metrics.py`.
 

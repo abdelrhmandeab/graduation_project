@@ -209,6 +209,7 @@ def collect_diagnostics(*, include_model_load_checks=False):
 
     try:
         from audio import stt as stt_runtime
+        from core.metrics import latency_tracker
 
         backend = stt_runtime.get_runtime_stt_backend()
         if include_model_load_checks:
@@ -221,6 +222,29 @@ def collect_diagnostics(*, include_model_load_checks=False):
                 "name": "stt_runtime",
                 "ok": True,
                 "details": details,
+            }
+        )
+
+        latency_report = latency_tracker.report()
+        local_p95 = float((latency_report.get("stt_local_call") or {}).get("p95_ms") or 0.0)
+        cloud_p95 = float((latency_report.get("stt_cloud_call") or {}).get("p95_ms") or 0.0)
+        pick_p95 = float((latency_report.get("stt_lang_pick") or {}).get("p95_ms") or 0.0)
+        recent = stt_runtime.get_recent_transcription_meta()
+        invalid_count = sum(
+            1
+            for row in recent
+            if "stt:invalid_language" in list(row.get("errors") or [])
+        )
+        ok = bool(local_p95 <= 1500.0 and invalid_count <= 1)
+        checks.append(
+            {
+                "name": "stt_health",
+                "ok": ok,
+                "details": (
+                    f"local_p95_ms={local_p95:.1f} cloud_p95_ms={cloud_p95:.1f} "
+                    f"pick_p95_ms={pick_p95:.1f} invalid_language_last10={invalid_count}/{len(recent)}"
+                ),
+                "required": False,
             }
         )
     except Exception as exc:

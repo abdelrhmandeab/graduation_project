@@ -163,11 +163,19 @@ if STT_BACKEND not in {"hybrid_elevenlabs", "faster_whisper"}:
 ELEVENLABS_BASE_URL = _env("ELEVENLABS_BASE_URL", "https://api.elevenlabs.io").strip() or "https://api.elevenlabs.io"
 ELEVENLABS_API_KEY = _env("ELEVENLABS_API_KEY", "").strip()
 
-STT_LANGUAGE_DETECT_MODEL = _env("JARVIS_STT_LANGUAGE_DETECT_MODEL", "small").strip() or "small"
-# Default language hint passed to Whisper. Set to "ar" if user primarily speaks Arabic.
-# "auto" lets Whisper detect; "ar" bypasses detection for faster, more accurate Arabic STT.
+# Hard language lock: STT is confined to English + Egyptian Arabic only.
+STT_LANGUAGE_LOCK = _env_bool("JARVIS_STT_LANGUAGE_LOCK", True)
+STT_FORBID_OTHER_LANGUAGES = _env_bool("JARVIS_STT_FORBID_OTHER_LANGUAGES", True)
+STT_VALIDATION_DOMINANT_SCRIPT_MIN = max(
+    0.50,
+    _env_float("JARVIS_STT_VALIDATION_DOMINANT_SCRIPT_MIN", 0.70),
+)
+STT_AR_INITIAL_PROMPT = _env("JARVIS_STT_AR_INITIAL_PROMPT", "محادثة بالعامية المصرية:")
+STT_EN_INITIAL_PROMPT = _env("JARVIS_STT_EN_INITIAL_PROMPT", "")
+STT_RETRY_OPPOSITE_LANGUAGE = _env_bool("JARVIS_STT_RETRY_OPPOSITE_LANGUAGE", True)
+# Default language hint passed to STT. Prefer "auto"; when locked, "auto" is
+# resolved to ar/en before any heavy decode and Whisper never receives language=None.
 STT_LANGUAGE_HINT = str(_env("JARVIS_STT_LANGUAGE_HINT", "auto")).strip().lower() or "auto"
-STT_MIXED_TREAT_AS_ARABIC = _env_bool("JARVIS_STT_MIXED_TREAT_AS_ARABIC", True)
 
 # Minimum seconds of captured speech before emitting a partial transcript.
 # Lowering this value makes partials appear sooner but may increase noisy/unstable fragments.
@@ -178,16 +186,36 @@ STT_PARTIAL_WINDOW_SECONDS = max(0.6, _env_float("JARVIS_STT_PARTIAL_WINDOW_SECO
 # Minimum spacing (seconds) between partial transcription attempts.
 STT_PARTIAL_INTERVAL_SECONDS = max(0.2, _env_float("JARVIS_STT_PARTIAL_INTERVAL_SECONDS", 0.35))
 # Whisper model used for partial transcriptions (defaults to tiny for speed).
-STT_PARTIAL_WHISPER_MODEL = _env("JARVIS_STT_PARTIAL_WHISPER_MODEL", "tiny").strip() or "tiny"
+STT_PARTIAL_WHISPER_MODEL = _env("JARVIS_STT_PARTIAL_WHISPER_MODEL", "auto").strip() or "auto"
 
 STT_ELEVENLABS_ENABLED = _env_bool("JARVIS_STT_ELEVENLABS_ENABLED", True)
 STT_ELEVENLABS_STT_MODEL = _env("JARVIS_STT_ELEVENLABS_MODEL", "scribe_v2").strip() or "scribe_v2"
-STT_ELEVENLABS_ARABIC_LANGUAGE = _env("JARVIS_STT_ELEVENLABS_ARABIC_LANG", "ara").strip() or "ara"
-STT_ELEVENLABS_TIMEOUT_SECONDS = max(3.0, _env_float("JARVIS_STT_ELEVENLABS_TIMEOUT_SECONDS", 15.0))
+STT_ELEVENLABS_CONNECT_TIMEOUT_SECONDS = max(
+    0.5,
+    _env_float("JARVIS_STT_ELEVENLABS_CONNECT_TIMEOUT_SECONDS", 2.0),
+)
+STT_ELEVENLABS_READ_TIMEOUT_SECONDS = max(
+    3.0,
+    _env_float("JARVIS_STT_ELEVENLABS_READ_TIMEOUT_SECONDS", 15.0),
+)
+STT_ELEVENLABS_HTTP2 = _env_bool("JARVIS_STT_ELEVENLABS_HTTP2", True)
+STT_ELEVENLABS_COOLDOWN_SECONDS = max(60, _env_int("JARVIS_STT_ELEVENLABS_COOLDOWN_SECONDS", 1800))
+STT_MAX_AUDIO_SECONDS = max(3, _env_int("JARVIS_STT_MAX_AUDIO_SECONDS", 12))
+STT_CLOUD_RACE_LANGUAGES = _env_bool("JARVIS_STT_CLOUD_RACE_LANGUAGES", False)
 STT_ELEVENLABS_WEAK_TEXT_MIN_CHARS = max(2, _env_int("JARVIS_STT_ELEVENLABS_WEAK_TEXT_MIN_CHARS", 5))
 
 # Local fallback backend settings.
-WHISPER_MODEL = _env("JARVIS_WHISPER_MODEL", "small")
+WHISPER_MODEL = _env("JARVIS_WHISPER_MODEL", "auto").strip() or "auto"
+WHISPER_COMPUTE_TYPE = _env("JARVIS_WHISPER_COMPUTE_TYPE", "auto").strip().lower() or "auto"
+WHISPER_DEVICE = _env("JARVIS_WHISPER_DEVICE", "auto").strip().lower() or "auto"
+STT_BEAM_SIZE_SHORT = max(1, _env_int("JARVIS_STT_BEAM_SIZE_SHORT", 1))
+STT_BEAM_SIZE_LONG = max(1, _env_int("JARVIS_STT_BEAM_SIZE_LONG", 5))
+STT_BEAM_SIZE_SHORT_THRESHOLD_SECONDS = max(
+    0.5,
+    _env_float("JARVIS_STT_BEAM_SIZE_SHORT_THRESHOLD_SECONDS", 2.0),
+)
+STT_NO_SPEECH_THRESHOLD = max(0.0, min(1.0, _env_float("JARVIS_STT_NO_SPEECH_THRESHOLD", 0.70)))
+STT_MIN_AUDIO_RMS = max(0.0, _env_float("JARVIS_STT_MIN_AUDIO_RMS", 0.005))
 
 # LLM
 # LLM_BACKEND: "claude" uses Anthropic Claude API; "ollama" uses local Ollama (default).

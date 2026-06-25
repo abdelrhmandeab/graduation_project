@@ -392,9 +392,8 @@ def _resolve_stt_language_hint(*, wake_source=None):
     if preferred in {"ar", "en"}:
         return preferred
 
-    # Default to auto-detection: defer to STT backend's language detector.
-    # The unified wake-word model does not label language; the detector alone
-    # determines if speech is Arabic, English, or mixed.
+    # Default to auto: the STT layer picks and locks ar/en using streaming
+    # text, this hint, or a tiny one-second probe before full transcription.
     return "auto"
 
 
@@ -501,14 +500,14 @@ def _extract_detected_language_from_stt(text):
     return ""
 
 
-def _transcribe_with_runtime_stt(audio_file, wake_source=None):
+def _transcribe_with_runtime_stt(audio_file, wake_source=None, streaming_text=""):
     global _LAST_STT_LANGUAGE_CONFIDENCE
-    # Always use strict auto-detection: pass language_hint="auto" to let
-    # the STT backend's language detector determine language from audio content.
+    # Always use strict auto: the STT backend locks to ar/en before decode.
     text = transcribe_streaming(
         audio_file,
         on_partial=_on_partial_transcript,
         language_hint="auto",
+        streaming_text=str(streaming_text or ""),
     )
     _LAST_STT_LANGUAGE_CONFIDENCE = 0.0
     detected_language = _extract_detected_language_from_stt(text)
@@ -743,6 +742,7 @@ def _process_utterance(
             text, detected_language = _transcribe_with_runtime_stt(
                 audio_file,
                 wake_source=wake_source,
+                streaming_text=_streaming_text,
             )
             _stt_duration = time.perf_counter() - stt_started
             metrics.record_stage("stt", _stt_duration, success=bool(text))
@@ -1003,7 +1003,7 @@ def _cleanup_stale_temp_files():
     """Remove stale utterance and partial-transcription WAVs created by Jarvis."""
     temp_dir = tempfile.gettempdir()
     removed = 0
-    for filename_pattern in ("jarvis_utterance_*.wav", "jarvis_partial_*.wav"):
+    for filename_pattern in ("jarvis_utterance_*.wav", "jarvis_partial_*.wav", "jarvis_stt_probe_*.wav"):
         pattern = os.path.join(temp_dir, filename_pattern)
         for path in glob.glob(pattern):
             try:
@@ -1062,7 +1062,7 @@ def _preload_stt_model():
 
 
 def _preload_optional_stt_models():
-    """Warm partial-transcription and language-detection models off-path."""
+    """Warm optional partial-transcription model off-path."""
     try:
         preload_snapshot = stt_runtime.preload_optional_models()
         logger.debug("Optional STT preload complete: %s", preload_snapshot)
@@ -1782,6 +1782,7 @@ def run():
                 knowledge_base_service.stop_auto_sync()
             except Exception:
                 pass
+            stt_runtime.close_cloud_http_client()
             perform_shutdown_cleanup()
             executor.shutdown(wait=False, cancel_futures=False)
         get_logger("shutdown").info("Shutdown complete in %.2fs", shutdown_timing.elapsed)

@@ -6,6 +6,7 @@ the best model tier that fits the user's hardware.
 
 import httpx
 import psutil
+import subprocess
 
 from core.logger import logger
 
@@ -56,6 +57,68 @@ def detect_gpu_available(ollama_base_url="http://localhost:11434"):
         return False
     except Exception:
         return False
+
+
+def _detect_cuda_vram_mb():
+    """Best-effort CUDA VRAM detection. Returns 0 when CUDA is unavailable."""
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            props = torch.cuda.get_device_properties(0)
+            return int(getattr(props, "total_memory", 0) / (1024 * 1024))
+    except Exception:
+        pass
+
+    try:
+        completed = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=memory.total",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+            check=False,
+        )
+        if completed.returncode == 0:
+            first = (completed.stdout or "").strip().splitlines()[0]
+            return max(0, int(float(first.strip())))
+    except Exception:
+        pass
+    return 0
+
+
+def detect_free_ram_mb():
+    """Return currently available RAM in MB."""
+    try:
+        return int(psutil.virtual_memory().available / (1024 * 1024))
+    except Exception as exc:
+        logger.warning("Failed to detect free RAM: %s", exc)
+        return 4096
+
+
+def recommend_whisper_runtime():
+    """Recommend faster-whisper model/device/compute for the current machine."""
+    vram_mb = _detect_cuda_vram_mb()
+    free_ram_mb = detect_free_ram_mb()
+    if vram_mb >= 6000:
+        model, device, compute_type = "medium", "cuda", "float16"
+    elif vram_mb >= 3000:
+        model, device, compute_type = "small", "cuda", "int8_float16"
+    elif free_ram_mb >= 8000:
+        model, device, compute_type = "small", "cpu", "int8"
+    else:
+        model, device, compute_type = "base", "cpu", "int8"
+
+    return {
+        "model": model,
+        "device": device,
+        "compute_type": compute_type,
+        "vram_mb": vram_mb,
+        "free_ram_mb": free_ram_mb,
+    }
 
 
 def recommend_model_tier(ollama_base_url="http://localhost:11434"):

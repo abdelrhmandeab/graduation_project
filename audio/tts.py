@@ -924,12 +924,18 @@ class SpeechEngine:
             speaker = edge_tts.Communicate(warmup_text, **kwargs)
 
             chunks = []
-            async for event in speaker.stream():
-                if str(event.get("type") or "").lower() != "audio":
-                    continue
-                data = event.get("data")
-                if data:
-                    chunks.append(bytes(data))
+            stream = speaker.stream()
+            try:
+                async for event in stream:
+                    if str(event.get("type") or "").lower() != "audio":
+                        continue
+                    data = event.get("data")
+                    if data:
+                        chunks.append(bytes(data))
+            finally:
+                close_stream = getattr(stream, "aclose", None)
+                if close_stream is not None:
+                    await close_stream()
             return b"".join(chunks)
 
         last_error = ""
@@ -1023,13 +1029,9 @@ class SpeechEngine:
             record_stage_timing("tts_playback", tts_elapsed, backend=backend)
             with self._lock:
                 self._process = None
-                released_thread = False
                 if self._thread and self._thread.ident == threading.current_thread().ident:
                     self._thread = None
-                    released_thread = True
-                queue_thread_active = bool(
-                    self._queue_thread and self._queue_thread.is_alive()
-                )
+
     def _speak_console(self, text, prefix):
         words = text.split()
         if not words:
@@ -1391,14 +1393,20 @@ class SpeechEngine:
                 speaker = edge_tts_module.Communicate(chunk_text, **kwargs)
 
             collected = []
-            async for event in speaker.stream():
-                if self._stop_event.is_set():
-                    break
-                if str(event.get("type") or "").lower() != "audio":
-                    continue
-                data = event.get("data")
-                if data:
-                    collected.append(bytes(data))
+            stream = speaker.stream()
+            try:
+                async for event in stream:
+                    if self._stop_event.is_set():
+                        break
+                    if str(event.get("type") or "").lower() != "audio":
+                        continue
+                    data = event.get("data")
+                    if data:
+                        collected.append(bytes(data))
+            finally:
+                close_stream = getattr(stream, "aclose", None)
+                if close_stream is not None:
+                    await close_stream()
             return b"".join(collected)
 
         import concurrent.futures as _cf
@@ -1715,14 +1723,20 @@ class SpeechEngine:
                 speaker = edge_tts.Communicate(normalized_text, **kwargs)
 
             chunks = []
-            async for event in speaker.stream():
-                if self._stop_event.is_set():
-                    break
-                if str(event.get("type") or "").lower() != "audio":
-                    continue
-                data = event.get("data")
-                if data:
-                    chunks.append(bytes(data))
+            stream = speaker.stream()
+            try:
+                async for event in stream:
+                    if self._stop_event.is_set():
+                        break
+                    if str(event.get("type") or "").lower() != "audio":
+                        continue
+                    data = event.get("data")
+                    if data:
+                        chunks.append(bytes(data))
+            finally:
+                close_stream = getattr(stream, "aclose", None)
+                if close_stream is not None:
+                    await close_stream()
             return b"".join(chunks)
 
         last_error = ""

@@ -515,7 +515,6 @@ def _format_stt_backend_status():
     lines = [
         "STT Backend Status",
         f"stt_backend: {backend}",
-        f"stt_language_detector_model: {backend_info.get('language_detector_model') or 'not_set'}",
         f"stt_elevenlabs_enabled: {backend_info.get('elevenlabs_enabled')}",
         f"stt_elevenlabs_key_configured: {backend_info.get('elevenlabs_key_configured')}",
         f"stt_elevenlabs_model: {backend_info.get('elevenlabs_stt_model') or 'not_set'}",
@@ -524,7 +523,6 @@ def _format_stt_backend_status():
 
     return "\n".join(lines), {
         "stt_backend": backend,
-        "stt_language_detector_model": backend_info.get("language_detector_model") or "",
         "stt_elevenlabs_enabled": bool(backend_info.get("elevenlabs_enabled")),
         "stt_elevenlabs_key_configured": bool(backend_info.get("elevenlabs_key_configured")),
         "stt_elevenlabs_model": backend_info.get("elevenlabs_stt_model") or "",
@@ -685,7 +683,6 @@ def handle(parsed):
             f"voice_quality_mode: {speech_engine.get_quality_mode()}",
             f"audio_ux_profile: {audio_ux['profile']}",
             f"stt_backend: {stt_backend_info.get('backend') or stt_runtime.get_runtime_stt_backend()}",
-            f"stt_language_detector_model: {stt_backend_info.get('language_detector_model') or 'not_set'}",
             f"stt_elevenlabs_enabled: {stt_backend_info.get('elevenlabs_enabled')}",
             f"stt_elevenlabs_key_configured: {stt_backend_info.get('elevenlabs_key_configured')}",
             f"stt_elevenlabs_model: {stt_backend_info.get('elevenlabs_stt_model') or 'not_set'}",

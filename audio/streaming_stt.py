@@ -50,12 +50,10 @@ _ARABIC_CHAR_RE = _re.compile(r"[؀-ۿ]")
 # faster-whisper overrides for Arabic streaming sessions.
 # beam_size=3  — faster than default 5, sufficient quality for real-time partials.
 # vad_filter=False — Silero VAD runs externally; double-VAD causes mis-segmentation.
-# language=None  — auto-detect to handle code-switched utterances.
 # initial_prompt — primes the model with the wake word to bias toward Arabic.
 _ARABIC_STREAMING_WHISPER_KWARGS = {
     "beam_size": 3,
     "vad_filter": False,
-    "language": None,
     "initial_prompt": "جارفيس، افتح، اقفل، شغل، وقف، search، play، weather، دلوقتي، عايز، ممكن، من فضلك",
 }
 
