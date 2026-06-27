@@ -20,6 +20,9 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Optional
 
+from core.persona import get_active_persona
+from core.voice_normalizer import normalize_for_voice
+
 # ---------------------------------------------------------------------------
 # Action templates — (intent, action) → {language: text}
 # Placeholders resolved by _render_template from the entities dict.
@@ -428,6 +431,36 @@ def _split_sentences(text: str) -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
+def _persona_sentence_cap(persona: dict, language: str, fallback: int) -> int:
+    lang = "ar" if str(language or "").strip().lower() == "ar" else "en"
+    length = str((persona.get("voice_length") or {}).get(lang) or "").strip().lower()
+    if not length:
+        return fallback
+    if lang == "ar":
+        if any(token in length for token in ("اتنين", "اثنين", "٢", "2")):
+            return min(fallback, 2)
+        if any(token in length for token in ("جملة", "واحدة", "١", "1")):
+            return min(fallback, 1)
+    numbers = [int(item) for item in re.findall(r"\d+", length)]
+    if numbers:
+        return max(1, min(fallback, max(numbers)))
+    return fallback
+
+
+def _strip_persona_forbidden(text: str, persona: dict, language: str) -> str:
+    lang = "ar" if str(language or "").strip().lower() == "ar" else "en"
+    cleaned = str(text or "")
+    for phrase in (persona.get("forbidden") or {}).get(lang, []):
+        pattern = str(phrase or "").strip()
+        if not pattern:
+            continue
+        cleaned = re.sub(re.escape(pattern), "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    cleaned = re.sub(r"\s+([.,;:!?؟])", r"\1", cleaned)
+    cleaned = re.sub(r"^[\s,.;:!?؟-]+", "", cleaned)
+    return cleaned.strip()
+
+
 class ResponseShaper:
     """Bilingual voice-optimized response post-processor."""
 
@@ -642,6 +675,8 @@ class ResponseShaper:
         """Strip markdown formatting and cap to `max_sentences` sentences."""
         if not text:
             return text
+        persona = get_active_persona()
+        max_sentences = _persona_sentence_cap(persona, language, max_sentences)
 
         # Strip markdown
         text = _MD_BOLD_RE.sub(r"\1", text)
@@ -663,7 +698,8 @@ class ResponseShaper:
             if not text.endswith((".", "!", "?", "؟")):
                 text += "."
 
-        return text
+        text = _strip_persona_forbidden(text, persona, language)
+        return normalize_for_voice(text, language, persona)
 
 
 # ---------------------------------------------------------------------------

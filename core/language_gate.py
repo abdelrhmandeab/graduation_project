@@ -6,6 +6,26 @@ _ARABIC_CHAR_RE = re.compile(r"[\u0600-\u06FF]")
 _LATIN_CHAR_RE = re.compile(r"[A-Za-z]")
 _CYRILLIC_RE = re.compile(r"[\u0400-\u04FF]")
 _ARABIC_DIACRITICS_RE = re.compile(r"[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]")
+_ROMANIZED_ARABIC_WORDS = {
+    "shukran",
+    "shokran",
+    "shokrn",
+    "salam",
+    "salaam",
+    "salem",
+    "tamam",
+    "tammam",
+    "mashi",
+    "maashi",
+    "aywa",
+    "aiwa",
+    "la2",
+    "laa",
+    "inshallah",
+    "enshallah",
+    "yalla",
+    "habibi",
+}
 
 SUPPORTED_LANGUAGES = {"ar", "en"}
 
@@ -54,6 +74,17 @@ def normalize_text_for_language(text, language):
     return " ".join((text or "").strip().split())
 
 
+def looks_romanized_arabic(text):
+    value = str(text or "").strip().lower()
+    if not value:
+        return False
+    tokens = re.findall(r"[a-z0-9']+", value)
+    if not tokens:
+        return False
+    hits = sum(1 for token in tokens if token in _ROMANIZED_ARABIC_WORDS)
+    return hits >= 1 and hits >= max(1, len(tokens) - 1)
+
+
 def detect_supported_language(text, previous_language="en"):
     raw = (text or "").strip()
     if not raw:
@@ -67,6 +98,14 @@ def detect_supported_language(text, previous_language="en"):
 
     arabic, latin, cyrillic, other_alpha = _script_counts(raw)
     ar_en_total = arabic + latin
+
+    if arabic == 0 and latin > 0 and looks_romanized_arabic(raw):
+        return LanguageGateResult(
+            supported=True,
+            language="ar",
+            normalized_text=raw,
+            reason="romanized_arabic",
+        )
 
     # Any Cyrillic characters are a strong signal the transcript is wrong (Russian
     # hallucination from Whisper, or the user spoke Russian). Two or more is definitive.

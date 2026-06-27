@@ -112,3 +112,65 @@ Date: 2026-06-26
 - `python -m compileall -q audio core main.py` — pass
 - `python -m deptry .` — reports the non-STT/package-metadata items listed in Needs review
 - Config audit: every `JARVIS_STT_*` / `JARVIS_WHISPER_*` key read by `core/config.py` appears in `.env.example`; no extras found.
+
+---
+
+# Component 5 — LLM Surface Cleanup (Phase 7)
+
+Date: 2026-06-27
+
+## Removed (with reference proof)
+
+### Dead config keys (core/config.py)
+All had zero consumers after Phases 1–6:
+- `LLM_REALTIME_REWRITE_ENABLED` — the secondary LLM rewrite pass was deleted in Phase 3; this flag defaulted to `False` and was never imported anywhere.
+- `STREAM_AR_SOFT_FLUSH_CHARS` / `STREAM_AR_HARD_FLUSH_CHARS` — legacy char-count flush thresholds superseded by Phase 5's word-count `SentenceBuffer`. Never imported after Phase 5.
+- `VOICE_NORMALIZER_LOCALE` — defined and validated in config but never imported by any module. Language is resolved per-turn from STT/prompt context.
+
+### Dead .env / .env.example keys
+- `JARVIS_LLM_REALTIME_REWRITE_ENABLED` (from `.env` and `.env.example`)
+- `JARVIS_STREAM_AR_SOFT_FLUSH_CHARS`, `JARVIS_STREAM_AR_HARD_FLUSH_CHARS` (from `.env.example`)
+- `JARVIS_VOICE_NORMALIZER_LOCALE` (from `.env.example`)
+
+### Dead code in llm/prompt_builder.py
+- `_FEW_SHOT_EXAMPLES` backward-compat alias — assigned `= _FEW_SHOT_EXAMPLES_FULL` but never referenced. The tier-specific `_fewshot_examples_for_tier()` replaced it.
+- `build_prompt()` — thin wrapper around `build_prompt_package()["prompt"]`. Never imported or called externally.
+- `build_minimal_prompt()` — dead; `build_prompt_package()` with tier auto-selection replaced it.
+- `build_full_prompt()` — dead; same reason.
+- `build_prompt_for_tier()` — dead dispatcher; never imported.
+- `get_system_prompt_for_model()` — dead; never imported.
+- Dead `live_data_rule` first assignment in `build_tool_augmented_prompt()` — the if/else block on lines 445–454 was immediately overwritten by lines 455–459. Removed the dead first assignment.
+
+### Dead code in llm/ollama_client.py
+- `_SENTENCE_END_RE` regex — compiled but never referenced. `SentenceBuffer` handles all flush logic since Phase 5.
+
+### Dead code in tools/live_data.py
+- `_TOOL_FRAMING` initial values — the dict was initialized with old verbose framing strings that were immediately overwritten two lines later. Consolidated into direct assignment.
+
+### Prompt template cleanup (llm/prompts/*.txt)
+- Removed `Name: {name}`, `Language: {lang} only.`, `Response style: {style}.` lines from all three templates (`full_prompt.txt`, `slim_prompt.txt`, `micro_prompt.txt`). These are now injected by the inline language pin (Phase 1) and persona block (Phase 2) in `_build_system_block()`.
+- Removed the `{name}`, `{lang}`, `{style}` template format arguments from the rendering call in `_build_system_block()`.
+- Simplified `_filter_template_lines()` — removed the "be direct … language" filter since that line no longer appears in templates.
+- Simplified inline fallback in `_build_system_block()` — removed duplicate `Name:` / `Response style:` / `Language:` lines that duplicated persona block content.
+
+## Needs review (Awaiting approval)
+
+### Ollama models
+The following models are installed in `~/.ollama/models`:
+
+| Model | Size | Status |
+|---|---|---|
+| `qwen3:4b` | 2.5 GB | **Active** — primary runtime model |
+| `qwen2.5:3b` | 1.9 GB | **Unused** — was a CPU upgrade test candidate (`JARVIS_LLM_CPU_UPGRADE_MODEL`). The CPU upgrade test config keys were already removed in Phase 5 cleanup. Safe to delete via `ollama rm qwen2.5:3b` |
+
+### Other observations
+- `LLM_RESPONSE_CACHE_TTL_SECONDS` remains as a fallback for the split factual/opinion TTL system. It is still imported and read in `command_router.py`. Kept.
+- `_normalize_response_language()` in `prompt_builder.py` is still used internally by all prompt builders. Kept.
+- `PERSONA_DEFAULT` in `config.py` is still consumed by `PersonaManager.__init__()`. Kept.
+- No prompt template file became fully empty after stripping — all three retain their few-shot examples section and `{ar_rule}` placeholder.
+
+## Verification
+
+- `python -m ast` parse check on all edited files — pass
+- Repo-wide grep confirms zero remaining references to removed symbols
+- `.env.example` matches `core/config.py` for all `JARVIS_LLM_*`, `JARVIS_PERSONA_*`, `JARVIS_VOICE_NORMALIZER_*`, and `JARVIS_SENTENCE_BUFFER_*` keys

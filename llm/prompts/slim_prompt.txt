@@ -1,7 +1,5 @@
-Name: {name}
-Language: {lang} only. Response style: {style}.
 {ar_rule}
-Be direct, keep one language, sound natural.
+Be direct and sound natural.
 
 Examples:
 Example 1:

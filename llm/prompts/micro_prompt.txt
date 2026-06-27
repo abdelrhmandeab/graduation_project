@@ -1,7 +1,5 @@
-Name: {name}
-Language: {lang} only. Response style: {style}.
 {ar_rule}
-Be direct and keep one language. Examples:
+Examples:
 USER: افتحلي كروم
 ASSISTANT: تمام، بفتح جوجل كروم دلوقتي.
 USER: what is machine learning?

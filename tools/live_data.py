@@ -13,11 +13,13 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from typing import Dict, Optional
 
 from core.config import (
+    VOICE_NORMALIZER_MAX_SEARCH_RESULTS,
     WEATHER_DEFAULT_CITY,
     WEB_SEARCH_MAX_RESULTS,
     WEB_SEARCH_ENABLED,
 )
 from core.logger import logger
+from core.voice_normalizer import normalize_search_block, normalize_weather_block
 from tools.weather import get_weather
 from tools.web_search import search_web
 
@@ -27,18 +29,23 @@ _LIVE_DATA_TIMEOUT = 3.0  # Total timeout for all live data fetches
 # Keep these short — Qwen-class models follow brief instructions better than long
 # preambles, and the framing lives inside the model's already-tight context budget.
 _TOOL_FRAMING = {
-    "weather": (
-        "Live weather snapshot (use these numbers verbatim — do not invent values):"
-    ),
-    "search": (
-        "Live web search results (cite the most relevant snippet, ignore irrelevant ones):"
-    ),
+    "weather": "Voice-ready live weather:",
+    "search": "Voice-ready live search results:",
 }
 
 
 def _detect_weather_intent(query_text: str) -> Optional[Dict]:
     """Detect if query asks about weather."""
     query = (query_text or "").lower().strip()
+    arabic_weather_keywords = (
+        "\u0637\u0642\u0633",
+        "\u0627\u0644\u0637\u0642\u0633",
+        "\u0627\u0644\u062c\u0648",
+        "\u0623\u062e\u0628\u0627\u0631 \u0627\u0644\u0637\u0642\u0633",
+        "\u0627\u062e\u0628\u0627\u0631 \u0627\u0644\u0637\u0642\u0633",
+        "\u0623\u062e\u0628\u0627\u0631 \u0627\u0644\u062c\u0648",
+        "\u0627\u062e\u0628\u0627\u0631 \u0627\u0644\u062c\u0648",
+    )
     weather_keywords = [
         "weather", "forecast", "temperature", "temp", "cold", "hot", "rain",
         "snow", "clouds", "sunny", "cloudy", "humidity", "wind",
@@ -49,7 +56,7 @@ def _detect_weather_intent(query_text: str) -> Optional[Dict]:
         "مطر", "ثلج", "غيوم", "حرارة", "الحرارة",
     ]
 
-    if any(kw in query for kw in weather_keywords):
+    if any(kw in query for kw in weather_keywords) or any(kw in query for kw in arabic_weather_keywords):
         # Extract city if mentioned (optional — use default if not found).
         # First try preposition-anchored forms ("weather in X", "الطقس في X").
         city_match = re.search(
@@ -68,6 +75,13 @@ def _detect_weather_intent(query_text: str) -> Optional[Dict]:
                 query,
             )
             city = tail_match.group(1).strip() if tail_match else WEATHER_DEFAULT_CITY
+        if city in {
+            "\u0627\u0644\u0646\u0647\u0627\u0631\u062f\u0629",
+            "\u0627\u0644\u0646\u0647\u0627\u0631\u062f\u0647",
+            "\u0627\u0644\u064a\u0648\u0645",
+            "\u062f\u0644\u0648\u0642\u062a\u064a",
+        }:
+            city = WEATHER_DEFAULT_CITY
         return {"type": "weather", "city": city}
 
     return None
@@ -131,7 +145,7 @@ _TOOL_LABELS = {
 }
 
 
-def _format_block(tool_kind: str, body: str) -> str:
+def _format_block(tool_kind: str, body: str, language: str = "en") -> str:
     """Wrap a tool result in a labeled block + per-tool instruction.
 
     The label gives the LLM a clear anchor it can refer back to ("according to the
@@ -140,6 +154,14 @@ def _format_block(tool_kind: str, body: str) -> str:
     text = str(body or "").strip()
     if not text:
         return ""
+    if tool_kind == "weather":
+        text = normalize_weather_block(text, language)
+    elif tool_kind == "search":
+        text = normalize_search_block(
+            text,
+            language,
+            max_results=int(VOICE_NORMALIZER_MAX_SEARCH_RESULTS or 2),
+        )
     framing = _TOOL_FRAMING.get(tool_kind, "")
     label = _TOOL_LABELS.get(tool_kind, f"[{tool_kind.upper()}]")
     if framing:
@@ -157,6 +179,7 @@ def gather_live_data(user_query: str, parallel: bool = True, force_search: bool 
     query = (user_query or "").strip()
     if not query:
         return ""
+    language = "ar" if re.search(r"[\u0600-\u06FF]", query) else "en"
 
     weather_intent = _detect_weather_intent(query)
     search_intent = _detect_web_search_intent(query)
@@ -184,20 +207,21 @@ def gather_live_data(user_query: str, parallel: bool = True, force_search: bool 
             try:
                 for kind, future in futures.items():
                     result = future.result(timeout=_LIVE_DATA_TIMEOUT)
-                    block = _format_block(kind, result)
+                    block = _format_block(kind, result, language)
                     if block:
                         blocks.append(block)
             except FutureTimeoutError:
                 logger.debug("Live data fetch timed out")
     else:
         if weather_intent:
-            block = _format_block("weather", _fetch_weather(weather_intent["city"]))
+            block = _format_block("weather", _fetch_weather(weather_intent["city"]), language)
             if block:
                 blocks.append(block)
         if search_intent:
             block = _format_block(
                 "search",
                 _fetch_web_search(search_intent["query"], int(WEB_SEARCH_MAX_RESULTS or 3)),
+                language,
             )
             if block:
                 blocks.append(block)

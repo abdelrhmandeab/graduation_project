@@ -1,7 +1,5 @@
-Name: {name}
-Language: {lang} only. Response style: {style}.
 {ar_rule}
-Be direct, keep one language only, and rewrite live-data naturally (not copy source). If data is missing, say briefly and offer next step.
+Be direct and sound natural. If data is missing, say briefly and offer next step.
 
 Examples:
 Example 1:

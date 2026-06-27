@@ -6,10 +6,15 @@ import httpx
 
 from core.config import (
     LLM_FALLBACK_MODELS,
+    LLM_MAX_RESPONSE_TOKENS,
     LLM_MODEL,
     LLM_OLLAMA_BASE_URL,
     LLM_OLLAMA_NUM_CTX,
+    LLM_REPEAT_PENALTY,
+    LLM_STOP_TOKENS,
+    LLM_TEMPERATURE,
     LLM_TIMEOUT_SECONDS,
+    LLM_TOP_P,
 )
 from core.logger import logger
 from core.metrics import metrics, record_stage_timing
@@ -26,13 +31,7 @@ llm_cancel_event = threading.Event()
 _runtime_model = None
 _runtime_num_ctx = None
 _runtime_lightweight_num_ctx = None
-_runtime_model_tier = None  # Track tier for tiered prompt selection
-
-# Sentence boundary characters for streaming sentence detection
-_SENTENCE_END_RE = re.compile(r"(?<=[.!?؟\n])\s+|(?<=[.!?؟])$")
-_ARABIC_CHAR_RE = re.compile(r"[\u0600-\u06FF]")
-_STREAM_FLUSH_WORDS = 7
-_STREAM_FLUSH_CHARS = 90
+_runtime_model_tier = None
 
 # qwen3 family emits <think>...</think> reasoning blocks that burn predict tokens
 # and (depending on Ollama version) leak into the response field. Strip them.
@@ -59,6 +58,16 @@ def _strip_thinking_tags(text):
     return cleaned.strip()
 
 
+def _decode_stop_tokens(tokens):
+    decoded = []
+    for token in tokens or []:
+        value = str(token or "")
+        if not value:
+            continue
+        decoded.append(value.replace("\\n", "\n").replace("\\t", "\t"))
+    return decoded
+
+
 def _build_request_payload(model_name, prompt, num_ctx, stream):
     """Construct an Ollama /api/generate payload, suppressing thinking when needed.
 
@@ -71,7 +80,14 @@ def _build_request_payload(model_name, prompt, num_ctx, stream):
         "prompt": effective_prompt,
         "stream": bool(stream),
         "keep_alive": "30m",
-        "options": {"num_ctx": int(num_ctx)},
+        "options": {
+            "num_ctx": int(num_ctx),
+            "temperature": float(LLM_TEMPERATURE),
+            "top_p": float(LLM_TOP_P),
+            "repeat_penalty": float(LLM_REPEAT_PENALTY),
+            "num_predict": int(LLM_MAX_RESPONSE_TOKENS),
+            "stop": _decode_stop_tokens(LLM_STOP_TOKENS),
+        },
     }
     if _is_thinking_mode_model(model_name):
         # Belt-and-suspenders: top-level think flag (Ollama 0.9+) + prompt suffix
@@ -183,36 +199,19 @@ def prewarm_model(timeout_seconds=None):
             "prompt": "",
             "stream": False,
             "keep_alive": "30m",
-            "options": {"num_ctx": effective_num_ctx},
+            "options": {
+                "num_ctx": effective_num_ctx,
+                "temperature": float(LLM_TEMPERATURE),
+                "top_p": float(LLM_TOP_P),
+                "repeat_penalty": float(LLM_REPEAT_PENALTY),
+                "num_predict": int(LLM_MAX_RESPONSE_TOKENS),
+                "stop": _decode_stop_tokens(LLM_STOP_TOKENS),
+            },
         },
         timeout=request_timeout,
     )
     response.raise_for_status()
     return model_name
-
-
-def detect_sentence_boundaries(text: str, is_arabic: bool) -> list[str]:
-    """Split streamed text into speakable chunks.
-
-    Arabic text often arrives with weak punctuation, so we keep normal sentence
-    splitting for punctuation and add a conservative forced flush when a chunk is
-    clearly long enough to speak naturally but still has no boundary.
-    """
-    value = str(text or "").strip()
-    if not value:
-        return []
-
-    parts = [part.strip() for part in _SENTENCE_END_RE.split(value) if part.strip()]
-    if len(parts) > 1:
-        return parts
-
-    if is_arabic:
-        word_count = len(value.split())
-        char_count = len(value)
-        if word_count >= _STREAM_FLUSH_WORDS or char_count >= _STREAM_FLUSH_CHARS:
-            return [value]
-
-    return []
 
 
 def ask_llm_streaming(prompt, on_sentence=None, num_ctx=None, is_arabic=False, cancel_event=None):

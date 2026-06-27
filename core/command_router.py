@@ -1,5 +1,6 @@
 import os
 import re
+import hashlib
 import threading
 import time
 from collections import OrderedDict
@@ -24,11 +25,16 @@ from core.config import (
     FOLLOWUP_REFERENCE_MAX_AGE_SECONDS,
     FOLLOWUP_REFERENCE_MIN_CONFIDENCE,
     LLM_APPEND_SOURCE_CITATIONS,
+    LLM_DEFAULT_LANGUAGE,
     LLM_LIGHTWEIGHT_NUM_CTX,
     LLM_RESPONSE_CACHE_ENABLED,
+    LLM_RESPONSE_CACHE_KEY_INCLUDES_PERSONA,
     LLM_RESPONSE_CACHE_MAX_QUERY_WORDS,
     LLM_RESPONSE_CACHE_MAX_SIZE,
+    LLM_RESPONSE_CACHE_TTL_FACTUAL_SECONDS,
+    LLM_RESPONSE_CACHE_TTL_OPINION_SECONDS,
     LLM_RESPONSE_CACHE_TTL_SECONDS,
+    STT_LANGUAGE_HINT,
     NLU_ENTITY_EXTRACTION_ENABLED,
     RESPONSE_SHAPER_ENABLED,
     NLU_PARSER_FASTPATH_CONFIDENCE_FLOOR,
@@ -40,6 +46,7 @@ from core.config import (
     SEMANTIC_ROUTER_CONFIDENCE_THRESHOLD,
     LIVE_DATA_FORCE_QUESTIONS,
     WEB_SEARCH_ENABLED,
+    WEATHER_DEFAULT_CITY,
     PERSONA_LENGTH_TARGET_ENABLED,
     PERSONA_RESPONSE_MAX_WORDS,
     RESPONSE_MODE_FEATURE_ENABLED,
@@ -61,16 +68,20 @@ from core.intent_confidence import (
     build_clarification_payload,
     resolve_clarification_reply,
 )
-from core.language_gate import UNSUPPORTED_LANGUAGE_MESSAGE, detect_supported_language
-from core.logger import logger, log_structured
+from core.language_gate import UNSUPPORTED_LANGUAGE_MESSAGE, detect_supported_language, looks_romanized_arabic
+from core.logger import get_logger, logger, log_structured
 from core.metrics import metrics
 from core.persona import persona_manager
 from core.response_templates import anti_repetition_prefixes, detect_language_hint, normalize_language, render_template
 from core.response_shaper import response_shaper
 from core.session_memory import session_memory
-from llm.ollama_client import ask_llm, ask_llm_streaming, get_runtime_lightweight_num_ctx, get_runtime_model_tier, get_runtime_num_ctx
+from core.voice_normalizer import normalize_for_voice, normalize_weather_block
+from llm.ollama_client import ask_llm_streaming, get_runtime_lightweight_num_ctx, get_runtime_model_tier, get_runtime_num_ctx
 from llm.prompt_builder import build_prompt_package, build_lightweight_prompt, build_tool_augmented_prompt, build_claude_messages
 from tools.live_data import gather_live_data
+from utils.language_detector import detect_language
+
+llm_logger = get_logger("llm")
 try:
     from nlp.intent_classifier import classify_intent as _classify_keyword_intent
 except Exception:
@@ -1280,23 +1291,61 @@ def _normalize_compact(text):
     return " ".join(str(text or "").lower().split()).strip()
 
 
-def _llm_cache_key(prompt: str, language: str):
-    return (_normalize_compact(language or "en"), _normalize_compact(prompt or ""))
+_OPINION_CACHE_CUES = (
+    "how do",
+    "why",
+    "explain",
+    "what do you think",
+    "opinion",
+    "should i",
+    "should we",
+    "هل",
+    "ليه",
+    "ازاي",
+    "إزاي",
+    "رأيك",
+)
 
 
-def _cache_get_llm_response(prompt: str, language: str):
+def _llm_cache_entry_type(query: str) -> str:
+    normalized = f" {_normalize_compact(query)} "
+    return "opinion" if any(cue in normalized for cue in _OPINION_CACHE_CUES) else "factual"
+
+
+def _llm_cache_ttl_seconds(entry_type: str) -> int:
+    if str(entry_type or "").strip().lower() == "opinion":
+        return max(1, int(LLM_RESPONSE_CACHE_TTL_OPINION_SECONDS or LLM_RESPONSE_CACHE_TTL_SECONDS or 300))
+    return max(1, int(LLM_RESPONSE_CACHE_TTL_FACTUAL_SECONDS or LLM_RESPONSE_CACHE_TTL_SECONDS or 3600))
+
+
+def _llm_cache_key(query: str, language: str, tier: str = "medium"):
+    normalized_query = _normalize_compact(query or "")
+    normalized_language = _normalize_compact(language or LLM_DEFAULT_LANGUAGE or "en")
+    normalized_tier = _normalize_compact(tier or "medium")
+    persona_profile = ""
+    if LLM_RESPONSE_CACHE_KEY_INCLUDES_PERSONA:
+        try:
+            persona_profile = _normalize_compact(persona_manager.get_profile())
+        except Exception:
+            persona_profile = ""
+    payload = "\x1f".join([normalized_query, normalized_language, persona_profile, normalized_tier])
+    return hashlib.sha1(payload.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _cache_get_llm_response(query: str, language: str, tier: str = "medium"):
     if not LLM_RESPONSE_CACHE_ENABLED:
         return None
 
     now = time.time()
-    key = _llm_cache_key(prompt, language)
+    key = _llm_cache_key(query, language, tier)
     entry = _LLM_RESPONSE_CACHE.get(key)
     if not entry:
         _LLM_RESPONSE_CACHE_STATS["misses"] += 1
         return None
 
     cached_at = float(entry.get("cached_at") or 0.0)
-    if cached_at <= 0 or (now - cached_at) > max(1, int(LLM_RESPONSE_CACHE_TTL_SECONDS or 600)):
+    ttl_seconds = _llm_cache_ttl_seconds(entry.get("type"))
+    if cached_at <= 0 or (now - cached_at) > ttl_seconds:
         _LLM_RESPONSE_CACHE.pop(key, None)
         _LLM_RESPONSE_CACHE_STATS["misses"] += 1
         _LLM_RESPONSE_CACHE_STATS["evictions"] += 1
@@ -1304,10 +1353,11 @@ def _cache_get_llm_response(prompt: str, language: str):
 
     _LLM_RESPONSE_CACHE.move_to_end(key)
     _LLM_RESPONSE_CACHE_STATS["hits"] += 1
+    llm_logger.info("llm_response_cache cache_hit=true type=%s tier=%s", entry.get("type") or "factual", tier)
     return str(entry.get("value") or "").strip()
 
 
-def _cache_put_llm_response(prompt: str, language: str, response: str):
+def _cache_put_llm_response(query: str, language: str, response: str, tier: str = "medium"):
     if not LLM_RESPONSE_CACHE_ENABLED:
         return
 
@@ -1315,9 +1365,13 @@ def _cache_put_llm_response(prompt: str, language: str, response: str):
     if not value:
         return
 
-    key = _llm_cache_key(prompt, language)
+    entry_type = _llm_cache_entry_type(query)
+    key = _llm_cache_key(query, language, tier)
     _LLM_RESPONSE_CACHE[key] = {
         "cached_at": time.time(),
+        "language": _normalize_compact(language or "en"),
+        "tier": _normalize_compact(tier or "medium"),
+        "type": entry_type,
         "value": value,
     }
     _LLM_RESPONSE_CACHE.move_to_end(key)
@@ -1343,8 +1397,43 @@ def get_llm_response_cache_stats():
         "stores": int(_LLM_RESPONSE_CACHE_STATS["stores"]),
         "evictions": int(_LLM_RESPONSE_CACHE_STATS["evictions"]),
         "ttl_seconds": int(LLM_RESPONSE_CACHE_TTL_SECONDS or 600),
+        "ttl_factual_seconds": int(LLM_RESPONSE_CACHE_TTL_FACTUAL_SECONDS or 3600),
+        "ttl_opinion_seconds": int(LLM_RESPONSE_CACHE_TTL_OPINION_SECONDS or 300),
         "max_size": int(LLM_RESPONSE_CACHE_MAX_SIZE or 256),
     }
+
+
+def prime_llm_response_cache_async():
+    """Seed common short opener replies without blocking startup."""
+    if not LLM_RESPONSE_CACHE_ENABLED:
+        return None
+
+    def _worker():
+        started = time.perf_counter()
+        openers = [
+            ("hello", "en", "Hey — I'm here."),
+            ("hi", "en", "Hey — I'm here."),
+            ("how are you", "en", "I'm good and ready. What do you need?"),
+            ("اهلا", "ar", "أهلا، أنا معاك."),
+            ("أهلاً", "ar", "أهلا، أنا معاك."),
+            ("كيفك", "ar", "تمام، أنا معاك."),
+            ("ايه اخبارك", "ar", "تمام، أنا معاك."),
+        ]
+        tier = get_runtime_model_tier()
+        for query, language, response in openers:
+            try:
+                _cache_put_llm_response(query, language, response, tier)
+            except Exception:
+                continue
+        llm_logger.info(
+            "LLM response cache primed entries=%d in %.2fs",
+            len(openers),
+            time.perf_counter() - started,
+        )
+
+    thread = threading.Thread(target=_worker, name="jarvis-llm-cache-prime", daemon=True)
+    thread.start()
+    return thread
 
 
 def _normalize_quality_text(text):
@@ -1569,9 +1658,22 @@ def _looks_low_value_llm_reply(text):
 
 
 def _looks_weather_or_clothing_query(text):
+    raw_value = str(text or "")
     normalized = _normalize_quality_text(text)
     if not normalized:
         return False
+    arabic_weather_terms = (
+        "\u0637\u0642\u0633",
+        "\u0627\u0644\u0637\u0642\u0633",
+        "\u0627\u0644\u062c\u0648",
+        "\u0623\u062e\u0628\u0627\u0631 \u0627\u0644\u0637\u0642\u0633",
+        "\u0627\u062e\u0628\u0627\u0631 \u0627\u0644\u0637\u0642\u0633",
+        "\u0623\u062e\u0628\u0627\u0631 \u0627\u0644\u062c\u0648",
+        "\u0627\u062e\u0628\u0627\u0631 \u0627\u0644\u062c\u0648",
+        "\u062f\u0631\u062c\u0629 \u0627\u0644\u062d\u0631\u0627\u0631\u0629",
+    )
+    if any(term in raw_value or term in normalized for term in arabic_weather_terms):
+        return True
     if any(marker in normalized for marker in _WEATHER_QUERY_MARKERS):
         return True
     return any(marker in normalized for marker in _CLOTHING_QUERY_MARKERS)
@@ -1726,37 +1828,65 @@ def _format_news_from_search(search_block: str, language: str) -> str:
     return "Top headlines right now:\n" + "\n".join(top)
 
 
-def _rewrite_live_data_answer(query_text, tool_context, language):
-    context = str(tool_context or "").strip()
-    if not context:
-        return ""
+_WEATHER_CONDITION_AR = {
+    "clear sky": "السما صافية",
+    "mainly clear": "الجو صافي في الغالب",
+    "partly cloudy": "الجو غائم جزئياً",
+    "overcast": "الجو ملبد بالغيوم",
+    "foggy": "فيه شبورة",
+    "light drizzle": "فيه رذاذ خفيف",
+    "moderate drizzle": "فيه رذاذ متوسط",
+    "slight rain": "فيه مطر خفيف",
+    "moderate rain": "فيه مطر متوسط",
+    "heavy rain": "فيه مطر غزير",
+    "thunderstorm": "فيه عواصف رعدية",
+}
 
+
+def _format_weather_direct_answer(weather_text, language):
+    text = " ".join(str(weather_text or "").split()).strip()
+    if not text:
+        return ""
     target_language = normalize_language(language)
-    target_label = "Arabic" if target_language == "ar" else "English"
-    rewrite_prompt = (
-        f"Rewrite the live-data answer below into a natural {target_label} assistant reply.\n"
-        "- Keep the facts accurate.\n"
-        "- Do not copy the source wording or bullet formatting.\n"
-        "- Sound like a helpful human assistant speaking directly to the user.\n"
-        "- If Arabic, use Egyptian colloquial only.\n"
-        "- Return only the rewritten answer.\n\n"
-        f"User request: {query_text}\n"
-        f"Live data:\n{context}"
+    if text.startswith(("الطقس ", "Weather in ")):
+        # Already normalized by core.voice_normalizer / tools.live_data.
+        return normalize_for_voice(text, target_language)
+    match = re.search(
+        r"Weather in (?P<city>.*?): (?P<condition>.*?), (?P<temp>[-+]?\d+(?:\.\d+)?)\s*(?:Â?°C|°C|C), "
+        r"humidity (?P<humidity>\d+(?:\.\d+)?)%, wind (?P<wind>\d+(?:\.\d+)?) km/h",
+        text,
+        flags=re.IGNORECASE,
     )
-    rewritten = (
-        ask_llm(
-            rewrite_prompt,
-            num_ctx=get_runtime_lightweight_num_ctx(default=LLM_LIGHTWEIGHT_NUM_CTX),
-        )
-        or ""
-    ).strip()
-    if not rewritten:
-        return ""
+    if not match:
+        normalized = normalize_weather_block(text, target_language)
+        return normalized or (f"حالة الطقس الحالية باختصار: {text}" if target_language == "ar" else f"Current weather summary: {text}")
 
-    rewritten_language = detect_language_hint(rewritten, fallback=target_language)
-    if rewritten_language != target_language:
-        return ""
-    return rewritten
+    city = str(match.group("city") or WEATHER_DEFAULT_CITY).strip()
+    if city in {
+        "\u0627\u0644\u0646\u0647\u0627\u0631\u062f\u0629",
+        "\u0627\u0644\u0646\u0647\u0627\u0631\u062f\u0647",
+        "\u0627\u0644\u064a\u0648\u0645",
+        "\u062f\u0644\u0648\u0642\u062a\u064a",
+    }:
+        city = str(WEATHER_DEFAULT_CITY or "Cairo")
+    condition = str(match.group("condition") or "").strip()
+    temp = str(match.group("temp") or "?").rstrip("0").rstrip(".")
+    humidity = str(match.group("humidity") or "?").rstrip("0").rstrip(".")
+    wind = str(match.group("wind") or "?").rstrip("0").rstrip(".")
+
+    if target_language == "ar":
+        condition_ar = _WEATHER_CONDITION_AR.get(condition.lower(), condition)
+        city_ar = "\u0627\u0644\u0642\u0627\u0647\u0631\u0629" if city.lower() == "cairo" else city
+        return (
+            f"الطقس في {city_ar} دلوقتي: {condition_ar}. "
+            f"الحرارة {temp} درجة، الرطوبة {humidity} في المية، "
+            f"والرياح حوالي {wind} كيلومتر في الساعة."
+        )
+    return (
+        f"Weather in {city}: {condition}. "
+        f"Temperature {temp} degrees, humidity {humidity} percent, "
+        f"wind about {wind} kilometers per hour."
+    )
 
 
 def _direct_live_data_answer(query_text, tool_context, language):
@@ -1767,9 +1897,7 @@ def _direct_live_data_answer(query_text, tool_context, language):
     if _looks_weather_or_clothing_query(query_text):
         weather_block = _extract_tool_block(context, "WEATHER")
         clean_weather = weather_block or context
-        rewritten = _rewrite_live_data_answer(query_text, clean_weather, language)
-        if rewritten:
-            return rewritten
+        return _format_weather_direct_answer(clean_weather, language)
         if normalize_language(language) == "ar":
             return f"حالة الطقس الحالية باختصار: {clean_weather}"
         return f"Current weather summary: {clean_weather}"
@@ -1778,9 +1906,6 @@ def _direct_live_data_answer(query_text, tool_context, language):
         search_block = _extract_tool_block(context, "WEB_SEARCH")
         news_text = _format_news_from_search(search_block, language)
         if news_text:
-            rewritten = _rewrite_live_data_answer(query_text, news_text, language)
-            if rewritten:
-                return rewritten
             return news_text
 
     return ""
@@ -2111,7 +2236,7 @@ def _finalize_success_response(response_text, parsed, language, original_text, t
         # LLM response: strip any residual markdown and cap sentence count.
         text = response_shaper._trim_for_voice(text, language, max_sentences=4)
 
-    text = _apply_persona_length_target(text, parsed)
+    text = _enforce_reply_language(text, language, original_text, stage="final")
     _record_response_quality(text, language, original_text)
     return text
 
@@ -2315,6 +2440,184 @@ def _infer_language_for_response(parsed, fallback_language):
     if re.search(r"[؀-ۿ]", raw_text):
         return "ar"
     return fallback_language
+
+
+def _infer_language_for_response(parsed, fallback_language):
+    raw_text = str(getattr(parsed, "raw", "") or "")
+    if re.search(r"[\u0600-\u06FF]", raw_text):
+        return "ar"
+    fallback = str(fallback_language or "").strip().lower()
+    return fallback if fallback in {"en", "ar"} else "en"
+
+
+def _language_from_parsed(parsed):
+    containers = []
+    args = getattr(parsed, "args", None)
+    if isinstance(args, dict):
+        containers.append(args)
+    entities = getattr(parsed, "entities", None)
+    if isinstance(entities, dict):
+        containers.append(entities)
+    for container in containers:
+        value = str(container.get("language") or container.get("lang") or "").strip().lower()
+        if value in {"en", "ar"}:
+            return value
+    return ""
+
+
+def _last_stt_locked_language():
+    try:
+        from audio.stt import get_last_transcription_meta
+
+        meta = get_last_transcription_meta()
+    except Exception:
+        return ""
+    lang = str((meta or {}).get("lang_pick_lang") or "").strip().lower()
+    return lang if lang in {"en", "ar"} else ""
+
+
+def resolve_reply_language(spoken_language, parsed):
+    """Resolve the single reply language used for LLM prompts this turn."""
+    spoken = str(spoken_language or "").strip().lower()
+    if spoken in {"en", "ar"}:
+        return spoken
+    stt_lang = _last_stt_locked_language()
+    if stt_lang in {"en", "ar"}:
+        return stt_lang
+    parsed_lang = _language_from_parsed(parsed)
+    if parsed_lang in {"en", "ar"}:
+        return parsed_lang
+    hint_lang = str(STT_LANGUAGE_HINT or "").strip().lower()
+    if hint_lang in {"en", "ar"}:
+        return hint_lang
+    default_lang = str(LLM_DEFAULT_LANGUAGE or "").strip().lower()
+    if default_lang in {"en", "ar"}:
+        return default_lang
+    fallback = str(spoken_language or "").strip().lower()
+    return fallback if fallback in {"en", "ar"} else "en"
+
+
+def _log_llm_language_mismatch(text, expected_language):
+    if not str(text or "").strip():
+        return
+    expected = normalize_language(expected_language)
+    if expected not in {"en", "ar"}:
+        return
+    try:
+        got = detect_language(text)
+    except Exception:
+        got = detect_language_hint(text, fallback=expected)
+    if got not in {"en", "ar"}:
+        return
+    if got != expected:
+        llm_logger.warning(
+            "llm_lang_mismatch expected=%s got=%s preview=%s",
+            expected,
+            got,
+            str(text or "")[:60],
+        )
+
+
+def _is_response_language_mismatch(text, expected_language):
+    value = str(text or "").strip()
+    if not value:
+        return False
+    expected = normalize_language(expected_language)
+    try:
+        got = detect_language(value)
+    except Exception:
+        got = detect_language_hint(value, fallback=expected)
+    if expected == "ar":
+        arabic_chars = len(re.findall(r"[\u0600-\u06FF]", value))
+        latin_chars = len(re.findall(r"[A-Za-z]", value))
+        latin_heavy = latin_chars >= 12 and latin_chars >= max(8, arabic_chars)
+        english_weather_words = re.search(
+            r"\b(clear|skies|today|high|humidity|winds?|coming|kilometers?|degrees?|mostly)\b",
+            value,
+            flags=re.IGNORECASE,
+        )
+        if latin_heavy or english_weather_words:
+            return True
+    if got not in {"en", "ar"}:
+        return False
+    return got != expected
+
+
+def _looks_identity_question_legacy_unused(text):
+    value = str(text or "").strip().lower()
+    if not value:
+        return False
+    if any(phrase in value for phrase in ("who are you", "what are you", "your name", "what's your name")):
+        return True
+    compact = value.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
+    return "مين" in compact and any(token in compact for token in ("انت", "انتا", "انتي", "اسمك"))
+
+
+def _language_guard_fallback_legacy_unused(original_text, language):
+    target_language = normalize_language(language)
+    if target_language == "ar":
+        if _looks_identity_question(original_text):
+            return "أنا جارفس، مساعدك الصوتي. موجود أساعدك بسرعة وبالعامية المصرية."
+        return _fallback_assist_first_response(original_text, "ar")
+    if _looks_identity_question(original_text):
+        return "I'm Jarvis, your voice assistant. I can help with quick, practical answers and actions."
+    return _fallback_assist_first_response(original_text, "en")
+
+
+def _looks_identity_question(text):
+    value = str(text or "").strip().lower()
+    if not value:
+        return False
+    if any(phrase in value for phrase in ("who are you", "what are you", "your name", "what's your name")):
+        return True
+    compact = (
+        value.replace("\u0623", "\u0627")
+        .replace("\u0625", "\u0627")
+        .replace("\u0622", "\u0627")
+        .replace("\u0649", "\u064a")
+    )
+    return "\u0645\u064a\u0646" in compact and any(
+        token in compact
+        for token in (
+            "\u0627\u0646\u062a",
+            "\u0627\u0646\u062a\u0627",
+            "\u0627\u0646\u062a\u064a",
+            "\u0627\u0633\u0645\u0643",
+        )
+    )
+
+
+def _language_guard_fallback(original_text, language):
+    target_language = normalize_language(language)
+    if target_language == "ar":
+        if _looks_identity_question(original_text):
+            return (
+                "\u0623\u0646\u0627 \u062c\u0627\u0631\u0641\u0633\u060c "
+                "\u0645\u0633\u0627\u0639\u062f\u0643 \u0627\u0644\u0635\u0648\u062a\u064a. "
+                "\u0645\u0648\u062c\u0648\u062f \u0623\u0633\u0627\u0639\u062f\u0643 "
+                "\u0628\u0633\u0631\u0639\u0629 \u0648\u0628\u0627\u0644\u0639\u0627\u0645\u064a\u0629 "
+                "\u0627\u0644\u0645\u0635\u0631\u064a\u0629."
+            )
+        return _fallback_assist_first_response(original_text, "ar")
+    if _looks_identity_question(original_text):
+        return "I'm Jarvis, your voice assistant. I can help with quick, practical answers and actions."
+    return _fallback_assist_first_response(original_text, "en")
+
+
+def _enforce_reply_language(response_text, language, original_text, *, stage="final"):
+    text = str(response_text or "").strip()
+    expected = normalize_language(language)
+    if not text or not _is_response_language_mismatch(text, expected):
+        return response_text
+    fallback = _language_guard_fallback(original_text, expected)
+    llm_logger.warning(
+        "llm_lang_mismatch expected=%s got=%s stage=%s preview=%s",
+        expected,
+        detect_language(text),
+        stage,
+        text[:60],
+    )
+    return fallback or response_text
 
 
 def _execute_confirmed_payload(payload):
@@ -2964,6 +3267,7 @@ def _execute_job_command(command_text):
 def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True, on_sentence=None):
     logger.info("Command parsed: %s (%s)", parsed.intent, parsed.action or "no-action")
     language = _infer_language_for_response(parsed, session_memory.get_preferred_language())
+    reply_language = resolve_reply_language(language, parsed)
 
     if parsed.intent == "DEMO_MODE":
         if parsed.action == "on":
@@ -3269,6 +3573,7 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
         return False, "LLM fallback is disabled for this execution path.", {}
 
     # LLM fallback — try live tool context first, then regular prompt
+    language = reply_language
     query_words = len((parsed.raw or "").split())
 
     # Phase 2: fetch live data for weather/news/search queries
@@ -3342,13 +3647,16 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
         # on the FULL response in _finalize_success_response after streaming ends.
         def _stream_callback(sentence):
             shaped = _apply_egyptian_dialect_style(sentence, parsed, language)
+            if _is_response_language_mismatch(shaped, language):
+                _log_llm_language_mismatch(shaped, language)
+                return
             stream_callback(shaped)
 
     else:
         _stream_callback = stream_callback
 
     if cache_eligible:
-        response = str(_cache_get_llm_response(package["prompt"], language) or "").strip()
+        response = str(_cache_get_llm_response(parsed.raw, language, package.get("tier")) or "").strip()
         cache_hit = bool(response)
         if cache_hit and _stream_callback:
             try:
@@ -3356,7 +3664,7 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
             except Exception:
                 pass
 
-    llm_num_ctx = (
+    llm_num_ctx = int(package.get("num_ctx") or 0) or (
         int(get_runtime_lightweight_num_ctx(default=LLM_LIGHTWEIGHT_NUM_CTX))
         if use_lightweight
         else None
@@ -3390,7 +3698,7 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
             if LLM_APPEND_SOURCE_CITATIONS and _claude_kb_sources:
                 response += _format_source_citations(_claude_kb_sources)
             if cache_eligible and response:
-                _cache_put_llm_response(_claude_msgs["user"], language, response)
+                _cache_put_llm_response(parsed.raw, language, response, package.get("tier"))
         else:
             response = (
                 ask_llm_streaming(
@@ -3404,8 +3712,9 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
             if LLM_APPEND_SOURCE_CITATIONS and package["kb_sources"]:
                 response += _format_source_citations(package["kb_sources"])
             if cache_eligible and response:
-                _cache_put_llm_response(package["prompt"], language, response)
+                _cache_put_llm_response(parsed.raw, language, response, package.get("tier"))
 
+    _log_llm_language_mismatch(response, language)
     return (
         True,
         response,
@@ -3530,6 +3839,8 @@ def route_command(
     original_text = text or ""
     start = time.perf_counter()
     forced_language = _normalize_supported_language_tag(detected_language)
+    if looks_romanized_arabic(original_text):
+        forced_language = "ar"
     script_hint = detect_language_hint(original_text, fallback="")
     if forced_language and script_hint in {"ar", "en"} and forced_language != script_hint:
         forced_language = ""

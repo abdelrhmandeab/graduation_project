@@ -40,6 +40,7 @@ from core.command_router import (
     inject_precomputed_live_context,
     clear_precomputed_live_context,
     looks_like_live_data_query,
+    prime_llm_response_cache_async,
 )
 from core.knowledge_base import knowledge_base_service
 from core.doctor import collect_diagnostics
@@ -85,7 +86,7 @@ from core.config import (
 from core.dialogue_manager import DialogueState, dialogue_manager, notify_follow_up_wake
 from core.intent_confidence import assess_intent_confidence
 from core.logger import get_logger, kv, logger, section
-from core.language_gate import detect_supported_language
+from core.language_gate import detect_supported_language, looks_romanized_arabic
 from core.metrics import (
     get_thread_stage_timing,
     latency_tracker,
@@ -485,6 +486,8 @@ def _extract_detected_language_from_stt(text):
     global _LAST_STT_LANGUAGE_CONFIDENCE
     stt_meta = stt_runtime.get_last_transcription_meta()
     detected_language = str((stt_meta or {}).get("language") or "").strip().lower()
+    if looks_romanized_arabic(text):
+        detected_language = "ar"
     try:
         _LAST_STT_LANGUAGE_CONFIDENCE = float((stt_meta or {}).get("language_confidence") or 0.0)
     except (TypeError, ValueError):
@@ -824,7 +827,7 @@ def _process_utterance(
         turn_intent = str(getattr(precomputed_parser_candidate, "intent", "") or "")
 
         tts_language = detected_language or session_memory.get_preferred_language()
-        if _ARABIC_CHAR_RE.search(str(text or "")):
+        if _ARABIC_CHAR_RE.search(str(text or "")) or looks_romanized_arabic(text):
             tts_language = "ar"
         should_speak_response = not _is_interrupt_command(text)
 
@@ -1623,6 +1626,7 @@ def run():
 
     get_logger("startup").info("Jarvis ready — listening.")
     _speak_startup_greeting()
+    prime_llm_response_cache_async()
     _adaptive_start_daemon()
 
     try:
