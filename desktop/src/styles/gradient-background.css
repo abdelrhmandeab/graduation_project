@@ -1,0 +1,78 @@
+/* Animated gradient background — no-GPU safe.
+   Premium drifting gradient mesh built from soft radial blobs animated with
+   transform only (GPU-composited, no layout/paint), plus a STATIC SVG noise
+   overlay. No WebGL, no animated filters. */
+
+.jgb-root {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.jgb-layers {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.jgb-blob {
+  position: absolute;
+  /* Each blob is ~150% of the container so its soft radial edge stays
+     off-screen as it drifts; softness comes from the gradient stops, not blur. */
+  width: 150%;
+  height: 150%;
+  border-radius: 9999px;
+  opacity: 0.85;
+  will-change: transform;
+  /* default at rest position; per-blob transform set inline */
+}
+
+.jgb-blob.jgb-animating {
+  animation-name: jgb-drift;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+  animation-direction: alternate;
+}
+
+/* Drift uses only translate + scale (transform), never position/size. */
+@keyframes jgb-drift {
+  0% {
+    transform: translate3d(-12%, -8%, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(10%, 6%, 0) scale(1.12);
+  }
+  100% {
+    transform: translate3d(-4%, 12%, 0) scale(1.04);
+  }
+}
+
+.jgb-noise {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  mix-blend-mode: soft-light;
+  /* background image (SVG feTurbulence data URI) set inline via style */
+}
+
+.jgb-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  -webkit-backdrop-filter: blur(var(--jgb-backdrop-blur, 0));
+  backdrop-filter: blur(var(--jgb-backdrop-blur, 0));
+}
+
+.jgb-content {
+  position: relative;
+  z-index: 3;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jgb-blob.jgb-animating {
+    animation: none;
+  }
+}

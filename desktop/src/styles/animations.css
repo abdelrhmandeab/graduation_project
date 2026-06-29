@@ -1,0 +1,195 @@
+.avatar-root {
+  --state-color: #aeefff;
+  --bot-active: #aeefff;
+}
+
+.avatar-breathe {
+  animation: avatar-breathe 2.4s ease-in-out infinite;
+}
+
+.avatar-attn {
+  animation: avatar-attn 1.35s ease-in-out infinite;
+}
+
+.avatar-exec-glow {
+  animation: avatar-exec-glow 1.7s ease-in-out infinite;
+}
+
+.avatar-shimmer {
+  animation: avatar-shimmer 2.1s ease-in-out infinite;
+}
+
+.avatar-spin {
+  animation: avatar-spin 1.55s linear infinite;
+}
+
+.avatar-spin-reverse {
+  animation: avatar-spin 2.4s linear infinite reverse;
+}
+
+.avatar-float {
+  animation: avatar-float 4.6s ease-in-out infinite;
+}
+
+.avatar-core-pulse {
+  animation: avatar-core-pulse 2.4s ease-in-out infinite;
+}
+
+.avatar-sparkle {
+  animation: avatar-sparkle 5s ease-in-out infinite;
+  transform-origin: center;
+}
+
+.avatar-idle-blink {
+  animation: avatar-blink 5.2s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.avatar-status-dot {
+  animation: avatar-status-dot 2.4s ease-in-out infinite;
+}
+
+.state-listening .avatar-status-dot {
+  animation-duration: 1.35s;
+}
+
+.state-responding .avatar-status-dot {
+  animation-duration: 0.78s;
+}
+
+.avatar-flow {
+  animation: avatar-dash-flow 3.8s linear infinite;
+}
+
+.state-listening .avatar-flow {
+  animation-direction: reverse;
+  animation-duration: 2.6s;
+}
+
+.state-responding .avatar-flow {
+  animation-duration: 1.9s;
+}
+
+.state-processing .avatar-flow {
+  animation-duration: 1.25s;
+}
+
+@keyframes avatar-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.045);
+  }
+}
+
+@keyframes avatar-attn {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(1.08);
+  }
+}
+
+@keyframes avatar-exec-glow {
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(1.34);
+  }
+}
+
+@keyframes avatar-shimmer {
+  0%,
+  100% {
+    opacity: 0.78;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes avatar-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes avatar-float {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-0.3deg);
+  }
+  50% {
+    transform: translateY(-6px) rotate(0.3deg);
+  }
+}
+
+@keyframes avatar-core-pulse {
+  0%,
+  100% {
+    transform: scale(0.98);
+    opacity: 0.78;
+  }
+  50% {
+    transform: scale(1.04);
+    opacity: 1;
+  }
+}
+
+@keyframes avatar-sparkle {
+  0%,
+  100% {
+    transform: scale(0.82) rotate(0deg);
+    opacity: 0.42;
+  }
+  48% {
+    transform: scale(1.16) rotate(45deg);
+    opacity: 1;
+  }
+}
+
+@keyframes avatar-blink {
+  0%,
+  88%,
+  96%,
+  100% {
+    transform: scaleY(1);
+  }
+  91% {
+    transform: scaleY(0.06);
+  }
+}
+
+@keyframes avatar-status-dot {
+  0%,
+  100% {
+    transform: scale(0.82);
+    opacity: 0.35;
+  }
+  45% {
+    transform: scale(1.18);
+    opacity: 1;
+  }
+}
+
+@keyframes avatar-dash-flow {
+  to {
+    stroke-dashoffset: -114;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .avatar-root *,
+  .avatar-root *::before,
+  .avatar-root *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
