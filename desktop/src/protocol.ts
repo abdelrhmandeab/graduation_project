@@ -2,6 +2,23 @@ export type DialogueState = 'idle' | 'listening' | 'processing' | 'responding' |
 
 export type Language = 'en' | 'ar';
 
+export interface FeatureFlags {
+  NUMERIC_PARSING_ENABLED: boolean;
+  AUTO_APP_DISCOVERY_ENABLED: boolean;
+  MEDIA_DIRECT_DISPATCH_ENABLED: boolean;
+  SYSTEM_VOLUME_CONTROL: boolean;
+}
+
+export interface ConfigValues {
+  model: string;
+  model_tier: string;
+  wake_mode: string;
+  feature_flags: FeatureFlags;
+  stt_backend: string;
+  tts_backend: string;
+  persona: string;
+}
+
 // Engine -> UI events (discriminated union on "type" field)
 export interface StateChangedEvent {
   type: 'state_changed';
@@ -38,6 +55,10 @@ export interface ErrorEvent {
   type: 'error';
   message: string;
 }
+export interface ConfigEvent {
+  type: 'config';
+  values: ConfigValues;
+}
 
 export type EngineEvent =
   | StateChangedEvent
@@ -46,12 +67,14 @@ export type EngineEvent =
   | ResponseEvent
   | AmplitudeEvent
   | MetricsEvent
-  | ErrorEvent;
+  | ErrorEvent
+  | ConfigEvent;
 
 // UI -> Engine commands
 export interface TextCommandMessage {
   type: 'text_command';
   text: string;
+  language?: Language;
 }
 export interface MuteToggleMessage {
   type: 'mute_toggle';
@@ -62,8 +85,21 @@ export interface SettingUpdateMessage {
   key: string;
   value: unknown;
 }
+export interface FeatureFlagMessage {
+  type: 'feature_flag';
+  flag: keyof FeatureFlags;
+  enabled: boolean;
+}
+export interface ConfigRequestMessage {
+  type: 'config_request';
+}
 
-export type UICommand = TextCommandMessage | MuteToggleMessage | SettingUpdateMessage;
+export type UICommand =
+  | TextCommandMessage
+  | MuteToggleMessage
+  | SettingUpdateMessage
+  | FeatureFlagMessage
+  | ConfigRequestMessage;
 
 // State colors matching Python ui/tray.py
 export const STATE_COLORS: Record<DialogueState, string> = {

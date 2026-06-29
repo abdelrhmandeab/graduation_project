@@ -71,4 +71,32 @@ describe('jarvisStore', () => {
 
     expect(useJarvisStore.getState().lastError).toBe('socket failed');
   });
+
+  it('handles config and optimistic dashboard state updates', () => {
+    useJarvisStore.getState().dispatch({
+      type: 'config',
+      values: {
+        model: 'qwen3:4b',
+        model_tier: 'auto',
+        wake_mode: 'both',
+        feature_flags: {
+          NUMERIC_PARSING_ENABLED: true,
+          AUTO_APP_DISCOVERY_ENABLED: true,
+          MEDIA_DIRECT_DISPATCH_ENABLED: true,
+          SYSTEM_VOLUME_CONTROL: true,
+        },
+        stt_backend: 'hybrid_elevenlabs',
+        tts_backend: 'hybrid',
+        persona: 'friendly',
+      },
+    });
+
+    useJarvisStore.getState().setFeatureFlagLocal('NUMERIC_PARSING_ENABLED', false);
+    useJarvisStore.getState().setConfigValueLocal('model', 'qwen3:8b');
+    useJarvisStore.getState().setAppView('dashboard');
+
+    expect(useJarvisStore.getState().config?.feature_flags.NUMERIC_PARSING_ENABLED).toBe(false);
+    expect(useJarvisStore.getState().config?.model).toBe('qwen3:8b');
+    expect(useJarvisStore.getState().appView).toBe('dashboard');
+  });
 });

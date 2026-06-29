@@ -1,13 +1,18 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
-import type { DialogueState, EngineEvent, Language } from '../protocol';
+import type { ConfigValues, DialogueState, EngineEvent, FeatureFlags, Language } from '../protocol';
 
 type ConnectionStatus = 'connecting' | 'connected' | 'disconnected';
 export type AvatarDirection = 'aurora' | 'glyph' | 'glassai' | 'companion';
+export type AppView = 'overlay' | 'dashboard';
+export type UiLanguage = Language | 'auto';
 
 interface JarvisState {
   connectionStatus: ConnectionStatus;
   dialogueState: DialogueState;
+  config: ConfigValues | null;
+  appView: AppView;
+  uiLanguage: UiLanguage;
   amplitude: number;
   muted: boolean;
   partialTranscript: string;
@@ -23,7 +28,12 @@ interface JarvisState {
   setConnectionStatus: (status: ConnectionStatus) => void;
   setMuted: (muted: boolean) => void;
   setAvatarDirection: (direction: AvatarDirection) => void;
+  setAppView: (view: AppView) => void;
+  setUiLanguage: (language: UiLanguage) => void;
+  setFeatureFlagLocal: (flag: keyof FeatureFlags, enabled: boolean) => void;
+  setConfigValueLocal: <K extends keyof ConfigValues>(key: K, value: ConfigValues[K]) => void;
   previewState: (state: DialogueState | null) => void;
+  setPreviewState: (state: DialogueState | null) => void;
   reset: () => void;
   lastError: string | null;
 }
@@ -31,6 +41,9 @@ interface JarvisState {
 const initialState = {
   connectionStatus: 'disconnected' as ConnectionStatus,
   dialogueState: 'idle' as DialogueState,
+  config: null,
+  appView: 'overlay' as AppView,
+  uiLanguage: 'auto' as UiLanguage,
   amplitude: 0,
   muted: false,
   partialTranscript: '',
@@ -94,18 +107,56 @@ export const useJarvisStore = create<JarvisState>()(
           case 'error':
             set({ lastError: event.message });
             break;
+          case 'config':
+            set({ config: event.values });
+            break;
         }
       },
       setConnectionStatus: (status) => set({ connectionStatus: status }),
       setMuted: (muted) => set({ muted }),
       setAvatarDirection: (avatarDirection) => set({ avatarDirection }),
+      setAppView: (appView) => set({ appView }),
+      setUiLanguage: (uiLanguage) => set({ uiLanguage }),
+      setFeatureFlagLocal: (flag, enabled) =>
+        set((state) => {
+          if (!state.config) {
+            return state;
+          }
+
+          return {
+            config: {
+              ...state.config,
+              feature_flags: {
+                ...state.config.feature_flags,
+                [flag]: enabled,
+              },
+            },
+          };
+        }),
+      setConfigValueLocal: (key, value) =>
+        set((state) => {
+          if (!state.config) {
+            return state;
+          }
+
+          return {
+            config: {
+              ...state.config,
+              [key]: value,
+            },
+          };
+        }),
       previewState: (previewDialogueState) => set({ previewDialogueState }),
+      setPreviewState: (previewDialogueState) => set({ previewDialogueState }),
       reset: () => set(initialState),
     }),
     {
       name: 'jarvis-ui',
       storage: createJSONStorage(() => localStorage),
-      partialize: (state) => ({ avatarDirection: state.avatarDirection }),
+      partialize: (state) => ({
+        avatarDirection: state.avatarDirection,
+        appView: state.appView,
+      }),
     },
   ),
 );
