@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import type { UICommand, FeatureFlags } from '../../protocol';
 import { backToOverlay, closeApp } from '../../lib/app';
+import { PromptInput } from '../overlay/PromptInput';
 import { useJarvisStore, type AvatarDirection, type UiLanguage } from '../../stores/jarvisStore';
 import { Segmented, type SegmentedOption } from './Segmented';
 import { Select, type SelectOption } from './Select';
@@ -102,7 +103,20 @@ export function Dashboard({ send }: DashboardProps) {
               }}
               className="h-10 rounded border border-[#8EEBFF]/28 bg-[#8EEBFF]/12 px-4 text-sm font-medium text-[#DDFBFF] transition hover:bg-[#8EEBFF]/18"
             >
-              Back
+              Hide
+            </button>
+            <button
+              type="button"
+              aria-label="Close Jarvis"
+              title="Close Jarvis"
+              onClick={() => {
+                void closeApp().catch((error: unknown) => console.error('Failed to close app.', error));
+              }}
+              className="grid h-10 w-10 place-items-center rounded border border-red-300/25 bg-red-400/12 text-red-100 transition hover:bg-red-400/20"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M4 4 L12 12 M12 4 L4 12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+              </svg>
             </button>
           </div>
         </header>
@@ -114,6 +128,11 @@ export function Dashboard({ send }: DashboardProps) {
         ) : null}
 
         <div className="grid gap-4 lg:grid-cols-2">
+          <section className="rounded border border-white/10 bg-white/[0.045] p-4 shadow-lg shadow-black/20 lg:col-span-2">
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.14em] text-[#8EEBFF]/78">Send a Prompt</h2>
+            <PromptInput send={send} />
+          </section>
+
           <Section title="Avatar">
             <Segmented value={avatarDirection} options={avatarOptions} onChange={setAvatarDirection} />
           </Section>
@@ -180,18 +199,6 @@ export function Dashboard({ send }: DashboardProps) {
             </dl>
           </Section>
 
-          <section className="rounded border border-red-300/20 bg-red-500/[0.055] p-4 lg:col-span-2">
-            <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.14em] text-red-100/70">Close App</h2>
-            <button
-              type="button"
-              onClick={() => {
-                void closeApp().catch((error: unknown) => console.error('Failed to close app.', error));
-              }}
-              className="h-11 rounded border border-red-200/25 bg-red-400/14 px-4 text-sm font-semibold text-red-50 transition hover:bg-red-400/20"
-            >
-              Close Jarvis
-            </button>
-          </section>
         </div>
       </main>
     </div>
