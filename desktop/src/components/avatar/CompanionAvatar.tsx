@@ -1,6 +1,7 @@
 import { useState, type CSSProperties } from 'react';
 import { useReducedMotion } from 'motion/react';
 import type { DialogueState } from '../../protocol';
+import companionLogo from '../../assets/companion-logo.png';
 
 interface AvatarProps {
   state: DialogueState;
@@ -88,24 +89,19 @@ export function CompanionAvatar({ state, color }: AvatarProps) {
             background: `radial-gradient(circle at 50% 46%, ${active}55 0%, ${active}1a 44%, transparent 72%)`,
           }}
         />
-        {/* tilted rounded-square logo — stroke tracks the state color */}
+        {/* companion brand logo */}
         <div className="absolute inset-0 grid place-items-center">
-          <svg width="78" height="78" viewBox="0 0 100 100" fill="none" aria-hidden="true">
-            <rect
-              className="avatar-core-pulse"
-              x="27"
-              y="27"
-              width="46"
-              height="46"
-              rx="8"
-              ry="8"
-              transform="rotate(16 50 50)"
-              stroke={active}
-              strokeWidth="3"
-              strokeLinejoin="round"
-              style={{ filter: `drop-shadow(0 0 6px ${active}88)` }}
-            />
-          </svg>
+          <img
+            src={companionLogo}
+            alt=""
+            aria-hidden="true"
+            className="avatar-core-pulse"
+            style={{
+              width: 58,
+              height: 'auto',
+              filter: 'drop-shadow(0 0 8px rgba(255,0,123,0.5))',
+            }}
+          />
         </div>
       </div>
     </div>
