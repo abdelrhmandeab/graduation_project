@@ -4,7 +4,6 @@ import type { DialogueState, UICommand } from '../../protocol';
 import { useJarvisStore } from '../../stores/jarvisStore';
 import { openDashboard, showOverlay, hideOverlay, isTauri } from '../../lib/app';
 import { Avatar } from '../Avatar';
-import { DirectionPicker } from '../DirectionPicker';
 import { Transcript } from '../Transcript';
 import { PromptInput } from './PromptInput';
 
@@ -86,8 +85,6 @@ export function Overlay({ send }: OverlayProps) {
           </button>
         </div>
       </div>
-
-      {import.meta.env.DEV ? <DirectionPicker /> : null}
     </div>
   );
 }
