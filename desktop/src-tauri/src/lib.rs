@@ -24,6 +24,22 @@ fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+#[tauri::command]
+fn show_overlay(app: tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("overlay") {
+        position_overlay(&w);
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+
+#[tauri::command]
+fn hide_overlay(app: tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("overlay") {
+        let _ = w.hide();
+    }
+}
+
 /// Position the frameless overlay near the bottom-right of the primary monitor.
 fn position_overlay(window: &tauri::WebviewWindow) {
     if let Ok(Some(monitor)) = window.primary_monitor() {
@@ -43,7 +59,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             open_dashboard,
             hide_dashboard,
-            quit_app
+            quit_app,
+            show_overlay,
+            hide_overlay
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

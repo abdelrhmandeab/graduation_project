@@ -34,6 +34,16 @@ export async function backToOverlay(): Promise<void> {
   useJarvisStore.getState().setAppView('overlay');
 }
 
+/** Show the avatar overlay window (re-positioned bottom-right). No-op outside Tauri. */
+export async function showOverlay(): Promise<void> {
+  if (isTauri()) await invokeCommand('show_overlay');
+}
+
+/** Hide the avatar overlay window back to the tray. No-op outside Tauri. */
+export async function hideOverlay(): Promise<void> {
+  if (isTauri()) await invokeCommand('hide_overlay');
+}
+
 /** Quit the whole app (engine stays separate). No-op outside Tauri. */
 export async function closeApp(): Promise<void> {
   if (!isTauri()) {
