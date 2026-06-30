@@ -1,1 +1,10 @@
 @import "tailwindcss";
+
+html,
+body,
+#root {
+  height: 100%;
+  /* Transparent so the Tauri overlay window shows the desktop behind it.
+     Dashboard and views paint their own opaque surfaces. */
+  background: transparent;
+}

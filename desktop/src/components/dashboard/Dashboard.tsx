@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import type { UICommand, FeatureFlags } from '../../protocol';
-import { closeApp } from '../../lib/app';
+import { backToOverlay, closeApp } from '../../lib/app';
 import { useJarvisStore, type AvatarDirection, type UiLanguage } from '../../stores/jarvisStore';
 import { Segmented, type SegmentedOption } from './Segmented';
 import { Select, type SelectOption } from './Select';
@@ -61,7 +61,6 @@ export function Dashboard({ send }: DashboardProps) {
   const uiLanguage = useJarvisStore((state) => state.uiLanguage);
   const muted = useJarvisStore((state) => state.muted);
   const connectionStatus = useJarvisStore((state) => state.connectionStatus);
-  const setAppView = useJarvisStore((state) => state.setAppView);
   const setAvatarDirection = useJarvisStore((state) => state.setAvatarDirection);
   const setUiLanguage = useJarvisStore((state) => state.setUiLanguage);
   const setMuted = useJarvisStore((state) => state.setMuted);
@@ -98,7 +97,9 @@ export function Dashboard({ send }: DashboardProps) {
             </button>
             <button
               type="button"
-              onClick={() => setAppView('overlay')}
+              onClick={() => {
+                void backToOverlay();
+              }}
               className="h-10 rounded border border-[#8EEBFF]/28 bg-[#8EEBFF]/12 px-4 text-sm font-medium text-[#DDFBFF] transition hover:bg-[#8EEBFF]/18"
             >
               Back

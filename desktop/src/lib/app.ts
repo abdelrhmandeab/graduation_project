@@ -1,17 +1,44 @@
+import { useJarvisStore } from '../stores/jarvisStore';
+
 type TauriWindow = Window & {
   __TAURI_INTERNALS__?: unknown;
   __TAURI__?: unknown;
 };
 
-export async function closeApp() {
-  const currentWindow = window as TauriWindow;
-  const isTauri = '__TAURI_INTERNALS__' in currentWindow || '__TAURI__' in currentWindow;
+export function isTauri(): boolean {
+  if (typeof window === 'undefined') return false;
+  const w = window as TauriWindow;
+  return '__TAURI_INTERNALS__' in w || '__TAURI__' in w;
+}
 
-  if (!isTauri) {
+async function invokeCommand(command: string): Promise<void> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke(command);
+}
+
+/** Open the dashboard: a separate window under Tauri, an in-app view in the browser. */
+export async function openDashboard(): Promise<void> {
+  if (isTauri()) {
+    await invokeCommand('open_dashboard');
+    return;
+  }
+  useJarvisStore.getState().setAppView('dashboard');
+}
+
+/** Return from the dashboard: hide the window under Tauri, switch view in the browser. */
+export async function backToOverlay(): Promise<void> {
+  if (isTauri()) {
+    await invokeCommand('hide_dashboard');
+    return;
+  }
+  useJarvisStore.getState().setAppView('overlay');
+}
+
+/** Quit the whole app (engine stays separate). No-op outside Tauri. */
+export async function closeApp(): Promise<void> {
+  if (!isTauri()) {
     console.warn('closeApp is only available in the Tauri runtime.');
     return;
   }
-
-  const { getCurrentWindow } = await import('@tauri-apps/api/window');
-  await getCurrentWindow().close();
+  await invokeCommand('quit_app');
 }

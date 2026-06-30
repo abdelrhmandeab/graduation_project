@@ -1,5 +1,6 @@
 import type { UICommand } from '../../protocol';
 import { useJarvisStore } from '../../stores/jarvisStore';
+import { openDashboard } from '../../lib/app';
 import { Avatar } from '../Avatar';
 import { DirectionPicker } from '../DirectionPicker';
 import { Transcript } from '../Transcript';
@@ -12,7 +13,6 @@ interface OverlayProps {
 export function Overlay({ send }: OverlayProps) {
   const muted = useJarvisStore((state) => state.muted);
   const setMuted = useJarvisStore((state) => state.setMuted);
-  const setAppView = useJarvisStore((state) => state.setAppView);
 
   const toggleMuted = () => {
     const nextMuted = !muted;
@@ -42,7 +42,9 @@ export function Overlay({ send }: OverlayProps) {
         </button>
         <button
           type="button"
-          onClick={() => setAppView('dashboard')}
+          onClick={() => {
+            void openDashboard();
+          }}
           className="h-10 shrink-0 rounded border border-white/10 bg-white/[0.06] px-3 text-sm font-medium text-white/80 transition hover:border-[#8EEBFF]/35 hover:text-white"
         >
           Dashboard
