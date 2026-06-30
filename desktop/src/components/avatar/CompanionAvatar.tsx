@@ -88,16 +88,21 @@ export function CompanionAvatar({ state, color }: AvatarProps) {
             background: `radial-gradient(circle at 50% 46%, ${active}55 0%, ${active}1a 44%, transparent 72%)`,
           }}
         />
-        {/* 4-point sparkle logo — stroke tracks the state color */}
+        {/* tilted rounded-square logo — stroke tracks the state color */}
         <div className="absolute inset-0 grid place-items-center">
           <svg width="78" height="78" viewBox="0 0 100 100" fill="none" aria-hidden="true">
-            <path
+            <rect
               className="avatar-core-pulse"
-              d="M50 5 L61.3 38.7 L95 50 L61.3 61.3 L50 95 L38.7 61.3 L5 50 L38.7 38.7 Z"
+              x="27"
+              y="27"
+              width="46"
+              height="46"
+              rx="8"
+              ry="8"
+              transform="rotate(16 50 50)"
               stroke={active}
               strokeWidth="3"
               strokeLinejoin="round"
-              strokeLinecap="round"
               style={{ filter: `drop-shadow(0 0 6px ${active}88)` }}
             />
           </svg>
