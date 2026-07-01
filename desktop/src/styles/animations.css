@@ -35,19 +35,39 @@
   animation: avatar-core-pulse 2.4s ease-in-out infinite;
 }
 
-/* companion double-L logo throb — shrinks/expands through running + execution states */
-.companion-logo-throb {
-  animation: companion-logo-throb 1.5s ease-in-out infinite;
-  transform-origin: 50% 50%;
+/* companion double-L logo — the two L-shapes counter-rotate and pull apart
+   (rebel) through the running + execution states. Rotate about the viewBox
+   centre (50,50). */
+.companion-logo-l {
+  transform-box: view-box;
+  transform-origin: 50px 50px;
 }
 
-@keyframes companion-logo-throb {
+.companion-logo-l-a {
+  animation: companion-l-a 1.9s ease-in-out infinite;
+}
+
+.companion-logo-l-b {
+  animation: companion-l-b 1.9s ease-in-out infinite;
+}
+
+@keyframes companion-l-a {
   0%,
   100% {
-    transform: scale(0.82);
+    transform: translate(0, 0) rotate(0deg);
   }
   50% {
-    transform: scale(1.08);
+    transform: translate(6px, -6px) rotate(40deg);
+  }
+}
+
+@keyframes companion-l-b {
+  0%,
+  100% {
+    transform: translate(0, 0) rotate(0deg);
+  }
+  50% {
+    transform: translate(-6px, 6px) rotate(-40deg);
   }
 }
 

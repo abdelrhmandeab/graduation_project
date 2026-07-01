@@ -12,6 +12,8 @@ export function CompanionAvatar({ state, color }: AvatarProps) {
   // Logo: white at rest, tinted with the state color once active.
   const logoColor = state === 'idle' ? '#FFFFFF' : color;
   const shouldReduceMotion = useReducedMotion();
+  // The L-shapes rebel (counter-rotate + separate) through the running/execution states.
+  const animateLogo = !shouldReduceMotion && state !== 'idle';
   const [hover, setHover] = useState(false);
 
   const floatClass = shouldReduceMotion
@@ -90,8 +92,10 @@ export function CompanionAvatar({ state, color }: AvatarProps) {
             background: `radial-gradient(circle at 50% 46%, ${active}55 0%, ${active}1a 44%, transparent 72%)`,
           }}
         />
-        {/* companion double-L logo — white when idle, tints with state,
-            shrinks/expands through the running + execution states */}
+        {/* companion double-L logo — white when idle, tints with state. The two
+            conjugate L-shapes counter-rotate and pull apart (rebel) while active.
+            The 13deg tilt is baked into the path coords so each L rotates cleanly
+            about the viewBox centre. */}
         <div className="absolute inset-0 grid place-items-center">
           <svg
             width="70"
@@ -99,12 +103,17 @@ export function CompanionAvatar({ state, color }: AvatarProps) {
             viewBox="0 0 100 100"
             fill="none"
             aria-hidden="true"
-            className={!shouldReduceMotion && state !== 'idle' ? 'companion-logo-throb' : ''}
-            style={{ filter: `drop-shadow(0 0 8px ${logoColor}aa)` }}
+            style={{ filter: `drop-shadow(0 0 8px ${logoColor}aa)`, overflow: 'visible' }}
           >
             <path
-              d="M22 16 L78 16 L78 58 L60 58 L60 32 L22 32 Z M78 84 L22 84 L22 42 L40 42 L40 68 L78 68 Z"
-              transform="rotate(13 50 50)"
+              className={`companion-logo-l ${animateLogo ? 'companion-logo-l-a' : ''}`}
+              d="M30.4 10.6 L84.9 23.2 L75.5 64.1 L57.9 60 L63.8 34.7 L26.8 26.2 Z"
+              fill={logoColor}
+              style={{ transition: 'fill 0.35s ease' }}
+            />
+            <path
+              className={`companion-logo-l ${animateLogo ? 'companion-logo-l-b' : ''}`}
+              d="M69.6 89.4 L15.1 76.8 L24.5 35.9 L42.1 40 L36.2 65.3 L73.2 73.8 Z"
               fill={logoColor}
               style={{ transition: 'fill 0.35s ease' }}
             />
