@@ -67,10 +67,11 @@ export function Overlay({ send }: OverlayProps) {
           {/* faded ambient light beneath the input bar, tinted with the state color */}
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-x-6 top-1/2 -bottom-4 rounded-full blur-2xl"
+            className="pointer-events-none absolute -inset-x-6 -top-16 -bottom-10 rounded-[999px]"
             style={{
               backgroundColor: stateColor,
-              opacity: 0.4,
+              opacity: 0.5,
+              filter: 'blur(64px)',
               transition: 'background-color 0.4s ease',
             }}
           />
