@@ -1,7 +1,6 @@
 import { useState, type CSSProperties } from 'react';
 import { useReducedMotion } from 'motion/react';
 import type { DialogueState } from '../../protocol';
-import companionLogo from '../../assets/companion-logo.png';
 
 interface AvatarProps {
   state: DialogueState;
@@ -10,6 +9,8 @@ interface AvatarProps {
 
 export function CompanionAvatar({ state, color }: AvatarProps) {
   const active = state === 'idle' ? '#AEEFFF' : color;
+  // Logo: white at rest, tinted with the state color once active.
+  const logoColor = state === 'idle' ? '#FFFFFF' : color;
   const shouldReduceMotion = useReducedMotion();
   const [hover, setHover] = useState(false);
 
@@ -89,19 +90,25 @@ export function CompanionAvatar({ state, color }: AvatarProps) {
             background: `radial-gradient(circle at 50% 46%, ${active}55 0%, ${active}1a 44%, transparent 72%)`,
           }}
         />
-        {/* companion brand logo */}
+        {/* companion pinwheel logo — white when idle, tints with state, spins while executing */}
         <div className="absolute inset-0 grid place-items-center">
-          <img
-            src={companionLogo}
-            alt=""
+          <svg
+            width="72"
+            height="72"
+            viewBox="0 0 100 100"
+            fill="none"
             aria-hidden="true"
-            className="avatar-core-pulse"
-            style={{
-              width: 58,
-              height: 'auto',
-              filter: 'drop-shadow(0 0 8px rgba(255,0,123,0.5))',
-            }}
-          />
+            className={
+              state === 'executing' && !shouldReduceMotion ? 'companion-logo-spin' : 'avatar-core-pulse'
+            }
+            style={{ filter: `drop-shadow(0 0 8px ${logoColor}aa)` }}
+          >
+            <path
+              d="M40 16 L78 26 L60 50 L22 40 Z M60 84 L22 74 L40 50 L78 60 Z"
+              fill={logoColor}
+              style={{ transition: 'fill 0.35s ease' }}
+            />
+          </svg>
         </div>
       </div>
     </div>
