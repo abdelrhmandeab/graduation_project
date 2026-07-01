@@ -103,13 +103,13 @@ export type UICommand =
 
 // State colors matching Python ui/tray.py
 export const STATE_COLORS: Record<DialogueState, string> = {
-  idle: '#808080',
-  listening: '#00B400',
-  processing: '#FFC800',
-  responding: '#0078FF',
-  confirming: '#FF8C00',
-  executing: '#5A5AC8',
-  follow_up: '#00A078',
+  idle: '#5A5A5A',
+  listening: '#007E00',
+  processing: '#B28C00',
+  responding: '#0054B2',
+  confirming: '#B26200',
+  executing: '#3F3F8C',
+  follow_up: '#007054',
 } as const;
 
 export const MOCK_WS_PORT = 8765;

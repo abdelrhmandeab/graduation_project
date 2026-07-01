@@ -26,14 +26,14 @@ export function CompanionAvatar({ state, color }: AvatarProps) {
         ? 'avatar-shimmer'
         : 'avatar-float';
 
-  // glass-card box-shadow stack. The source's `inset 0 0 50px 25px rgba(255,255,255,2.5)`
-  // had an invalid alpha (>1, clamps to 1 = near-solid white); tamed to 0.22, and a
-  // state-colored outer glow added so the avatar still expresses its state.
+  // glass-card box-shadow stack. Dark tinted glass: a soft inner black vignette
+  // (instead of the source's near-solid white glow) plus a state-colored outer glow
+  // so the avatar still expresses its state.
   const boxShadow = [
     '0 8px 32px rgba(0,0,0,0.10)',
-    'inset 0 1px 0 rgba(255,255,255,0.5)',
-    'inset 0 -1px 0 rgba(255,255,255,0.1)',
-    'inset 0 0 50px 25px rgba(255,255,255,0.10)',
+    'inset 0 1px 0 rgba(255,255,255,0.28)',
+    'inset 0 -1px 0 rgba(255,255,255,0.06)',
+    'inset 0 0 55px 20px rgba(0,0,0,0.45)',
     `0 0 26px ${active}55`,
     `0 0 60px ${active}22`,
   ].join(', ');
@@ -51,7 +51,7 @@ export function CompanionAvatar({ state, color }: AvatarProps) {
           position: 'relative',
           width: 142,
           height: 142,
-          background: 'rgba(255,255,255,0.025)',
+          background: 'rgba(6,8,14,0.55)',
           backdropFilter: 'blur(5px)',
           WebkitBackdropFilter: 'blur(5px)',
           borderRadius: 20,
