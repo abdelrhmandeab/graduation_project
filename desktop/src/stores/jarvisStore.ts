@@ -165,3 +165,16 @@ export const useJarvisStore = create<JarvisState>()(
     },
   ),
 );
+
+// Cross-window sync. Under Tauri the overlay and dashboard are separate OS
+// windows, each with its own store instance. They share one localStorage
+// (same origin), so when one window writes a persisted setting (avatar, view,
+// text-prompt), the others rehydrate from it here. Also keeps browser tabs in
+// sync. The storage event only fires in *other* documents, so no echo loop.
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event) => {
+    if (event.key === 'jarvis-ui') {
+      void useJarvisStore.persist.rehydrate();
+    }
+  });
+}
