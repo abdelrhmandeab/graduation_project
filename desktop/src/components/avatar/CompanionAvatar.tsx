@@ -12,8 +12,10 @@ export function CompanionAvatar({ state, color }: AvatarProps) {
   // Logo: white at rest, tinted with the state color once active.
   const logoColor = state === 'idle' ? '#FFFFFF' : color;
   const shouldReduceMotion = useReducedMotion();
-  // The L-shapes rebel (counter-rotate + separate) through the running/execution states.
+  // The L-shapes slide apart through the running/execution states, and the whole
+  // logo spins while processing/executing.
   const animateLogo = !shouldReduceMotion && state !== 'idle';
+  const spinLogo = !shouldReduceMotion && (state === 'processing' || state === 'executing');
   const [hover, setHover] = useState(false);
 
   const floatClass = shouldReduceMotion
@@ -102,6 +104,7 @@ export function CompanionAvatar({ state, color }: AvatarProps) {
             viewBox="0 0 100 100"
             fill="none"
             aria-hidden="true"
+            className={spinLogo ? 'companion-logo-spin' : ''}
             style={{ filter: `drop-shadow(0 0 8px ${logoColor}aa)`, overflow: 'visible' }}
           >
             <path
