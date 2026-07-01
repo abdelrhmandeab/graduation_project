@@ -90,21 +90,21 @@ export function CompanionAvatar({ state, color }: AvatarProps) {
             background: `radial-gradient(circle at 50% 46%, ${active}55 0%, ${active}1a 44%, transparent 72%)`,
           }}
         />
-        {/* companion pinwheel logo — white when idle, tints with state, spins while executing */}
+        {/* companion double-L logo — white when idle, tints with state,
+            shrinks/expands through the running + execution states */}
         <div className="absolute inset-0 grid place-items-center">
           <svg
-            width="72"
-            height="72"
+            width="70"
+            height="70"
             viewBox="0 0 100 100"
             fill="none"
             aria-hidden="true"
-            className={
-              state === 'executing' && !shouldReduceMotion ? 'companion-logo-spin' : 'avatar-core-pulse'
-            }
+            className={!shouldReduceMotion && state !== 'idle' ? 'companion-logo-throb' : ''}
             style={{ filter: `drop-shadow(0 0 8px ${logoColor}aa)` }}
           >
             <path
-              d="M40 16 L78 26 L60 50 L22 40 Z M60 84 L22 74 L40 50 L78 60 Z"
+              d="M22 16 L78 16 L78 58 L60 58 L60 32 L22 32 Z M78 84 L22 84 L22 42 L40 42 L40 68 L78 68 Z"
+              transform="rotate(13 50 50)"
               fill={logoColor}
               style={{ transition: 'fill 0.35s ease' }}
             />

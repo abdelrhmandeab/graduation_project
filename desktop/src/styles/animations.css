@@ -35,18 +35,19 @@
   animation: avatar-core-pulse 2.4s ease-in-out infinite;
 }
 
-/* companion pinwheel logo spin — used while executing */
-.companion-logo-spin {
-  animation: companion-logo-spin 1.8s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+/* companion double-L logo throb — shrinks/expands through running + execution states */
+.companion-logo-throb {
+  animation: companion-logo-throb 1.5s ease-in-out infinite;
   transform-origin: 50% 50%;
 }
 
-@keyframes companion-logo-spin {
-  from {
-    transform: rotate(0deg);
+@keyframes companion-logo-throb {
+  0%,
+  100% {
+    transform: scale(0.82);
   }
-  to {
-    transform: rotate(360deg);
+  50% {
+    transform: scale(1.08);
   }
 }
 
