@@ -61,10 +61,12 @@ export function Dashboard({ send }: DashboardProps) {
   const avatarDirection = useJarvisStore((state) => state.avatarDirection);
   const uiLanguage = useJarvisStore((state) => state.uiLanguage);
   const muted = useJarvisStore((state) => state.muted);
+  const textPromptEnabled = useJarvisStore((state) => state.textPromptEnabled);
   const connectionStatus = useJarvisStore((state) => state.connectionStatus);
   const setAvatarDirection = useJarvisStore((state) => state.setAvatarDirection);
   const setUiLanguage = useJarvisStore((state) => state.setUiLanguage);
   const setMuted = useJarvisStore((state) => state.setMuted);
+  const setTextPromptEnabled = useJarvisStore((state) => state.setTextPromptEnabled);
   const setFeatureFlagLocal = useJarvisStore((state) => state.setFeatureFlagLocal);
   const setConfigValueLocal = useJarvisStore((state) => state.setConfigValueLocal);
 
@@ -129,8 +131,17 @@ export function Dashboard({ send }: DashboardProps) {
 
         <div className="grid gap-4 lg:grid-cols-2">
           <section className="rounded border border-white/10 bg-white/[0.045] p-4 shadow-lg shadow-black/20 lg:col-span-2">
-            <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.14em] text-[#8EEBFF]/78">Send a Prompt</h2>
-            <PromptInput send={send} />
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.14em] text-[#8EEBFF]/78">Text Prompt</h2>
+            <Toggle
+              label="Enable text prompt"
+              checked={textPromptEnabled}
+              onChange={setTextPromptEnabled}
+            />
+            {textPromptEnabled ? (
+              <div className="mt-3">
+                <PromptInput send={send} />
+              </div>
+            ) : null}
           </section>
 
           <Section title="Avatar">

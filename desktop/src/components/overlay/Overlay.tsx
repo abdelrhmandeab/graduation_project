@@ -19,6 +19,7 @@ export function Overlay({ send }: OverlayProps) {
   const muted = useJarvisStore((state) => state.muted);
   const setMuted = useJarvisStore((state) => state.setMuted);
   const dialogueState = useJarvisStore((state) => state.dialogueState);
+  const textPromptEnabled = useJarvisStore((state) => state.textPromptEnabled);
   const stateColor = STATE_COLORS[dialogueState];
   const prevState = useRef<DialogueState>('idle');
 
@@ -70,13 +71,13 @@ export function Overlay({ send }: OverlayProps) {
             className="pointer-events-none absolute -inset-x-6 -top-16 -bottom-10 rounded-[999px]"
             style={{
               backgroundColor: stateColor,
-              opacity: 0.5,
+              opacity: 0.34,
               filter: 'blur(64px)',
               transition: 'background-color 0.4s ease',
             }}
           />
           <div className="relative flex items-center gap-2 rounded border border-white/10 bg-[#0A0A0F]/70 p-2 shadow-2xl shadow-black/40 backdrop-blur-xl">
-            <PromptInput send={send} />
+            {textPromptEnabled ? <PromptInput send={send} /> : <div className="flex-1" />}
           <button
             type="button"
             onClick={toggleMuted}

@@ -24,12 +24,14 @@ interface JarvisState {
   doctor: { ok: boolean; checks: Array<{ name: string; ok: boolean; details: string }> } | null;
   avatarDirection: AvatarDirection;
   previewDialogueState: DialogueState | null;
+  textPromptEnabled: boolean;
   dispatch: (event: EngineEvent) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
   setMuted: (muted: boolean) => void;
   setAvatarDirection: (direction: AvatarDirection) => void;
   setAppView: (view: AppView) => void;
   setUiLanguage: (language: UiLanguage) => void;
+  setTextPromptEnabled: (enabled: boolean) => void;
   setFeatureFlagLocal: (flag: keyof FeatureFlags, enabled: boolean) => void;
   setConfigValueLocal: <K extends keyof ConfigValues>(key: K, value: ConfigValues[K]) => void;
   previewState: (state: DialogueState | null) => void;
@@ -55,6 +57,7 @@ const initialState = {
   doctor: null,
   avatarDirection: 'glassai' as AvatarDirection,
   previewDialogueState: null,
+  textPromptEnabled: true,
   lastError: null,
 };
 
@@ -117,6 +120,7 @@ export const useJarvisStore = create<JarvisState>()(
       setAvatarDirection: (avatarDirection) => set({ avatarDirection }),
       setAppView: (appView) => set({ appView }),
       setUiLanguage: (uiLanguage) => set({ uiLanguage }),
+      setTextPromptEnabled: (textPromptEnabled) => set({ textPromptEnabled }),
       setFeatureFlagLocal: (flag, enabled) =>
         set((state) => {
           if (!state.config) {
@@ -156,6 +160,7 @@ export const useJarvisStore = create<JarvisState>()(
       partialize: (state) => ({
         avatarDirection: state.avatarDirection,
         appView: state.appView,
+        textPromptEnabled: state.textPromptEnabled,
       }),
     },
   ),
