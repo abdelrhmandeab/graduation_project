@@ -93,9 +93,8 @@ export function CompanionAvatar({ state, color }: AvatarProps) {
           }}
         />
         {/* companion double-L logo — white when idle, tints with state. The two
-            conjugate L-shapes counter-rotate and pull apart (rebel) while active.
-            The 13deg tilt is baked into the path coords so each L rotates cleanly
-            about the viewBox centre. */}
+            conjugate L-shapes slide apart and back while active. The 13deg tilt
+            is baked into the path coords. */}
         <div className="absolute inset-0 grid place-items-center">
           <svg
             width="70"

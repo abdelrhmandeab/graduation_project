@@ -35,9 +35,8 @@
   animation: avatar-core-pulse 2.4s ease-in-out infinite;
 }
 
-/* companion double-L logo — the two L-shapes counter-rotate and pull apart
-   (rebel) through the running + execution states. Rotate about the viewBox
-   centre (50,50). */
+/* companion double-L logo — the two L-shapes slide apart and back (no rotation)
+   through the running + execution states. */
 .companion-logo-l {
   transform-box: view-box;
   transform-origin: 50px 50px;
@@ -54,20 +53,20 @@
 @keyframes companion-l-a {
   0%,
   100% {
-    transform: translate(0, 0) rotate(0deg);
+    transform: translate(0, 0);
   }
   50% {
-    transform: translate(6px, -6px) rotate(40deg);
+    transform: translate(8px, -8px);
   }
 }
 
 @keyframes companion-l-b {
   0%,
   100% {
-    transform: translate(0, 0) rotate(0deg);
+    transform: translate(0, 0);
   }
   50% {
-    transform: translate(-6px, 6px) rotate(-40deg);
+    transform: translate(-8px, 8px);
   }
 }
 
