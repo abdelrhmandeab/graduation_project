@@ -59,25 +59,25 @@ export function Overlay({ send }: OverlayProps) {
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-transparent text-white">
       <div className="absolute inset-0 flex flex-col" style={stageStyle}>
+        {/* persistent ambient light at the bottom, tinted with the state color —
+            stays visible even when the input bar is hidden */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-8 bottom-1 -z-10 h-28 rounded-[999px]"
+          style={{
+            backgroundColor: stateColor,
+            opacity: 0.34,
+            filter: 'blur(64px)',
+            transition: 'background-color 0.4s ease',
+          }}
+        />
         <main className="flex flex-1 flex-col items-center justify-center gap-5 px-4">
           <Avatar />
           <Transcript />
         </main>
 
         {textPromptEnabled ? (
-        <div className="relative m-3">
-          {/* faded ambient light beneath the input bar, tinted with the state color */}
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute -inset-x-6 -top-16 -bottom-10 rounded-[999px]"
-            style={{
-              backgroundColor: stateColor,
-              opacity: 0.34,
-              filter: 'blur(64px)',
-              transition: 'background-color 0.4s ease',
-            }}
-          />
-          <div className="relative flex items-center gap-2 rounded border border-white/10 bg-[#0A0A0F]/70 p-2 shadow-2xl shadow-black/40 backdrop-blur-xl">
+          <div className="relative m-3 flex items-center gap-2 rounded border border-white/10 bg-[#0A0A0F]/70 p-2 shadow-2xl shadow-black/40 backdrop-blur-xl">
             <PromptInput send={send} />
           <button
             type="button"
@@ -129,7 +129,6 @@ export function Overlay({ send }: OverlayProps) {
             </svg>
           </button>
           </div>
-        </div>
         ) : null}
       </div>
     </div>
