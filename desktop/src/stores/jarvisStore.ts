@@ -161,6 +161,7 @@ export const useJarvisStore = create<JarvisState>()(
         avatarDirection: state.avatarDirection,
         appView: state.appView,
         textPromptEnabled: state.textPromptEnabled,
+        muted: state.muted,
       }),
     },
   ),
