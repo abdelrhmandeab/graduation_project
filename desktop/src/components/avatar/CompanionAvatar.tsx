@@ -33,7 +33,7 @@ export function CompanionAvatar({ state, color }: AvatarProps) {
     '0 8px 32px rgba(0,0,0,0.10)',
     'inset 0 1px 0 rgba(255,255,255,0.5)',
     'inset 0 -1px 0 rgba(255,255,255,0.1)',
-    'inset 0 0 50px 25px rgba(255,255,255,0.22)',
+    'inset 0 0 50px 25px rgba(255,255,255,0.10)',
     `0 0 26px ${active}55`,
     `0 0 60px ${active}22`,
   ].join(', ');
@@ -51,7 +51,7 @@ export function CompanionAvatar({ state, color }: AvatarProps) {
           position: 'relative',
           width: 142,
           height: 142,
-          background: 'rgba(255,255,255,0.06)',
+          background: 'rgba(255,255,255,0.025)',
           backdropFilter: 'blur(5px)',
           WebkitBackdropFilter: 'blur(5px)',
           borderRadius: 20,
