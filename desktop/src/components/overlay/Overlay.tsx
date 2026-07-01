@@ -64,6 +64,7 @@ export function Overlay({ send }: OverlayProps) {
           <Transcript />
         </main>
 
+        {textPromptEnabled ? (
         <div className="relative m-3">
           {/* faded ambient light beneath the input bar, tinted with the state color */}
           <div
@@ -77,7 +78,7 @@ export function Overlay({ send }: OverlayProps) {
             }}
           />
           <div className="relative flex items-center gap-2 rounded border border-white/10 bg-[#0A0A0F]/70 p-2 shadow-2xl shadow-black/40 backdrop-blur-xl">
-            {textPromptEnabled ? <PromptInput send={send} /> : <div className="flex-1" />}
+            <PromptInput send={send} />
           <button
             type="button"
             onClick={toggleMuted}
@@ -129,6 +130,7 @@ export function Overlay({ send }: OverlayProps) {
           </button>
           </div>
         </div>
+        ) : null}
       </div>
     </div>
   );
