@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { CSSProperties } from 'react';
 import type { DialogueState, UICommand } from '../../protocol';
+import { STATE_COLORS } from '../../protocol';
 import { useJarvisStore } from '../../stores/jarvisStore';
 import { openDashboard, showOverlay, hideOverlay, isTauri } from '../../lib/app';
 import { Avatar } from '../Avatar';
@@ -18,6 +19,7 @@ export function Overlay({ send }: OverlayProps) {
   const muted = useJarvisStore((state) => state.muted);
   const setMuted = useJarvisStore((state) => state.setMuted);
   const dialogueState = useJarvisStore((state) => state.dialogueState);
+  const stateColor = STATE_COLORS[dialogueState];
   const prevState = useRef<DialogueState>('idle');
 
   // Wake-driven window lifecycle (Tauri): the overlay window stays hidden in the
@@ -61,8 +63,19 @@ export function Overlay({ send }: OverlayProps) {
           <Transcript />
         </main>
 
-        <div className="m-3 flex items-center gap-2 rounded border border-white/10 bg-[#0A0A0F]/70 p-2 shadow-2xl shadow-black/40 backdrop-blur-xl">
-          <PromptInput send={send} />
+        <div className="relative m-3">
+          {/* faded ambient light beneath the input bar, tinted with the state color */}
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-6 top-1/2 -bottom-4 rounded-full blur-2xl"
+            style={{
+              backgroundColor: stateColor,
+              opacity: 0.4,
+              transition: 'background-color 0.4s ease',
+            }}
+          />
+          <div className="relative flex items-center gap-2 rounded border border-white/10 bg-[#0A0A0F]/70 p-2 shadow-2xl shadow-black/40 backdrop-blur-xl">
+            <PromptInput send={send} />
           <button
             type="button"
             onClick={toggleMuted}
@@ -112,6 +125,7 @@ export function Overlay({ send }: OverlayProps) {
               />
             </svg>
           </button>
+          </div>
         </div>
       </div>
     </div>
