@@ -66,22 +66,51 @@ export function Overlay({ send }: OverlayProps) {
           <button
             type="button"
             onClick={toggleMuted}
-            className={`h-10 shrink-0 rounded border px-3 text-sm font-medium transition ${
+            aria-label={muted ? 'Unmute' : 'Mute'}
+            title={muted ? 'Unmute' : 'Mute'}
+            className={`grid h-10 w-10 shrink-0 place-items-center rounded border transition ${
               muted
                 ? 'border-red-300/30 bg-red-400/15 text-red-100 hover:bg-red-400/20'
                 : 'border-white/10 bg-white/[0.06] text-white/75 hover:bg-white/[0.1]'
             }`}
           >
-            {muted ? 'Muted' : 'Mute'}
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path
+                d="M4 9 L8 9 L13 5 L13 19 L8 15 L4 15 Z"
+                fill="currentColor"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                strokeLinejoin="round"
+              />
+              {muted ? (
+                <path d="M17 9 L22 15 M22 9 L17 15" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+              ) : (
+                <path
+                  d="M16.5 8.5 A5 5 0 0 1 16.5 15.5 M19 6 A9 9 0 0 1 19 18"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                />
+              )}
+            </svg>
           </button>
           <button
             type="button"
             onClick={() => {
               void openDashboard();
             }}
-            className="h-10 shrink-0 rounded border border-white/10 bg-white/[0.06] px-3 text-sm font-medium text-white/80 transition hover:border-[#8EEBFF]/35 hover:text-white"
+            aria-label="Dashboard"
+            title="Dashboard"
+            className="grid h-10 w-10 shrink-0 place-items-center rounded border border-white/10 bg-white/[0.06] text-white/80 transition hover:border-[#8EEBFF]/35 hover:text-white"
           >
-            Dashboard
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path
+                d="M4 4 H10 V11 H4 Z M14 4 H20 V8 H14 Z M14 12 H20 V20 H14 Z M4 15 H10 V20 H4 Z"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                strokeLinejoin="round"
+              />
+            </svg>
           </button>
         </div>
       </div>
