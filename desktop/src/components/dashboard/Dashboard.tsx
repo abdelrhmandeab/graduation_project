@@ -125,11 +125,10 @@ export function Dashboard({ send }: DashboardProps) {
 
   return (
     <div className="frameless-scroll relative h-screen overflow-y-auto px-4 py-6 text-white sm:px-6 lg:px-8">
-      {/* translucent frosted gradient background (pink / blue / amber) — no opaque
-          frame, lets the desktop show through lightly */}
-      <div aria-hidden="true" className="pointer-events-none fixed inset-0 z-0">
-        <div className="absolute inset-0 bg-white/5 backdrop-blur-2xl" />
-        <div className="absolute inset-0 opacity-60">
+      {/* dark base with a subtle pink / blue / amber gradient glow — matches the
+          app's dark-glass style */}
+      <div aria-hidden="true" className="pointer-events-none fixed inset-0 z-0 bg-[#0A0A0F]/95 backdrop-blur-xl">
+        <div className="absolute inset-0 opacity-35">
           <GradientBackground
             containerClassName="h-full w-full"
             gradientColors={['rgb(255, 100, 150)', 'rgb(100, 150, 255)', 'rgb(255, 200, 100)']}
