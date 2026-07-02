@@ -128,14 +128,7 @@ export function Dashboard({ send }: DashboardProps) {
       {/* dark base with a subtle pink / blue / amber gradient glow — matches the
           app's dark-glass style */}
       <div aria-hidden="true" className="pointer-events-none fixed inset-0 z-0 bg-[#0A0A0F]/95 backdrop-blur-xl">
-        <div
-          className="absolute inset-0 opacity-35"
-          style={{
-            WebkitMaskImage:
-              'linear-gradient(to right, transparent 0%, #000 22%, #000 78%, transparent 100%)',
-            maskImage: 'linear-gradient(to right, transparent 0%, #000 22%, #000 78%, transparent 100%)',
-          }}
-        >
+        <div className="absolute inset-0 opacity-35">
           <GradientBackground
             containerClassName="h-full w-full"
             gradientColors={['rgb(255, 100, 150)', 'rgb(100, 150, 255)', 'rgb(255, 200, 100)']}
