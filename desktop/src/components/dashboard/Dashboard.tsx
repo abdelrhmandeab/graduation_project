@@ -123,7 +123,7 @@ export function Dashboard({ send }: DashboardProps) {
   };
 
   return (
-    <div className="frameless-scroll min-h-screen overflow-y-auto bg-black/45 px-4 py-6 text-white backdrop-blur-sm sm:px-6 lg:px-8">
+    <div className="frameless-scroll h-screen overflow-y-auto bg-black/45 px-4 py-6 text-white backdrop-blur-sm sm:px-6 lg:px-8">
       <FloatingPanel className="mx-auto grid w-full max-w-5xl gap-5 bg-black/70 p-4 text-sm shadow-black/55 sm:p-5">
         {/* Frameless window: this header doubles as the drag handle. */}
         <header
