@@ -3,7 +3,7 @@ import type { UICommand, FeatureFlags } from '../../protocol';
 import { backToOverlay, closeApp } from '../../lib/app';
 import { PromptInput } from '../overlay/PromptInput';
 import { useJarvisStore, type AvatarDirection, type UiLanguage } from '../../stores/jarvisStore';
-import { Segmented, type SegmentedOption } from './Segmented';
+import { Chip, FloatingPanel, PanelLabel } from '../ui/Chip';
 import { Select, type SelectOption } from './Select';
 import { Toggle } from './Toggle';
 
@@ -11,14 +11,19 @@ interface DashboardProps {
   send: (cmd: UICommand) => void;
 }
 
-const avatarOptions: Array<SegmentedOption<AvatarDirection>> = [
+type DashboardOption<T extends string> = {
+  label: string;
+  value: T;
+};
+
+const avatarOptions: Array<DashboardOption<AvatarDirection>> = [
   { label: 'Aurora', value: 'aurora' },
   { label: 'Glyph', value: 'glyph' },
   { label: 'Glass AI', value: 'glassai' },
   { label: 'Companion', value: 'companion' },
 ];
 
-const languageOptions: Array<SegmentedOption<UiLanguage>> = [
+const languageOptions: Array<DashboardOption<UiLanguage>> = [
   { label: 'English', value: 'en' },
   { label: 'Arabic', value: 'ar' },
   { label: 'Auto', value: 'auto' },
@@ -47,10 +52,45 @@ const featureFlagLabels: Record<keyof FeatureFlags, string> = {
   SYSTEM_VOLUME_CONTROL: 'System volume control',
 };
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+function ChipGroup<T extends string>({
+  value,
+  options,
+  onChange,
+}: {
+  value: T;
+  options: Array<DashboardOption<T>>;
+  onChange: (value: T) => void;
+}) {
   return (
-    <section className="rounded border border-white/10 bg-white/[0.045] p-4 shadow-lg shadow-black/20">
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.14em] text-[#8EEBFF]/78">{title}</h2>
+    <div className="flex flex-wrap gap-2">
+      {options.map((option) => (
+        <Chip
+          key={option.value}
+          active={option.value === value}
+          onClick={() => onChange(option.value)}
+          className="text-[11px]"
+        >
+          {option.label}
+        </Chip>
+      ))}
+    </div>
+  );
+}
+
+function Section({
+  title,
+  className = '',
+  children,
+}: {
+  title: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section
+      className={`rounded-md border border-white/10 bg-black/70 p-3 text-white shadow-2xl shadow-black/35 backdrop-blur ${className}`}
+    >
+      <PanelLabel>{title}</PanelLabel>
       <div className="grid gap-3">{children}</div>
     </section>
   );
@@ -83,30 +123,31 @@ export function Dashboard({ send }: DashboardProps) {
   };
 
   return (
-    <div className="min-h-screen overflow-y-auto bg-[#0A0A0F] px-4 py-6 text-white sm:px-6 lg:px-8">
-      <main className="mx-auto grid w-full max-w-5xl gap-5 rounded border border-white/10 bg-white/[0.035] p-4 shadow-2xl shadow-black/45 backdrop-blur-2xl sm:p-6">
-        <header className="flex flex-col gap-3 border-b border-white/10 pb-5 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#8EEBFF]/70">Control Center</p>
+    <div className="min-h-screen overflow-y-auto bg-black/45 px-4 py-6 text-white backdrop-blur-sm sm:px-6 lg:px-8">
+      <FloatingPanel className="mx-auto grid w-full max-w-5xl gap-5 bg-black/70 p-4 text-sm shadow-black/55 sm:p-5">
+        {/* Frameless window: this header doubles as the drag handle. */}
+        <header
+          data-tauri-drag-region
+          className="flex flex-col gap-3 border-b border-white/10 pb-4 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <div data-tauri-drag-region>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-50/70">Control Center</p>
             <h1 className="mt-1 text-2xl font-semibold tracking-normal text-white">Jarvis Dashboard</h1>
           </div>
+
           <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => send({ type: 'config_request' })}
-              className="h-10 rounded border border-white/10 bg-white/[0.06] px-4 text-sm font-medium text-white/78 transition hover:border-[#8EEBFF]/35 hover:text-white"
-            >
+            <Chip onClick={() => send({ type: 'config_request' })} className="h-9 px-3 text-sm font-medium">
               Refresh
-            </button>
-            <button
-              type="button"
+            </Chip>
+            <Chip
+              active
               onClick={() => {
                 void backToOverlay();
               }}
-              className="h-10 rounded border border-[#8EEBFF]/28 bg-[#8EEBFF]/12 px-4 text-sm font-medium text-[#DDFBFF] transition hover:bg-[#8EEBFF]/18"
+              className="h-9 px-3 text-sm font-medium"
             >
               Hide
-            </button>
+            </Chip>
             <button
               type="button"
               aria-label="Close Jarvis"
@@ -114,7 +155,7 @@ export function Dashboard({ send }: DashboardProps) {
               onClick={() => {
                 void closeApp().catch((error: unknown) => console.error('Failed to close app.', error));
               }}
-              className="grid h-10 w-10 place-items-center rounded border border-red-300/25 bg-red-400/12 text-red-100 transition hover:bg-red-400/20"
+              className="grid h-9 w-9 place-items-center rounded border border-red-300/25 bg-red-400/12 text-red-100 transition-opacity hover:opacity-90"
             >
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                 <path d="M4 4 L12 12 M12 4 L4 12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
@@ -124,28 +165,19 @@ export function Dashboard({ send }: DashboardProps) {
         </header>
 
         {!hasConfig ? (
-          <div className="rounded border border-[#8EEBFF]/18 bg-[#8EEBFF]/8 p-4 text-sm text-white/72">
+          <div className="rounded-md border border-cyan-200/20 bg-cyan-200/10 p-3 text-[12px] text-cyan-50/80">
             Engine config has not arrived yet. Use Refresh to request the current values from the bridge.
           </div>
         ) : null}
 
-        <div className="grid gap-4 lg:grid-cols-2">
-          <section className="rounded border border-white/10 bg-white/[0.045] p-4 shadow-lg shadow-black/20 lg:col-span-2">
-            <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.14em] text-[#8EEBFF]/78">Text Prompt</h2>
-            <Toggle
-              label="Enable text prompt"
-              checked={textPromptEnabled}
-              onChange={setTextPromptEnabled}
-            />
-            {textPromptEnabled ? (
-              <div className="mt-3">
-                <PromptInput send={send} />
-              </div>
-            ) : null}
-          </section>
+        <div className="grid gap-3 lg:grid-cols-2">
+          <Section title="Text Prompt" className="lg:col-span-2">
+            <Toggle label="Enable text prompt" checked={textPromptEnabled} onChange={setTextPromptEnabled} />
+            {textPromptEnabled ? <PromptInput send={send} /> : null}
+          </Section>
 
           <Section title="Avatar">
-            <Segmented value={avatarDirection} options={avatarOptions} onChange={setAvatarDirection} />
+            <ChipGroup value={avatarDirection} options={avatarOptions} onChange={setAvatarDirection} />
           </Section>
 
           <Section title="Voice Persona">
@@ -162,7 +194,7 @@ export function Dashboard({ send }: DashboardProps) {
           </Section>
 
           <Section title="Language">
-            <Segmented value={uiLanguage} options={languageOptions} onChange={handleLanguageChange} />
+            <ChipGroup value={uiLanguage} options={languageOptions} onChange={handleLanguageChange} />
           </Section>
 
           <Section title="Model">
@@ -201,17 +233,20 @@ export function Dashboard({ send }: DashboardProps) {
             <dl className="grid gap-3 text-sm">
               <div className="flex items-center justify-between gap-4">
                 <dt className="text-white/58">Connection</dt>
-                <dd className="font-medium capitalize text-white/88">{connectionStatus}</dd>
+                <dd className="rounded border border-white/10 bg-white/5 px-2 py-1 font-medium capitalize text-white/80">
+                  {connectionStatus}
+                </dd>
               </div>
               <div className="flex items-center justify-between gap-4">
                 <dt className="text-white/58">Current model</dt>
-                <dd className="font-medium text-white/88">{config?.model ?? 'Unknown'}</dd>
+                <dd className="rounded border border-white/10 bg-white/5 px-2 py-1 font-medium text-white/80">
+                  {config?.model ?? 'Unknown'}
+                </dd>
               </div>
             </dl>
           </Section>
-
         </div>
-      </main>
+      </FloatingPanel>
     </div>
   );
 }
