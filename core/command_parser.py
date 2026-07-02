@@ -4,6 +4,11 @@ from dataclasses import dataclass, field
 
 from core.config import CONFIRMATION_TOKEN_BYTES, CONFIRMATION_TOKEN_MIN_HEX_LEN
 from nlp.codeswitching import convert_arabic_numerals, normalize_codeswitched, normalize_arabic_preserve_digits
+from os_control.path_resolver import (
+    DRIVE_ALIASES as _PATH_RESOLVER_DRIVE_ALIASES,
+    FOLDER_ALIASES as _PATH_RESOLVER_FOLDER_ALIASES,
+    SEARCH_PATH_ALIASES,
+)
 from os_control.temporal_parser import parse_recurrence_spec
 from os_control.system_ops import normalize_system_action
 
@@ -51,29 +56,9 @@ _FILESYSTEM_OPEN_HINTS = (
     "\u0627\u0644\u0635\u0648\u0631",
     "\u0627\u0644\u0641\u064a\u062f\u064a\u0648\u0647\u0627\u062a",
 )
-_SPECIAL_FOLDER_ALIASES = {
-    "desktop": "Desktop",
-    "\u0633\u0637\u062d \u0627\u0644\u0645\u0643\u062a\u0628": "Desktop",
-    "downloads": "Downloads",
-    "download": "Downloads",
-    "\u0627\u0644\u062a\u062d\u0645\u064a\u0644\u0627\u062a": "Downloads",
-    "\u0627\u0644\u062a\u0646\u0632\u064a\u0644\u0627\u062a": "Downloads",
-    "documents": "Documents",
-    "document": "Documents",
-    "\u0627\u0644\u0645\u0633\u062a\u0646\u062f\u0627\u062a": "Documents",
-    "pictures": "Pictures",
-    "picture": "Pictures",
-    "\u0627\u0644\u0635\u0648\u0631": "Pictures",
-    "music": "Music",
-    "\u0627\u0644\u0645\u0648\u0633\u064a\u0642\u0649": "Music",
-    "videos": "Videos",
-    "video": "Videos",
-    "\u0627\u0644\u0641\u064a\u062f\u064a\u0648\u0647\u0627\u062a": "Videos",
-}
-_SEARCH_PATH_ALIASES = {
-    **_SPECIAL_FOLDER_ALIASES,
-    "\u0627\u0644\u0645\u0643\u062a\u0628": "Desktop",
-}
+# Imported from path_resolver \u2014 single source of truth for folder aliases.
+_SPECIAL_FOLDER_ALIASES = _PATH_RESOLVER_FOLDER_ALIASES
+_SEARCH_PATH_ALIASES = SEARCH_PATH_ALIASES
 _MEDIA_APP_TARGETS = {
     "spotify": "spotify",
     "vlc": "vlc",
@@ -207,14 +192,47 @@ _NUMBER_ONES = {
     "اتنين": 2,
     "اثنين": 2,
     "اثنتين": 2,
+    "اتنان": 2,
     "ثلاثة": 3,
+    "تلاتة": 3,
+    "تلاته": 3,
+    "تلات": 3,
+    "ثلاث": 3,
     "اربعة": 4,
+    "أربعة": 4,
+    "أربع": 4,
+    "اربع": 4,
     "خمسة": 5,
+    "خمسه": 5,
+    "خمس": 5,
     "ستة": 6,
+    "سته": 6,
+    "ست": 6,
     "سبعة": 7,
+    "سبعه": 7,
+    "سبع": 7,
     "ثمانية": 8,
+    "تمانية": 8,
+    "تمانيه": 8,
+    "تماني": 8,
     "تسعة": 9,
+    "تسعه": 9,
+    "تسع": 9,
     "عشرة": 10,
+    "عشره": 10,
+    "عشر": 10,
+    "حداشر": 11,
+    "إحدى عشر": 11,
+    "اتناشر": 12,
+    "اثنا عشر": 12,
+    "تلتاشر": 13,
+    "أربعتاشر": 14,
+    "خمستاشر": 15,
+    "ستاشر": 16,
+    "سبعتاشر": 17,
+    "تمنتاشر": 18,
+    "تسعتاشر": 19,
+    "عشرين": 20,
 }
 _NUMBER_TENS = {
     "twenty": 20,
@@ -237,8 +255,12 @@ _NUMBER_TENS = {
 _CONFIRMATION_TOKEN_MAX_HEX_LEN = max(int(CONFIRMATION_TOKEN_MIN_HEX_LEN), int(CONFIRMATION_TOKEN_BYTES) * 2)
 
 
+_TRAILING_PUNCT_RE = re.compile(r"[.,،؟?!]+$")
+
+
 def _normalize_for_match(text: str) -> str:
     lowered = " ".join((text or "").lower().split()).strip()
+    lowered = _TRAILING_PUNCT_RE.sub("", lowered).strip()
     cleaned = _MATCH_SANITIZE_RE.sub(" ", lowered)
     return _COLLAPSE_WS_RE.sub(" ", cleaned).strip()
 
@@ -372,6 +394,8 @@ def _normalize_window_action(action_hint: str) -> str:
 
 def _strip_spoken_prefixes(normalized_text: str) -> str:
     candidate = (normalized_text or "").strip()
+    # Strip Arabic comma that STT inserts after the wake word ("Jarvis،").
+    candidate = re.sub(r"^jarvis\s*[،,]\s*", "", candidate, flags=re.IGNORECASE).strip()
     patterns = (
         r"^(?:hey|ok|okay)\s+jarvis\s+",
         r"^(?:hey|ok|okay)\s+",
@@ -468,15 +492,51 @@ def _collapse_repeated_phrase(text: str) -> str:
     return candidate
 
 
+_AR_ARTICLE_PREFIX_RE = re.compile(
+    r"^(?:الـ|لل|ال|لـ|ل)\s*",
+    re.IGNORECASE,
+)
+_EN_ARTICLE_PREFIX_RE = re.compile(r"^(?:the|my)\s+", re.IGNORECASE)
+
+
 def _normalize_search_path_hint(path_hint: str):
     candidate = _collapse_repeated_phrase(path_hint)
     if not candidate:
         return None
 
+    # Strip trailing punctuation that STT appends ("Downloads." → "Downloads").
+    candidate = re.sub(r"[.,،؟?!]+$", "", candidate).strip()
+    if not candidate:
+        return None
+
     lowered = candidate.lower().strip()
+    # Try exact alias first.
     alias = _SEARCH_PATH_ALIASES.get(lowered)
     if alias:
         return os.path.join(os.path.expanduser("~"), alias)
+
+    # Strip Arabic definite-article prefix and retry ("الـ desktop" → "desktop").
+    stripped = _AR_ARTICLE_PREFIX_RE.sub("", lowered).strip()
+    if stripped != lowered:
+        alias = _SEARCH_PATH_ALIASES.get(stripped)
+        if alias:
+            return os.path.join(os.path.expanduser("~"), alias)
+        lowered = stripped
+
+    # Strip English article prefix and retry ("the desktop" → "desktop").
+    stripped_en = _EN_ARTICLE_PREFIX_RE.sub("", lowered).strip()
+    if stripped_en != lowered:
+        alias = _SEARCH_PATH_ALIASES.get(stripped_en)
+        if alias:
+            return os.path.join(os.path.expanduser("~"), alias)
+        lowered = stripped_en
+
+    # Drive/partition phrases ("D partition", "قرص د", "C drive") — resolved
+    # via the canonical path_resolver table (folders already tried above).
+    drive_path = _PATH_RESOLVER_DRIVE_ALIASES.get(lowered)
+    if drive_path:
+        return drive_path
+
     return candidate
 
 
@@ -572,8 +632,8 @@ def parse_duration_from_text(text):
     if not candidate:
         return None
 
-    candidate = re.sub(r"^(?:for|in|after|على|ل(?:ـ)?|الى|إلى|بعد)\s+", "", candidate, flags=re.IGNORECASE)
-    candidate = re.sub(r"\s+(?:for|in|after|على|ل(?:ـ)?|الى|إلى|بعد)$", "", candidate, flags=re.IGNORECASE)
+    candidate = re.sub(r"^(?:for|in|after|على|علي|ل(?:ـ)?|الى|إلى|بعد)\s+", "", candidate, flags=re.IGNORECASE)
+    candidate = re.sub(r"\s+(?:for|in|after|على|علي|ل(?:ـ)?|الى|إلى|بعد)$", "", candidate, flags=re.IGNORECASE)
     candidate = " ".join(candidate.split()).strip()
     if not candidate:
         return None
@@ -611,11 +671,34 @@ def parse_duration_from_text(text):
     return None
 
 
+_TIMER_FILLER_WORDS = frozenset({
+    "the", "a", "an", "my", "for", "of",
+    "timer", "alarm", "تايمر", "منبه",
+})
+
+
 def _timer_args_from_text(duration_text, *, label="Timer"):
     seconds = parse_duration_from_text(duration_text)
     if seconds is None:
         return {}
     return {"seconds": seconds, "label": label}
+
+
+def _extract_named_timer_label(text: str) -> str:
+    """Extract a human label from text like 'pasta' or 'the pasta timer'."""
+    tokens = [t for t in text.lower().split() if t not in _TIMER_FILLER_WORDS]
+    return " ".join(tokens).strip() or "Timer"
+
+
+def _named_timer_args(m) -> dict:
+    """Parse 'set a timer for <label> for <duration>' regexes."""
+    label_text = m.group(1).strip()
+    duration_text = m.group(2).strip()
+    label = _extract_named_timer_label(label_text) or "Timer"
+    seconds = parse_duration_from_text(duration_text)
+    if seconds is None:
+        return {}
+    return {"seconds": seconds, "label": label.capitalize()}
 
 
 def _normalize_url_target(value: str):
@@ -647,6 +730,21 @@ def _canonical_window_query(value: str):
     return value.strip()
 
 
+def _strip_create_name(value: str) -> str:
+    """Strip leading filler words for folder creation commands.
+
+    "اسمه test" → "test", "called reports" → "reports", "new folder test" → "test".
+    """
+    candidate = str(value or "").strip()
+    # Arabic: "اسمه X", "باسم X", "بالاسم X"
+    candidate = re.sub(r"^(?:اسمه|اسمها|باسم|بالاسم)\s+", "", candidate, flags=re.IGNORECASE).strip()
+    # English: "called X", "named X"
+    candidate = re.sub(r"^(?:called|named)\s+", "", candidate, flags=re.IGNORECASE).strip()
+    # Strip leading "folder", "new folder", "new"
+    candidate = re.sub(r"^(?:new\s+)?(?:folder|مجلد)\s+", "", candidate, flags=re.IGNORECASE).strip()
+    return candidate.strip().strip('"').strip("'")
+
+
 def _strip_file_target_fillers(value: str):
     candidate = _normalize_for_match(value)
     if not candidate:
@@ -668,6 +766,78 @@ def _normalize_language_value(value: str):
     return token
 
 
+_TRAILING_LOCATION_RE = re.compile(
+    r"^(.*?)\s+(?:in|من|في|from)\s+(.+)$",
+    re.IGNORECASE,
+)
+# Greedy version — splits at the LAST في/in so "CV.pdf في الـ Documents"
+# keeps "CV.pdf" intact as the filename rather than just "CV".
+_TRAILING_LOCATION_RE_GREEDY = re.compile(
+    r"^(.*)\s+(?:in|من|في|from)\s+(.+)$",
+    re.IGNORECASE,
+)
+
+
+def _split_filename_and_location(text):
+    """Split "X in Y" / "X في Y" into (filename, search_path).
+
+    Returns (cleaned_filename, resolved_search_path_or_empty). Used by the
+    codeswitched-command tier so OS_FILE_SEARCH results get the same
+    filename-filler-stripping and location-alias resolution as the regex
+    table, regardless of which tier matched first.
+    """
+    candidate = str(text or "").strip()
+    if not candidate:
+        return "", ""
+
+    # Try greedy split first (splits at LAST في/in) so filenames with
+    # dots like "CV.pdf في Documents" are not broken after the first word.
+    greedy = _TRAILING_LOCATION_RE_GREEDY.match(candidate)
+    if greedy:
+        filename_part = _strip_file_target_fillers(greedy.group(1))
+        location_part = _normalize_search_path_hint(greedy.group(2).strip()) or ""
+        if filename_part:
+            return filename_part, location_part
+
+    # Fallback to non-greedy (handles edge cases like "X and Y in Z")
+    match = _TRAILING_LOCATION_RE.match(candidate)
+    if match:
+        filename_part = _strip_file_target_fillers(match.group(1))
+        location_part = _normalize_search_path_hint(match.group(2).strip()) or ""
+        if filename_part:
+            return filename_part, location_part
+    return _strip_file_target_fillers(candidate), ""
+
+
+# Trailing STT noise words that sometimes get appended to the end of a
+# destructive-command utterance ("...downloads. Done." / "...محذوف.").
+_TRAILING_NOISE_RE = re.compile(
+    r"[.,،؟?!]*\s*(?:done|ok|okay|please|محذوف|تم|خلاص|كده)?\s*[.,،؟?!]*$",
+    re.IGNORECASE,
+)
+
+
+def _split_target_and_location(text):
+    """Split a delete/move/rename source phrase into (target, search_path).
+
+    Like _split_filename_and_location but for destructive-op targets: also
+    strips trailing STT noise words ("done", "محذوف") that often get
+    appended after a location clause.  Returns (target, search_path_or_"").
+    """
+    candidate = str(text or "").strip()
+    if not candidate:
+        return "", ""
+    match = _TRAILING_LOCATION_RE.match(candidate)
+    if match:
+        target_part = _strip_file_target_fillers(match.group(1))
+        location_raw = _TRAILING_NOISE_RE.sub("", match.group(2).strip()).strip()
+        location_part = _normalize_search_path_hint(location_raw) or ""
+        if target_part:
+            return target_part, location_part
+    cleaned = _TRAILING_NOISE_RE.sub("", candidate).strip()
+    return _strip_file_target_fillers(cleaned), ""
+
+
 def _try_codeswitched_command(raw, normalized):
     cs = normalize_codeswitched(raw)
     intent = str((cs or {}).get("intent") or "").strip().lower()
@@ -679,6 +849,11 @@ def _try_codeswitched_command(raw, normalized):
         return None
 
     if intent == "open":
+        # "افتح tab جديدة في الـ browser" → browser_new_tab
+        _tab_tokens = {"tab", "تاب", "new tab", "تاب جديد", "تاب جديدة"}
+        if entity_normalized in _tab_tokens or entity_normalized.startswith("tab") or entity_normalized.startswith("تاب"):
+            return ParsedCommand("OS_SYSTEM_COMMAND", raw, normalized, args={"action_key": "browser_new_tab"})
+
         app_name = _infer_known_app_name(entity)
         if app_name:
             return ParsedCommand("OS_APP_OPEN", raw, normalized, args={"app_name": app_name})
@@ -694,6 +869,42 @@ def _try_codeswitched_command(raw, normalized):
                 return ParsedCommand("OS_APP_OPEN", raw, normalized, args={"app_name": app_name})
 
     if intent == "close":
+        # "اقفل tab الـ YouTube" / "close YouTube tab" → browser_close_named_tab
+        entity_lower = entity_normalized.lower()
+        has_tab = (
+            any(t in entity_lower.split() for t in ("tab", "تاب"))
+            or "tab" in raw.lower()
+            or "تاب" in raw
+        )
+        if has_tab:
+            import re as _re
+            # The codeswitched parser often captures only "tab" as the entity
+            # when the site name follows the Latin word "tab".
+            # Try to extract the site name from raw text directly.
+            _ar_tab_re = _re.compile(
+                r"(?:اقفل|سكر|قفل)\s+tab\s+(?:الـ\s+|ال)?(.+?)(?:\s+في\s+(?:الـ\s+)?(?:browser|متصفح|chrome|firefox|edge))?$",
+                _re.IGNORECASE | _re.UNICODE,
+            )
+            m = _ar_tab_re.search(raw)
+            if m:
+                tab_query = m.group(1).strip()
+            else:
+                tab_query = _re.sub(
+                    r"\b(tab|تاب|browser|الـ|في|in|the|a|an)\b",
+                    " ",
+                    entity,
+                    flags=_re.IGNORECASE | _re.UNICODE,
+                ).strip()
+            if not tab_query or tab_query.lower() == "tab":
+                # Couldn't extract a site name; fall through to generic close-tab
+                return ParsedCommand(
+                    "OS_SYSTEM_COMMAND", raw, normalized,
+                    args={"action_key": "browser_close_tab"},
+                )
+            return ParsedCommand(
+                "OS_SYSTEM_COMMAND", raw, normalized,
+                args={"action_key": "browser_close_named_tab", "tab_query": tab_query.lower()},
+            )
         app_name = _infer_known_app_name(entity)
         if app_name:
             return ParsedCommand("OS_APP_CLOSE", raw, normalized, args={"app_name": app_name})
@@ -740,7 +951,9 @@ def _try_codeswitched_command(raw, normalized):
                 flags=re.IGNORECASE,
             ).strip()
             if query:
-                return ParsedCommand("OS_FILE_SEARCH", raw, normalized, args={"filename": query, "search_path": ""})
+                filename, search_path = _split_filename_and_location(query)
+                if filename:
+                    return ParsedCommand("OS_FILE_SEARCH", raw, normalized, args={"filename": filename, "search_path": search_path})
 
         if entity:
             web_terms = {
@@ -757,7 +970,22 @@ def _try_codeswitched_command(raw, normalized):
                 "wiki",
             }
             if entity_normalized not in web_terms and not re.search(r"://|\.[a-z0-9]{2,6}\b", entity_normalized, flags=re.IGNORECASE):
-                return ParsedCommand("OS_FILE_SEARCH", raw, normalized, args={"filename": entity, "search_path": ""})
+                # `entity` from normalize_codeswitched is already the clean
+                # filename (verb stripped); only extract the location from the
+                # full source text rather than re-splitting the clean entity.
+                # Recover lost extension: if "CV" came from "CV.pdf ...", reattach ".pdf".
+                entity_with_ext = entity
+                _ext_recover = re.search(
+                    re.escape(entity) + r"(\.[a-zA-Z0-9]{1,6})\b",
+                    raw,
+                    re.IGNORECASE,
+                )
+                if _ext_recover:
+                    entity_with_ext = entity + _ext_recover.group(1)
+                filename = _strip_file_target_fillers(entity_with_ext) or entity_with_ext
+                _, search_path = _split_filename_and_location(source_text)
+                if filename:
+                    return ParsedCommand("OS_FILE_SEARCH", raw, normalized, args={"filename": filename, "search_path": search_path})
 
         query = source_text
         if query:
@@ -1131,6 +1359,98 @@ _PRIORITY_STRUCTURAL_TABLE = [
         {"action_key": "bluetooth_off"},
         0.95,
     ),
+    # Window management — Egyptian Arabic uses شاشة/شباك/نافذة interchangeably
+    (
+        {
+            "maximize window", "maximize this window", "window maximize",
+            "كبر الشباك", "كبر الشبابك", "كبر الشاشة", "كبر النافذة",
+            "كبّر الشباك", "كبّر الشاشة", "كبّر النافذة",
+            "كبرلي الشاشة", "كبرلي الشباك",
+        },
+        "OS_SYSTEM_COMMAND",
+        "",
+        {"action_key": "window_maximize"},
+        0.95,
+    ),
+    (
+        {
+            "minimize window", "minimize this window", "window minimize",
+            "صغر الشباك", "صغر الشبابك", "صغر الشاشة", "صغر النافذة",
+            "صغّر الشباك", "صغّر الشاشة", "صغّر النافذة",
+            "صغرلي الشاشة", "صغرلي الشباك",
+            "اطوي الشاشة", "اطوي الشباك",
+        },
+        "OS_SYSTEM_COMMAND",
+        "",
+        {"action_key": "window_minimize"},
+        0.95,
+    ),
+    (
+        {
+            "open new tab", "new tab", "browser new tab",
+            "افتح تاب جديد", "افتح تاب جديدة", "تاب جديد", "تاب جديدة",
+            "افتح tab جديد", "افتح tab جديدة",
+        },
+        "OS_SYSTEM_COMMAND",
+        "",
+        {"action_key": "browser_new_tab"},
+        0.95,
+    ),
+    (
+        {
+            "close tab", "close browser tab", "browser close tab",
+            "اقفل التاب", "سكر التاب", "اقفل tab", "سكر tab",
+        },
+        "OS_SYSTEM_COMMAND",
+        "",
+        {"action_key": "browser_close_tab"},
+        0.95,
+    ),
+    (
+        {
+            "read clipboard", "show clipboard", "clipboard read",
+            "what's in my clipboard", "whats in my clipboard",
+        },
+        "OS_CLIPBOARD",
+        "read",
+        {},
+        0.95,
+    ),
+    (
+        {
+            "clear clipboard", "empty clipboard", "clipboard clear",
+            "امسح الكليببورد", "امسح clipboard",
+        },
+        "OS_CLIPBOARD",
+        "clear",
+        {},
+        0.95,
+    ),
+    # Screen recording
+    (
+        {
+            "start recording", "start screen recording", "record screen",
+            "record my screen", "begin recording",
+            "ابدأ التسجيل", "سجّل الشاشة", "سجل الشاشة",
+            "ابدأ تسجيل الشاشة", "شغّل التسجيل", "شغل التسجيل",
+        },
+        "OS_SYSTEM_COMMAND",
+        "",
+        {"action_key": "screen_record_start"},
+        0.95,
+    ),
+    (
+        {
+            "stop recording", "stop screen recording", "end recording",
+            "finish recording",
+            "وقّف التسجيل", "وقف التسجيل", "اوقف التسجيل",
+            "خلّص التسجيل", "خلص التسجيل",
+        },
+        "OS_SYSTEM_COMMAND",
+        "",
+        {"action_key": "screen_record_stop"},
+        0.95,
+    ),
 ]
 
 
@@ -1307,6 +1627,32 @@ _PRIORITY_REGEX_TABLE = [
         "search",
         lambda m: {"query": m.group(1).strip(), "search_path": (m.group(2) or "").strip() or None},
         0.94,
+    ),
+    # Phase 5 -- English open-file with extension: "open report.pdf [in downloads]"
+    (
+        re.compile(
+            r"^(?:open|launch|run|start)\s+(?:(?:the|a)\s+)?(?:file\s+)?(.+?\.\w{1,6})(?:\s+(?:in|from|inside)\s+(.+))?[.!?]*$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_FILE_NAVIGATION",
+        "open_file",
+        lambda m: {"path": (m.group(1).strip() + " في " + m.group(2).strip()) if m.group(2) else m.group(1).strip()},
+        0.97,
+    ),
+    # Phase 5 -- open/launch explorer with a destination arg
+    # Must be in the priority table so it fires before _try_codeswitched_command
+    # which maps "explorer" -> OS_APP_OPEN.
+    (
+        re.compile(
+            r"^(?:open|launch|show)\s+(?:file\s+)?explorer\s+(?:to|at|on|in)\s+(.+)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_FILE_NAVIGATION",
+        "open_in_explorer",
+        lambda m: {"path": m.group(1).strip()},
+        0.97,
     ),
 
 ]
@@ -1516,6 +1862,11 @@ _KEYWORD_TABLE = [
             "whats in clipboard?",
             "paste clipboard",
             "اقرا الكليب بورد",
+            "اقرأ الكليب بورد",
+            "اقرأ clipboard",
+            "اقرا clipboard",
+            "اقرا ال clipboard",
+            "اقرأ ال clipboard",
             "وريني الكليب بورد",
             "ايه في الكليب بورد",
             "إيه اللي في Clipboard",
@@ -1601,6 +1952,11 @@ _KEYWORD_TABLE = [
             "open email",
             "open mail",
             "open inbox",
+            "open outlook",
+            "open outlook and draft",
+            "open outlook and compose",
+            "launch outlook",
+            "start outlook",
             "افتح البريد",
             "افتح الايميل",
             "افتح الإيميل",
@@ -1609,7 +1965,17 @@ _KEYWORD_TABLE = [
             "ايميل جديد",
             "اكتب ايميل",
             "اعمل ايميل",
+            "ابعت ايميل",
             "مسودة ايميل",
+            "افتح أوتلوك",
+            "افتح Outlook",
+            " إبعت email",
+            "افتح اوتلوك",
+            "شغّل أوتلوك",
+            "شغل اوتلوك",
+            "اعملي ايميل",
+            "اعمل إيميل",
+            "اكتب إيميل",
         },
         "OS_EMAIL",
         "draft",
@@ -1710,6 +2076,24 @@ _KEYWORD_TABLE = [
         "OS_REMINDER",
         "cancel",
     ),
+    # Phase 5 -- open File Explorer (bare "open explorer" phrases; must come
+    # before _try_codeswitched_command which maps "file explorer" → OS_APP_OPEN)
+    (
+        {
+            "open explorer",
+            "open file explorer",
+            "launch explorer",
+            "launch file explorer",
+            "show file explorer",
+            "start file explorer",
+            "افتح المستكشف",
+            "افتح مستكشف الملفات",
+            "فتح المستكشف",
+        },
+        "OS_FILE_NAVIGATION",
+        "open_in_explorer",
+        {"path": ""},
+    ),
 ]
 
 
@@ -1766,7 +2150,44 @@ def _try_keyword_table(normalized, raw):
 # Result: Parser easier to maintain, semantic router handles rich user language,
 # combined coverage remains >95% with better recall on natural phrasings.
 #
+_BROWSER_CLOSE_TAB_RE = re.compile(
+    r"^(?:close|shut|kill|exit|اقفل|سكر|قفل)\s+"
+    r"(?:the\s+)?(?:الـ\s+|ال)?(.+?)\s+"
+    r"(?:tab|window|browser\s+tab|تاب|شبابك)$",
+    re.IGNORECASE | re.UNICODE,
+)
+_BROWSER_CLOSE_TAB_AR_RE = re.compile(
+    r"^(?:اقفل|سكر|قفل)\s+tab\s+(?:الـ\s+|ال)?(.+?)(?:\s+في\s+(?:الـ\s+)?(?:browser|متصفح|chrome|firefox|edge))?$",
+    re.IGNORECASE | re.UNICODE,
+)
+
+
+def _parse_browser_close_named_tab(m):
+    raw_query = m.group(1).strip()
+    # Strip residual noise words
+    import re as _re
+    tab_query = _re.sub(r"\b(tab|تاب|browser|الـ|في|in|the|a|an)\b", " ", raw_query, flags=_re.IGNORECASE | _re.UNICODE).strip()
+    return {"action_key": "browser_close_named_tab", "tab_query": (tab_query or raw_query).lower()}
+
+
 _REGEX_TABLE = [
+    # Browser tab close by name
+    (
+        _BROWSER_CLOSE_TAB_RE,
+        True,
+        "OS_SYSTEM_COMMAND",
+        "",
+        _parse_browser_close_named_tab,
+        0.93,
+    ),
+    (
+        _BROWSER_CLOSE_TAB_AR_RE,
+        True,
+        "OS_SYSTEM_COMMAND",
+        "",
+        _parse_browser_close_named_tab,
+        0.93,
+    ),
     # Persona
     (
         re.compile(r"^persona set\s+([a-z0-9_-]+)$"),
@@ -2149,7 +2570,7 @@ _REGEX_TABLE = [
         lambda _m: {"action_key": "volume_down"},
     ),
     (
-        re.compile(r"^(?:خد\s+سكرين\s+شوت|خد\s+سكرينشوت|خذ\s+سكرينشوت|خذ\s+سكرين\s+شوت)$", re.IGNORECASE),
+        re.compile(r"^(?:خد\s+سكرين\s+شوت|خد\s+سكرينشوت|خذ\s+سكرينشوت|خذ\s+سكرين\s+شوت|خد\s+screenshot|خذ\s+screenshot|خد\s+سكرين|خذ\s+سكرين)$", re.IGNORECASE),
         False,
         "OS_SYSTEM_COMMAND",
         "",
@@ -2447,24 +2868,58 @@ _REGEX_TABLE = [
     # File search
     (
         re.compile(
-            r"^(?:find file|search file|دور على ملف|دوّر على ملف|وريني ملف|هاتلي ملف|دورلي على ملف|دورلي ملف|لقيلي ملف|فين ملف)\s+(.+?)(?:\s+(?:in|\u0641\u064a)\s+(.+))?$",
+            r"^(?:find file|search file|دور على ملف|دور على|دوّر على ملف|دوّر على|وريني ملف|هاتلي ملف|دورلي على ملف|دورلي على|دورلي ملف|لقيلي ملف|فين ملف)\s+(.+?)(?:\s+(?:in|the|\u0641\u064a|\u0627\u0644))?\s*(.+)?$",
             re.IGNORECASE,
         ),
         True,
         "OS_FILE_SEARCH",
         "",
-        lambda m: {"filename": _strip_file_target_fillers(m.group(1)), "search_path": (m.group(2) or "").strip() or None},
+        lambda m: {"filename": _strip_file_target_fillers(m.group(1)), "search_path": _normalize_search_path_hint((m.group(2) or "").strip()) or None},
+    ),
+    # Phase 5 -- Arabic reveal (must precede the وريني list_directory catch-all)
+    (
+        re.compile(
+            r"^(?:ورّيني\s+مكان|وريني\s+مكان|وريني\s+الملف\s+|وريني\s+المجلد\s+|فين\s+الملف\s+|فين\s+المجلد\s+|فين\s+|وريني\s+(?!الملفات|المجلدات))(.+)$",
+            re.IGNORECASE | re.UNICODE,
+        ),
+        True,
+        "OS_FILE_NAVIGATION",
+        "reveal_in_explorer",
+        lambda m: {"path": m.group(1).strip()},
+    ),
+    # Phase 5 -- Arabic open-file: "افتح <file>" or "فتح ملف <file>"
+    # Must come BEFORE the افتح المستكشف open-in-explorer rule.
+    (
+        re.compile(
+            r"^(?:افتح|فتح|شغل)\s+(?!المستكشف|مستكشف)(?:ملف|الملف|المجلد|مجلد)?\s*(.+?)(?:\s+(?:في|من|inside|in)\s+(.+))?[.!?]*$",
+            re.IGNORECASE | re.UNICODE,
+        ),
+        True,
+        "OS_FILE_NAVIGATION",
+        "open_file",
+        lambda m: {"path": (m.group(1).strip() + " في " + m.group(2).strip()) if m.group(2) else m.group(1).strip()},
+    ),
+    # Phase 5 -- Arabic open-in-explorer (must precede list_directory)
+    (
+        re.compile(
+            r"^(?:افتح|فتح)\s+(?:المستكشف|مستكشف\s+الملفات|explorer)(?:\s+(?:على|علي|في)\s+(.+))?[.!?]*$",
+            re.IGNORECASE | re.UNICODE,
+        ),
+        True,
+        "OS_FILE_NAVIGATION",
+        "open_in_explorer",
+        lambda m: {"path": (m.group(1) or "").strip()},
     ),
     # File nav - regex-based
     (
         re.compile(
-            r"^(?:list files|list directory|show files|show directory|وريني الملفات|هاتلي الملفات|وريني المجلد|هاتلي المجلد|شوفلي الملفات|ايه في المجلد)(?:\s+(?:in|\u0641\u064a)\s+(.+))?$",
+            r"^(?:list files|list directory|show files|show directory|وريني الملفات|هاتلي الملفات|وريني المجلد|هاتلي المجلد|شوفلي الملفات|ايه في المجلد|ايه في|ايه اللي في|هاتلي|اعرضلي)(?:\s+(?:in|the|\u0641\u064a|\u0627\u0644))?\s*(.+)?$",
             re.IGNORECASE,
         ),
         True,
         "OS_FILE_NAVIGATION",
         "list_directory",
-        lambda m: {"path": (m.group(1) or "").strip() or None},
+        lambda m: {"path": _normalize_search_path_hint((m.group(1) or "").strip()) or (m.group(1) or "").strip() or None},
     ),
     (
         re.compile(r"^(?:dir|ls)(?:\s+(.+))?$", re.IGNORECASE),
@@ -2485,13 +2940,13 @@ _REGEX_TABLE = [
     ),
     (
         re.compile(
-            r"^(?:create folder|make folder|mkdir|اعمل مجلد|اعمللي مجلد)\s+(.+)$",
+            r"^(?:create folder|make folder|new folder|mkdir|اعمل مجلد|اعمللي مجلد|انشئ مجلد|عمل مجلد|اعمل folder|اعمللي folder|انشئ folder|اعمل مجلد جديد)\s+(.+)$",
             re.IGNORECASE,
         ),
         True,
         "OS_FILE_NAVIGATION",
         "create_directory",
-        lambda m: {"path": _strip_file_target_fillers(m.group(1))},
+        lambda m: {"path": _strip_create_name(m.group(1))},
     ),
     (
         re.compile(
@@ -2501,36 +2956,68 @@ _REGEX_TABLE = [
         True,
         "OS_FILE_NAVIGATION",
         "delete_item_permanent",
-        lambda m: {"path": _strip_file_target_fillers((m.group(1) or m.group(2) or m.group(3) or m.group(4) or "").strip())},
+        lambda m: dict(zip(("path", "location"), _split_target_and_location((m.group(1) or m.group(2) or m.group(3) or m.group(4) or "").strip()))),
     ),
     (
         re.compile(r"^(?:delete|remove|امسح|شيل)\s+(.+)$", re.IGNORECASE),
         True,
         "OS_FILE_NAVIGATION",
         "delete_item",
-        lambda m: {"path": _strip_file_target_fillers(m.group(1))},
+        lambda m: dict(zip(("path", "location"), _split_target_and_location(m.group(1)))),
     ),
     (
         re.compile(
-            r"^(?:move|حرك|ودي|ودّي)\s+(.+?)\s+(?:to|على)\s+(.+)$",
+            r"^(?:move|put|انقل|انقل|نقل|حرك|ودي|ودّي|غير مكان|حول|شيل)\s+(?:the\s+)?(?:file|folder|ملف|مجلد)?\s*(.+?)\s+(?:from|من)\s+(.+?)\s+(?:to|into|to the|الى|الي|على|علي|ل|للـ?)\s*(.+)$",
             re.IGNORECASE,
         ),
         True,
         "OS_FILE_NAVIGATION",
         "move_item",
-        lambda m: {"source": _strip_file_target_fillers(m.group(1)), "destination": _strip_file_target_fillers(m.group(2))},
+        lambda m: {"source": os.path.join(_normalize_search_path_hint(m.group(2)) or m.group(2), _strip_file_target_fillers(m.group(1))), "destination": _normalize_search_path_hint(m.group(3)) or _strip_file_target_fillers(m.group(3))},
     ),
     (
         re.compile(
-            r"^(?:rename|سمي|سميلي|سمّي|سمّيلي)\s+(.+?)\s+(?:to|ل)\s+(.+)$",
+            r"^(?:move|put|انقل|انقل|نقل|حرك|ودي|ودّي|غير مكان|حول|شيل)\s+(?:the\s+)?(?:file|folder|ملف|مجلد)?\s*(.+?)\s+(?:to|into|الى|الي|على|علي|ل|للـ?)\s*(.+)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_FILE_NAVIGATION",
+        "move_item",
+        lambda m: {"source": _strip_file_target_fillers(m.group(1)), "destination": _normalize_search_path_hint(m.group(2)) or _strip_file_target_fillers(m.group(2))},
+    ),
+    (
+        re.compile(
+            r"^(?:rename|سمي|سميلي|سمّي|سمّيلي|غير اسم|بدّل اسم|اغير اسم)\s+(.+?)\s+(?:to|as|اسمه|باسم|ل(?:ـ)?|الى|لـ)\s+(.+)$",
             re.IGNORECASE,
         ),
         True,
         "OS_FILE_NAVIGATION",
         "rename_item",
-        lambda m: {"source": _strip_file_target_fillers(m.group(1)), "new_name": _strip_file_target_fillers(m.group(2))},
+        lambda m: dict(list({"source": _split_target_and_location(m.group(1))[0] or _strip_file_target_fillers(m.group(1)), "new_name": _strip_file_target_fillers(m.group(2)), "location": _split_target_and_location(m.group(1))[1] or None}.items())),
     ),
-    # Copy — "copy file X to Y", "انسخ الملف X الى Y", "copy X to Y"
+     # Follow-up rename
+    (
+        re.compile(
+            r"^(?:غير اسمه|سميه|سمّيه|بدّله|غير اسمها|سميها|rename it to|name it)(?:\s+(?:ل(?:ـ)?|لـ|الى|to|as))?\s+(.+)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_FILE_NAVIGATION",
+        "rename_item_followup",
+        lambda m: {"new_name": re.sub(r"^ل(?:ـ)?", "", _strip_file_target_fillers(m.group(1))).strip()},
+    ),
+    # Follow-up move
+    (
+        re.compile(
+            r"^(?:انقله|نقله|حركه|انقلها|نقلها|حركها|move it to|put it in)\s+(?:(?:to|into|الى|الي|على|علي|ل|للـ?)\s+)?(.+)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_FILE_NAVIGATION",
+        "move_item_followup",
+        lambda m: {"destination": _normalize_search_path_hint(m.group(1)) or _strip_file_target_fillers(m.group(1))},
+    ),
+   # Copy — "copy file X to Y", "انسخ الملف X الى Y", "copy X to Y"
     (
         re.compile(
             r"^(?:copy|انسخ|انسخلي)\s+(?:the\s+)?(?:file|folder)?\s*(.+?)\s+(?:to|الى|الي|ل)\s+(.+)$",
@@ -2551,6 +3038,74 @@ _REGEX_TABLE = [
         "copy_item",
         lambda m: {"source": _strip_file_target_fillers(m.group(1)), "destination": _strip_file_target_fillers(m.group(2))},
     ),
+    # --- Phase 5: Explorer-driven file ops ---
+    # reveal in explorer  -- "reveal X in explorer", "show X in file manager", etc.
+    (
+        re.compile(
+            r"^(?:reveal|show|locate|find|highlight)\s+(.+?)\s+(?:in\s+(?:file\s+)?(?:explorer|manager|finder)|in\s+explorer)[.!?]*$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_FILE_NAVIGATION",
+        "reveal_in_explorer",
+        lambda m: {"path": m.group(1).strip()},
+    ),
+    (
+        re.compile(
+            r"^(?:reveal|show|locate)\s+(.+?)\s+(?:file|folder|ملف|مجلد)?$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_FILE_NAVIGATION",
+        "reveal_in_explorer",
+        lambda m: {"path": m.group(1).strip()},
+        0.5,  # lower priority — only fires when nothing else matches
+    ),
+    # Arabic reveal: "ورّيني مكان X", "فين X", "وريني الملف X"
+    (
+        re.compile(
+            r"^(?:ورّيني\s+مكان|ورّينى\s+مكان|وريني\s+مكان|وريني\s+الملف|وريني\s+المجلد|فين\s+الملف|فين\s+المجلد|فين)\s+(.+)$",
+            re.IGNORECASE | re.UNICODE,
+        ),
+        True,
+        "OS_FILE_NAVIGATION",
+        "reveal_in_explorer",
+        lambda m: {"path": m.group(1).strip()},
+    ),
+    # open in explorer -- "open downloads in explorer", "open folder X in file manager"
+    (
+        re.compile(
+            r"^(?:open|show|launch|browse)\s+(?:the\s+)?(?:folder\s+|directory\s+)?(.+?)\s+(?:in\s+(?:file\s+)?(?:explorer|manager|finder)|in\s+explorer)[.!?]*$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_FILE_NAVIGATION",
+        "open_in_explorer",
+        lambda m: {"path": m.group(1).strip()},
+    ),
+    # "open explorer" / "open file explorer" with optional path
+    (
+        re.compile(
+            r"^(?:open|launch|show)\s+(?:file\s+)?explorer(?:\s+(?:to|at|on|in)\s+(.+))?[.!?]*$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_FILE_NAVIGATION",
+        "open_in_explorer",
+        lambda m: {"path": (m.group(1) or "").strip()},
+    ),
+    # Arabic open-in-explorer: "افتح المستكشف", "افتح الـ explorer", "افتح المستكشف على X"
+    (
+        re.compile(
+            r"^(?:افتح|فتح)\s+(?:المستكشف|مستكشف الملفات|الـ\s*explorer|explorer)(?:\s+(?:على|علي|في|على\s+فولدر|على\s+ملف)\s+(.+))?[.!?]*$",
+            re.IGNORECASE | re.UNICODE,
+        ),
+        True,
+        "OS_FILE_NAVIGATION",
+        "open_in_explorer",
+        lambda m: {"path": (m.group(1) or "").strip()},
+    ),
+
     # Timer — "set timer 5 minutes", "timer 10 seconds", "حط تايمر 5 دقايق"
     (
         re.compile(
@@ -2588,7 +3143,7 @@ _REGEX_TABLE = [
     ),
     (
         re.compile(
-            r"^(?:حط|حطلي|ظبط|ظبّط|اعمل|اعمللي|اضبط|اضبطلي)\s+(?:تايمر|منبه|alarm|timer)\s+(\S+)\s+(ثانية|ثواني|دقيقة|دقائق|دقايق|ساعة|ساعات|seconds?|secs?|minutes?|mins?)$",
+            r"^(?:حط|حطلي|ظبط|ظبّط|اعمل|اعمللي|اضبط|اضبطلي)\s+(?:ال)?(?:تايمر|منبه|alarm|timer)\s+(?:على|علي\s+)?(\S+)\s+(ثانية|ثواني|دقيقة|دقائق|دقايق|ساعة|ساعات|seconds?|secs?|minutes?|mins?)$",
             re.IGNORECASE,
         ),
         True,
@@ -2630,6 +3185,31 @@ _REGEX_TABLE = [
         lambda m: {"alarm_time": m.group(1).strip(), "label": "Alarm"},
         0.95,
     ),
+    # Named timer — "set a timer for the pasta for 10 minutes"
+    # label group comes before duration group
+    (
+        re.compile(
+            r"^(?:set\s+(?:a\s+)?timer\s+for\s+(?:the\s+)?)([\w\s]+?)\s+(?:for\s+)(\S+\s+(?:seconds?|secs?|minutes?|mins?|hours?|hrs?|ثانية|ثواني|دقيقة|دقائق|دقايق|ساعة|ساعات))[.!?]*$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_TIMER",
+        "set",
+        _named_timer_args,
+        0.96,
+    ),
+    # Named cancel — "cancel the pasta timer"
+    (
+        re.compile(
+            r"^(?:cancel|stop|الغي|بطل|اوقف)\s+(?:the\s+)?([\w\s]+?)\s+(?:timer|alarm|تايمر|منبه)[.!?]*$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_TIMER",
+        "cancel",
+        lambda m: {"label": _extract_named_timer_label(m.group(1).strip())},
+        0.95,
+    ),
     # Loose timer — handles STT garbling like "sit at ten seconds timer"
     # Must come AFTER strict patterns so it only fires as a fallback.
     (
@@ -2644,7 +3224,7 @@ _REGEX_TABLE = [
     ),
     (
         re.compile(
-            r"^(?:set\s+(?:a\s+)?timer|timer|set\s+(?:an?\s+)?alarm|(?:حط|حطلي|ظبط|ظبّط|اعمل|اعمللي|اضبط|اضبطلي)\s+(?:تايمر|منبه|alarm|timer))(?:\s+(?:for|at|in|after|على|ل(?:ـ)?|الى|إلى|بعد))?\s+(.+?)(?:[.!?]+)?$",
+            r"^(?:set\s+(?:a\s+)?timer|timer|set\s+(?:an?\s+)?alarm|(?:حط|حطلي|ظبط|ظبّط|اعمل|اعمللي|اضبط|اضبطلي)\s+(?:ال)?(?:تايمر|منبه|alarm|timer))(?:\s+(?:for|at|in|after|على|علي|ل(?:ـ)?|الى|إلى|بعد))?\s+(.+?)(?:[.!?]+)?$",
             re.IGNORECASE,
         ),
         True,
@@ -2809,28 +3389,19 @@ _REGEX_TABLE = [
     # Battery / sysinfo — Phase 1.6: regex variants removed. The keyword table
     # already covers the exact-match phrases ("battery status", "البطارية كام")
     # and the semantic router handles paraphrases like "what's my battery".
-    # Email — "draft email to X about Y", "ابعت ايميل ل X عن Y"
+    # Email — most-specific patterns first so they win over shorter ones.
+    # "draft email to X about Y saying Z" — spoken body via "saying"
     (
         re.compile(
-            r"^(?:draft|compose|send|write|new)\s+(?:an?\s+)?email\s+(?:to\s+)?(\S+@\S+)(?:\s+(?:about|subject|re)\s+(.+))?$",
+            r"^(?:draft|compose|write|new)\s+(?:an?\s+)?email\s+(?:to\s+)?(\S+@\S+|\S+)\s+(?:about|re|subject)\s+(.+?)\s+saying\s+(.+)$",
             re.IGNORECASE,
         ),
         True,
         "OS_EMAIL",
         "draft",
-        lambda m: {"to": m.group(1).strip(), "subject": (m.group(2) or "").strip()},
+        lambda m: {"to": m.group(1).strip(), "subject": m.group(2).strip(), "body": m.group(3).strip()},
     ),
-    (
-        re.compile(
-            r"^(?:ابعت|اكتب|افتح)\s+(?:ايميل|إيميل)\s+(?:ل|الى|الي)?\s*(\S+@\S+)?(?:\s+(?:عن|بخصوص)\s+(.+))?$",
-            re.IGNORECASE,
-        ),
-        True,
-        "OS_EMAIL",
-        "draft",
-        lambda m: {"to": (m.group(1) or "").strip(), "subject": (m.group(2) or "").strip()},
-    ),
-    # Email with body — "draft email to X with subject Y and body Z", "ابعت ايميل"
+    # "draft email to X with subject Y and body Z"
     (
         re.compile(
             r"^(?:draft|compose|send|write|new)\s+(?:an?\s+)?email\s+(?:to\s+)?(\S+@\S+)(?:\s+(?:subject|about|re)\s+(.+?))?(?:\s+(?:with\s+)?(?:body|message|text)\s+(.+))?$",
@@ -2841,6 +3412,18 @@ _REGEX_TABLE = [
         "draft",
         lambda m: {"to": m.group(1).strip(), "subject": (m.group(2) or "").strip(), "body": (m.group(3) or "").strip()},
     ),
+    # "draft email to X about Y"
+    (
+        re.compile(
+            r"^(?:draft|compose|send|write|new)\s+(?:an?\s+)?email\s+(?:to\s+)?(\S+@\S+)(?:\s+(?:about|subject|re)\s+(.+))?$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_EMAIL",
+        "draft",
+        lambda m: {"to": m.group(1).strip(), "subject": (m.group(2) or "").strip()},
+    ),
+    # Arabic with body — "ابعت ايميل ل X عن Y والرسالة Z"
     (
         re.compile(
             r"^(?:ابعت|اكتب|افتح)\s+(?:ايميل|إيميل)\s+(?:ل|الى|الي)?\s*(\S+@\S+)(?:\s+(?:عن|بخصوص|موضوع)\s+(.+?))?(?:\s+(?:و|الرسالة|الجسم)\s+(.+))?$",
@@ -2850,6 +3433,28 @@ _REGEX_TABLE = [
         "OS_EMAIL",
         "draft",
         lambda m: {"to": (m.group(1) or "").strip(), "subject": (m.group(2) or "").strip(), "body": (m.group(3) or "").strip()},
+    ),
+    # Arabic without body — "ابعت ايميل ل X عن Y"
+    (
+        re.compile(
+            r"^(?:ابعت|اكتب|افتح)\s+(?:ايميل|إيميل)\s+(?:ل|الى|الي)?\s*(\S+@\S+)?(?:\s+(?:عن|بخصوص)\s+(.+))?$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_EMAIL",
+        "draft",
+        lambda m: {"to": (m.group(1) or "").strip(), "subject": (m.group(2) or "").strip()},
+    ),
+    # "email X about Y" — short natural form without @-address
+    (
+        re.compile(
+            r"^(?:email|draft|compose)\s+(\S+)\s+(?:about|re|regarding)\s+(.+)$",
+            re.IGNORECASE,
+        ),
+        True,
+        "OS_EMAIL",
+        "draft",
+        lambda m: {"to": m.group(1).strip(), "subject": m.group(2).strip()},
     ),
     # Calendar — "create event meeting at 3pm", "اعمل حدث اجتماع"
     (
@@ -3154,7 +3759,9 @@ def _try_natural_file_search(raw, normalized):
         re.compile(
             (
                 r"^(?:(?:\u0639\u0627\u064a\u0632|\u0639\u0627\u0648\u0632)\s+(?:\u0627\u0646|\u0623\u0646)?\s+)?"
-                r"(?:\u062f\u0648\u0631|\u062f\u0648\u0651\u0631|\u062f\u0648\u0631\u0644\u064a|\u062f\u0648\u0651\u0631\u0644\u064a)(?:\s+\u0639\u0646)?\s+(?:\u0645\u0644\u0641\s+)?"
+                r"(?:\u062f\u0648\u0631|\u062f\u0648\u0651\u0631|\u062f\u0648\u0631\u0644\u064a|\u062f\u0648\u0651\u0631\u0644\u064a)"
+                r"(?:\s+(?:\u0639\u0646|\u0639\u0644\u0649|\u0639\u0644\u0627))?"  # \u0639\u0646 | \u0639\u0644\u0649 | \u0639\u0644\u0627
+                r"\s+(?:\u0645\u0644\u0641\s+)?"
                 r"(.+?)(?:\s+(?:\u0641\u064a|\u062f\u0627\u062e\u0644)\s+(.+))?$"
             ),
             re.IGNORECASE,
@@ -3409,7 +4016,7 @@ def _try_natural_file_operation(raw, normalized):
     # CREATE folder unified
     create_patterns = (
         re.compile(
-            r"^(?:(?:create|make)\s+(?:a\s+)?(?:new\s+)?folder(?:\s+(?:called|named))?|(?:اعمل|اعمللي)\s+(?:مجلد\s+)?(?:باسم\s+)?)\s+(.+?)(?:\s+(?:in|inside|under|في|داخل)\s+(.+))?$",
+            r"^(?:(?:create|make|new)\s+(?:a\s+)?(?:new\s+)?folder(?:\s+(?:called|named))?|(?:اعمل|اعمللي|انشئ|عمل)\s+(?:a\s+)?(?:new\s+)?(?:مجلد\s+)?(?:باسم\s+|اسمه\s+)?|(?:اعمل|اعمللي|انشئ)\s+folder\s*)\s*(.+?)(?:\s+(?:in|inside|under|في|داخل)\s+(.+))?$",
             re.IGNORECASE,
         ),
     )
@@ -3427,25 +4034,37 @@ def _try_natural_file_operation(raw, normalized):
     # UNIFIED MOVE & RENAME (both require source + target, distinguish by verb)
     move_rename_patterns = (
         re.compile(
-            r"^(?:(?:move|put)\s+(?:the\s+)?(?:file|folder)?|(?:حرك|ودي|ودّي)\s+(?:الملف|المجلد)?)\s*(.+?)\s+(?:to|into|inside|under|على)\s+(.+)$",
+            r"^(?:(?:move|put)\s+(?:the\s+)?(?:file|folder)?|(?:انقل|نقل|حرك|ودي|ودّي|غير مكان|حول)\s+(?:the\s+)?(?:file|folder|ملف|مجلد)?)\s*(.+?)\s+(?:from|من)\s+(.+?)\s+(?:to|into|to the|الى|الي|على|علي|ل|للـ?)\s*(.+)$",
             re.IGNORECASE,
         ),
-        re.compile(r"^(?:(?:rename|change name of)|(?:سمي|سميلي|سمّي|سمّيلي))\s+(.+?)\s+(?:to|as|ل)\s+(.+)$", re.IGNORECASE),
+        re.compile(r"^(?:(?:rename|change name of|change name)|(?:سمي|سميلي|سمّي|سمّيلي|غير اسم|بدّل اسم))\s+(?:the\s+)?(?:file|folder|ملف|مجلد)?\s*(.+?)\s+(?:to|as|ل(?:ـ)?|لـ|الى)\s+(.+)$", re.IGNORECASE),
     )
     
     for i, pattern in enumerate(move_rename_patterns):
         match = pattern.match(raw)
-        if not match or not match.group(1).strip() or not match.group(2).strip():
+        if not match or not match.group(1).strip():
             continue
-        
+
         # Determine action: rename vs move
         action = "rename_item" if i == 1 else "move_item"
         if action == "move_item":
-            args_dict = {
-                "source": _strip_file_target_fillers(match.group(1) or ""),
-                "destination": _strip_file_target_fillers(match.group(2) or ""),
-            }
+            # Pattern 0 has 3 groups when "from X to Y" is present.
+            has_from_clause = match.lastindex is not None and match.lastindex >= 3
+            if has_from_clause and match.group(3):
+                # "move ITEM from SOURCE to DEST"
+                location_source = _normalize_search_path_hint(match.group(2).strip()) or match.group(2).strip()
+                filename = _strip_file_target_fillers(match.group(1))
+                source = os.path.join(location_source, filename) if location_source else filename
+                dest = _normalize_search_path_hint(match.group(3).strip()) or match.group(3).strip()
+            else:
+                if not match.group(2):
+                    continue
+                source = _strip_file_target_fillers(match.group(1))
+                dest = _normalize_search_path_hint(match.group(2).strip()) or _strip_file_target_fillers(match.group(2))
+            args_dict = {"source": source, "destination": dest}
         else:
+            if not match.group(2):
+                continue
             args_dict = {
                 "source": _strip_file_target_fillers(match.group(1) or ""),
                 "new_name": _strip_file_target_fillers(match.group(2) or ""),
@@ -3541,8 +4160,15 @@ def _try_cd_commands(normalized, raw):
 
 def _try_command_chaining(raw, normalized):
     """Detect and parse chained commands with conjunctions (AND/OR/THEN)."""
+    if (
+        _looks_like_explanatory_llm_query(raw)
+        or _looks_like_question_llm_query(raw)
+        or _looks_like_career_advice_llm_query(raw)
+    ):
+        return None
+
     conjunction_pattern = re.compile(
-        r'(?:\s+(?:and|or|then)\s+|\s+(?:\u0648|\u0623\u0648|\u062b\u0645)(?:\s+|(?=[\u0600-\u06FFA-Za-z]))|\s+و(?=[\u0600-\u06FFA-Za-z]))',
+        r'(?:\s+(?:and|or|then)\s+|\s+(?:\u0648(?!احد)|\u0623\u0648|\u062b\u0645)(?:\s+|(?=[\u0600-\u06FFA-Za-z]))|\s+و(?!احد)(?=[\u0600-\u06FFA-Za-z]))',
         re.IGNORECASE
     )
     
@@ -3596,19 +4222,392 @@ def _try_batch_file_operations(raw, normalized):
     return None
 
 
+def _looks_like_explanatory_llm_query(text: str) -> bool:
+    """Return True for advice/explanation questions that must stay LLM_QUERY."""
+    normalized = _normalize_for_match(text)
+    if not normalized:
+        return False
+
+    word_count = len(normalized.split())
+    english = normalized.lower()
+
+    explanatory_markers = (
+        "how to",
+        "how can i",
+        "how do i",
+        "how should i",
+        "step by step",
+        "steps",
+        "explain",
+        "\u0627\u0632\u0627\u064a",          # ازاي
+        "\u0625\u0632\u0627\u064a",          # إزاي
+        "\u0643\u064a\u0641",                # كيف
+        "\u062e\u0637\u0648\u0629 \u062e\u0637\u0648\u0629",
+        "\u0627\u0644\u062e\u0637\u0648\u0627\u062a",
+        "\u062e\u0637\u0648\u0627\u062a",
+    )
+    tell_me_markers = (
+        "tell me",
+        "can you tell me",
+        "could you tell me",
+        "i want you to tell me",
+        "\u0642\u0648\u0644\u064a",       # "tell me"
+        "\u0642\u0648\u0644\u0644\u064a",
+        "\u0642\u0648\u0644 \u0644\u064a",
+        "\u0645\u0645\u0643\u0646 \u062a\u0642\u0648\u0644",   # "can you tell"
+        "\u0645\u0645\u0643\u0646 \u062a\u0642\u0648\u0644\u064a",
+        "\u0639\u0627\u0648\u0632\u0643 \u062a\u0642\u0648\u0644",  # "I want you to tell"
+        "\u0639\u0627\u0648\u0632\u0643 \u062a\u0642\u0648\u0644\u064a",
+        "\u0639\u0627\u064a\u0632\u0643 \u062a\u0642\u0648\u0644",
+        "\u0639\u0627\u064a\u0632\u0643 \u062a\u0642\u0648\u0644\u064a",
+        "\u0627\u062d\u0643\u064a\u0644\u064a",      # "tell me" (colloquial)
+        "\u0627\u062e\u0628\u0631\u0646\u064a",
+        "\u0623\u062e\u0628\u0631\u0646\u064a",
+        "\u062e\u0628\u0631\u0646\u064a",
+        "\u0627\u0639\u0631\u0641\u0646\u064a",      # "let me know"
+        "\u0627\u0634\u0631\u062d",        # "explain"
+        "\u0627\u0634\u0631\u062d\u0644\u064a",
+        "\u0627\u0634\u0631\u062d \u0644\u064a",
+    )
+    advice_markers = (
+        "successful",
+        "engineer",
+        "computer engineer",
+        "learn",
+        "career",
+        "i don't know",
+        "\u0645\u0634 \u0639\u0627\u0631\u0641",
+        "\u0645\u0634 \u0639\u0627\u0631\u0641\u0629",
+        "\u0628\u062d\u0627\u0648\u0644",
+        "\u0627\u0639\u0645\u0644 \u0643\u062f\u0647",
+        "\u0623\u0639\u0645\u0644 \u0643\u062f\u0647",
+        "\u0627\u0643\u0648\u0646",
+        "\u0623\u0643\u0648\u0646",
+        "\u0646\u0627\u062c\u062d",
+        "\u0645\u0647\u0646\u062f\u0633",
+        "\u0643\u0645\u0628\u064a\u0648\u062a\u0631",
+        "\u0627\u062a\u0639\u0644\u0645",
+        "\u0623\u062a\u0639\u0644\u0645",
+    )
+
+    has_explanatory = any(marker in english for marker in explanatory_markers)
+    has_tell_me = any(marker in normalized for marker in tell_me_markers) or any(
+        marker in english for marker in tell_me_markers
+    )
+    has_advice = any(marker in normalized for marker in advice_markers) or any(
+        marker in english for marker in advice_markers
+    )
+
+    if has_explanatory and (word_count >= 4 or has_advice):
+        return True
+    if has_tell_me and word_count >= 5:
+        return True
+    return False
+
+
+def _looks_like_question_llm_query(text: str) -> bool:
+    normalized = _normalize_for_match(text)
+    if not normalized:
+        return False
+    has_question_mark = "?" in str(text or "") or "\u061f" in str(text or "")
+    question_markers = (
+        "what",
+        "why",
+        "how",
+        "when",
+        "where",
+        "who",
+        "\u0627\u064a\u0647",
+        "\u0625\u064a\u0647",
+        "\u0644\u064a\u0647",
+        "\u0627\u0632\u0627\u064a",
+        "\u0625\u0632\u0627\u064a",
+        "\u0643\u064a\u0641",
+        "\u0647\u0648 \u0644\u064a\u0647",
+    )
+    return has_question_mark and any(marker in normalized for marker in question_markers)
+
+
+def _looks_like_career_advice_llm_query(text: str) -> bool:
+    normalized = _normalize_for_match(text)
+    if not normalized:
+        return False
+
+    career_terms = (
+        "computer engineering",
+        "computer engineer",
+        "software engineer",
+        "engineer",
+        "career",
+        "\u0645\u0647\u0646\u062f\u0633",
+        "\u0643\u0645\u0628\u064a\u0648\u062a\u0631",
+        "\u0628\u0631\u0645\u062c\u0629",
+    )
+    quality_terms = (
+        "successful",
+        "good",
+        "better",
+        "strong",
+        "skilled",
+        "\u0646\u0627\u062c\u062d",
+        "\u0634\u0627\u0637\u0631",
+        "\u0643\u0648\u064a\u0633",
+        "\u0642\u0648\u064a",
+    )
+    intent_terms = (
+        "want",
+        "become",
+        "how",
+        "tell me",
+        "i want",
+        "\u0627\u0631\u064a\u062f",
+        "\u0623\u0631\u064a\u062f",
+        "\u0639\u0627\u064a\u0632",
+        "\u0639\u0627\u0648\u0632",
+        "\u0627\u0643\u0648\u0646",
+        "\u0623\u0643\u0648\u0646",
+        "\u0627\u0628\u0642\u0649",
+        "\u0623\u0628\u0642\u0649",
+        "\u0642\u0648\u0644",
+        "\u062a\u0642\u0648\u0644",
+        "\u0627\u0632\u064a\u0643",
+        "\u0627\u0632\u0627\u064a",
+        "\u0625\u0632\u0627\u064a",
+    )
+
+    return (
+        any(term in normalized for term in career_terms)
+        and any(term in normalized for term in quality_terms)
+        and any(term in normalized for term in intent_terms)
+    )
+
+
 # ---------------------------------------------------------------------------
 # Main parser
 # ---------------------------------------------------------------------------
 
+# STT disfluency fillers ("uh", "um", "ايه") that sometimes appear mid-sentence
+# with surrounding commas, e.g. "search for hello folder in, uh, desktop".
+# Stripped before parsing so they don't break regex captures.
+_DISFLUENCY_RE = re.compile(
+    r"(?:^|(?<=[\s,،]))(?:uh+|um+|er+|ايه ده|يعني)(?:[\s,،]+|$)",
+    re.IGNORECASE,
+)
+
+
+def _strip_disfluencies(text: str) -> str:
+    if not text or ("uh" not in text.lower() and "um" not in text.lower() and "ايه ده" not in text and "يعني" not in text):
+        return text
+    cleaned = _DISFLUENCY_RE.sub(" ", text)
+    # Collapse any leftover comma runs/spacing left by the filler removal.
+    cleaned = re.sub(r"\s*,\s*", ", ", cleaned)
+    cleaned = re.sub(r"(,\s*)+", ", ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    cleaned = re.sub(r"^,\s*|,\s*$", "", cleaned).strip()
+    # Drop commas adjacent to a preposition that the regex tables expect to
+    # be followed directly by whitespace ("in, desktop" -> "in desktop").
+    cleaned = re.sub(r"\b(in|من|في|from)\s*,\s*", r"\1 ", cleaned, flags=re.IGNORECASE)
+    return cleaned or text
+
+
+_OR_CLAUSE_RE = re.compile(
+    r"\s+(?:أو|او|or)\s+.+$",
+    re.IGNORECASE,
+)
+
+
+def _strip_or_clause(text: str) -> str:
+    """Remove trailing 'أو X' / 'or X' alternative clauses the STT sometimes adds.
+
+    "دور على ملف hello في الـ downloads أو folder hello في الـ downloads"
+    → "دور على ملف hello في الـ downloads"
+
+    Only strips when the main command already has a clear filename/location so
+    the remaining text is still parseable.
+    """
+    return _OR_CLAUSE_RE.sub("", text).strip()
+
+
+_NOTE_CREATE_RE = re.compile(
+    r"^(?:"
+    r"create\s+(?:a\s+)?(?:new\s+)?note"
+    r"|new\s+note"
+    r"|take\s+(?:a\s+)?note"
+    r"|make\s+(?:a\s+)?note"
+    r"|note\s+(?:this\s+)?down"
+    r"|write\s+(?:a\s+)?note"
+    r"|اعمل(?:ي|لي|ولي)?\s+نوت(?:ة)?(?:\s+جديدة?)?"
+    r"|نوت(?:ة)?\s+جديد(?:ة)?"
+    r"|اكتب(?:لي)?\s+نوت(?:ة)?"
+    r"|سجل\s+نوت(?:ة)?"
+    r"|دون\s+ملاحظة"
+    r"|حفظ\s+ملاحظة"
+    r")"
+    r"(?:\s+(?:called|named|اسمها|باسم|اسمه)\s+(?P<name>.+?))?$",
+    re.IGNORECASE | re.UNICODE,
+)
+
+_NOTE_INLINE_RE = re.compile(
+    r"^(?:"
+    r"note\s+(?:this\s+)?(?:down\s*[:\-]\s*|:\s*)"
+    r"|write\s+(?:a\s+)?note\s*[:\-]\s*"
+    r"|اكتب\s+(?:نوتة\s+)?[:\-]\s*"
+    r"|سجل\s*[:\-]\s*"
+    r")"
+    r"(?P<body>.+)$",
+    re.IGNORECASE | re.UNICODE,
+)
+
+
+def _try_note_command(raw: str, normalized: str):
+    """Match note-creation commands; returns ParsedCommand or None."""
+    # Inline body: "note this down: buy milk"
+    m = _NOTE_INLINE_RE.match(raw)
+    if not m:
+        m = _NOTE_INLINE_RE.match(normalized)
+    if m:
+        body = m.group("body").strip()
+        if body:
+            return ParsedCommand(
+                "OS_NOTE", raw, normalized,
+                action="create",
+                args={"body": body},
+            )
+
+    # Create with optional name: "create a note called groceries"
+    m = _NOTE_CREATE_RE.match(normalized)
+    if not m:
+        m = _NOTE_CREATE_RE.match(raw.lower())
+    if m:
+        name = (m.group("name") or "").strip() or None
+        return ParsedCommand(
+            "OS_NOTE", raw, normalized,
+            action="create",
+            args={"name": name} if name else {},
+        )
+
+    return None
+
+
+_SCREEN_EN_PHRASES = frozenset({
+    "what's on my screen", "what is on my screen",
+    "whats on my screen", "describe my screen",
+    "show me what's open", "show me whats open",
+    "what's currently on the screen", "what is currently on the screen",
+    "what apps are open", "what windows are open",
+    "what am i looking at", "describe what's visible",
+    "describe whats visible", "what's the active window",
+    "what is the active window", "what program am i in",
+    "what window is open", "what's open right now",
+    "tell me what's on screen", "tell me whats on screen",
+    "what do you see on my screen",
+})
+
+_SCREEN_AR_PHRASES = frozenset({
+    # pre-normalisation (original alef/ya forms)
+    "ايه اللي على الشاشة", "إيه اللي على الشاشة",
+    "ايه اللي شايفه", "إيه اللي شايفه",
+    "وصف الشاشة", "ايه اللي فاتح", "إيه اللي فاتح",
+    "ايه اللي مفتوح دلوقتي", "إيه اللي مفتوح دلوقتي",
+    "ايه التطبيق اللي شغال", "إيه التطبيق اللي شغال",
+    "انا فين دلوقتي", "أنا فين دلوقتي",
+    "ايه اللي بيحصل على الشاشة", "إيه اللي بيحصل على الشاشة",
+    "قولي ايه اللي شايفه", "قولي إيه اللي شايفه",
+    "ايه اللي واقف", "إيه اللي واقف",
+    # post-normalisation (normalize_arabic_preserve_digits converts على -> علي)
+    "ايه اللي علي الشاشة", "إيه اللي علي الشاشة",
+    "ايه اللي بيحصل علي الشاشة", "إيه اللي بيحصل علي الشاشة",
+})
+
+
+def _is_screen_describe_request(normalized: str) -> bool:
+    """Return True when the utterance asks Jarvis to describe the screen."""
+    value = str(normalized or "").strip().lower()
+    if not value:
+        return False
+    if value in _SCREEN_EN_PHRASES or value in _SCREEN_AR_PHRASES:
+        return True
+    en_signals = (
+        "on my screen", "on the screen", "describe my screen",
+        "what's open", "what is open", "apps are open", "windows are open",
+        "what am i looking at", "active window", "describe what",
+    )
+    ar_signals = (
+        "على الشاشة", "علي الشاشة",  # pre- and post-normalisation variants
+        "الشاشة دلوقتي", "اللي شايفه",
+        "اللي مفتوح", "اللي فاتح", "التطبيق اللي شغال",
+        "وصف الشاشة", "اللي بيحصل",
+    )
+    for phrase in en_signals:
+        if phrase in value:
+            return True
+    for phrase in ar_signals:
+        if phrase in value:
+            return True
+    return False
+
+
+_IDENTITY_EN_PHRASES = frozenset({
+    "who are you", "what are you", "introduce yourself",
+    "what can you do", "tell me about yourself", "what's your name",
+    "what is your name", "are you jarvis", "who is jarvis",
+})
+
+_IDENTITY_AR_PHRASES = frozenset({
+    "انت مين", "إنت مين", "انت ايه", "انت الايه",
+    "انت بتشتغل ازاي", "عرفني بنفسك", "عرفني عليك",
+    "بتعمل ايه", "بتعمل إيه", "تعرف تعمل ايه", "تعرف تعمل إيه",
+    "اسمك ايه", "اسمك إيه", "مين انت", "مين إنت",
+    "هو انت مين", "انت جارفيس", "انت مساعد ايه",
+})
+
+
+def _is_identity_question(normalized: str) -> bool:
+    """Return True when the utterance is asking Jarvis to introduce itself."""
+    value = str(normalized or "").strip().lower()
+    if not value:
+        return False
+    # Exact phrase match
+    if value in _IDENTITY_EN_PHRASES or value in _IDENTITY_AR_PHRASES:
+        return True
+    # Prefix / substring match for longer phrasings
+    en_signals = ("who are you", "what are you", "introduce yourself",
+                  "what can you do", "tell me about yourself")
+    ar_signals = ("مين انت", "انت مين", "عرفني بنفسك", "عرفني عليك",
+                  "بتعمل ايه", "تعرف تعمل", "اسمك ايه", "اسمك إيه",
+                  "انت جارفيس", "انت مساعد")
+    for phrase in en_signals:
+        if phrase in value:
+            return True
+    for phrase in ar_signals:
+        if phrase in value:
+            return True
+    return False
+
 
 def parse_command(text: str) -> ParsedCommand:
     raw = text or ""
+    raw = _strip_disfluencies(raw)
+    raw = _strip_or_clause(raw)
     # Pre-normalize Arabic text: strip tashkeel, normalize alef/ya/gaf variants.
     # Preserves Arabic-Indic digits (٣) so regex captures like time_str keep the
     # original numeral form (normalize_arabic would convert them to ASCII).
     raw = normalize_arabic_preserve_digits(raw) if any(0x0600 <= ord(c) <= 0x06FF for c in raw) else raw
     normalized = " ".join(raw.lower().split()).strip()
     normalized_match = _normalize_for_match(raw)
+
+    # Screen-describe check before the early LLM guard so "tell me what's on
+    # screen" isn't captured by _looks_like_explanatory_llm_query.
+    if _is_screen_describe_request(normalized):
+        return ParsedCommand("OS_SCREEN_DESCRIBE", raw, normalized)
+
+    if (
+        _looks_like_explanatory_llm_query(raw)
+        or _looks_like_question_llm_query(raw)
+        or _looks_like_career_advice_llm_query(raw)
+    ):
+        return ParsedCommand("LLM_QUERY", raw, normalized)
+
     spoken_candidate = _strip_spoken_prefixes(normalized_match)
 
     # Try stripping spoken prefixes and re-parsing.
@@ -3649,6 +4648,11 @@ def parse_command(text: str) -> ParsedCommand:
 
     # 0.5 Priority structural regexes for queue/index actions that need args.
     result = _try_priority_regex_table(normalized, raw)
+    if result:
+        return _finalize(result)
+
+    # 0.55 Note-taking commands (before chaining so "note this down: …" isn't split).
+    result = _try_note_command(raw, normalized)
     if result:
         return _finalize(result)
 
@@ -3747,7 +4751,147 @@ def parse_command(text: str) -> ParsedCommand:
     if result:
         return _finalize(result)
 
+    # 8.3 Screen-describe request.
+    if _is_screen_describe_request(normalized):
+        return _finalize(ParsedCommand("OS_SCREEN_DESCRIBE", raw, normalized))
+
+    # 8.5 Identity / self-introduction questions.
+    if _is_identity_question(normalized):
+        return _finalize(ParsedCommand("IDENTITY", raw, normalized))
+
     # 9. LLM fallback.
     return _finalize(ParsedCommand("LLM_QUERY", raw, normalized))
+
+
+# ---------------------------------------------------------------------------
+# Spoken-PIN confirmation (Phase 1)
+# ---------------------------------------------------------------------------
+_PIN_WORD_TOKEN_RE = re.compile(r"[a-zA-Z؀-ۿ]+|\d+")
+_PIN_DIGIT_WORDS = {k: v for k, v in _NUMBER_ONES.items() if v <= 9}
+# Egyptian colloquial spellings not covered by the formal _NUMBER_ONES table.
+_PIN_DIGIT_WORDS.update({
+    "صفر": 0,
+    "واحد": 1, "وحدة": 1,
+    "اتنين": 2, "اتنان": 2,
+    "تلاتة": 3, "تلات": 3,
+    "اربعة": 4, "اربعه": 4, "اربع": 4,
+    "خمسة": 5, "خمسه": 5, "خمس": 5,
+    "ستة": 6, "سته": 6, "ست": 6,
+    "سبعة": 7, "سبعه": 7, "سبع": 7,
+    "تمانية": 8, "تمانيه": 8, "تمن": 8,
+    "تسعة": 9, "تسعه": 9, "تسع": 9,
+})
+
+# Filler words that may surround a spoken PIN — strip these before parsing.
+# Covers "the pin is", "pin:", "my pin is", "الرقم هو", "الرقم السري", etc.
+_PIN_FILLER_RE = re.compile(
+    r"\b(?:the\s+)?(?:pin|p\.?i\.?n\.?|code|passcode|رقم(?:\s+السري)?|الرقم(?:\s+السري)?)"
+    r"(?:\s+(?:is|هو|ده|هي))?\s*[:\-]?\s*",
+    re.IGNORECASE,
+)
+# Trailing filler: "is the pin", "is the pin for the shutdown", etc.
+_PIN_TAIL_RE = re.compile(
+    r"[\s,،]+(?:is|was|هو|ده)\b.*$",
+    re.IGNORECASE,
+)
+
+
+def _extract_pin_digits(text):
+    """Return a digit string from a text of digit-words/digits, or None."""
+    tokens = _PIN_WORD_TOKEN_RE.findall(text.lower())
+    digits = []
+    for token in tokens:
+        if token.isdigit():
+            digits.extend(list(token))
+        elif token in _PIN_DIGIT_WORDS:
+            digits.append(str(_PIN_DIGIT_WORDS[token]))
+        else:
+            return None
+    return "".join(digits) if digits else None
+
+
+def try_parse_pin_confirm(text):
+    """Extract a spoken PIN from an utterance while a PIN request is pending.
+
+    Accepts all of:
+      - Pure digits / number-words:  "1234", "one two three four"
+      - PIN with leading filler:     "pin is one two three four", "الرقم 2468"
+      - PIN with trailing filler:    "two four six eight is the pin"
+      - Arabic-Indic digits:         "٢٤٦٨"
+
+    Returns ParsedCommand(intent="OS_PIN_CONFIRM", args={"pin": "1234"}) or None.
+    """
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+
+    candidate = convert_arabic_numerals(raw)
+
+    # Fast path: bare digit string (possibly space-separated).
+    collapsed = re.sub(r"[\s,،-]+", "", candidate)
+    if collapsed.isdigit():
+        return ParsedCommand("OS_PIN_CONFIRM", raw, raw.lower(), args={"pin": collapsed})
+
+    # Strip known PIN intro/outro filler and try again.
+    stripped = _PIN_FILLER_RE.sub("", candidate).strip()
+    stripped = _PIN_TAIL_RE.sub("", stripped).strip()
+    # Also strip trailing punctuation.
+    stripped = re.sub(r"[.,،؟?!]+$", "", stripped).strip()
+
+    collapsed2 = re.sub(r"[\s,،-]+", "", stripped)
+    if collapsed2.isdigit():
+        return ParsedCommand("OS_PIN_CONFIRM", raw, raw.lower(), args={"pin": collapsed2})
+
+    # Try parsing stripped text as number-words only.
+    pin = _extract_pin_digits(stripped)
+    if pin:
+        return ParsedCommand("OS_PIN_CONFIRM", raw, raw.lower(), args={"pin": pin})
+
+    # Last resort: pure number-words with no extra tokens in the full text.
+    pin = _extract_pin_digits(candidate)
+    if pin:
+        return ParsedCommand("OS_PIN_CONFIRM", raw, raw.lower(), args={"pin": pin})
+
+    return None
+
+
+def extract_pin_from_text(text):
+    """Extract a PIN digit string embedded anywhere in a longer utterance.
+
+    Used when a sensitive command and a PIN appear in the same utterance
+    (e.g. "shutdown, the pin is 2468"). Returns the digit string or None.
+    Deliberately loose — the caller verifies the PIN against the hash.
+    """
+    if not text:
+        return None
+    candidate = convert_arabic_numerals(str(text))
+
+    # Look for an explicit "pin is <digits/words>" phrase.
+    filler_match = _PIN_FILLER_RE.search(candidate)
+    if filler_match:
+        after = candidate[filler_match.end():].strip()
+        after = _PIN_TAIL_RE.sub("", after).strip()
+        after = re.sub(r"[.,،؟?!\s]+$", "", after).strip()
+        collapsed = re.sub(r"[\s,،-]+", "", after)
+        if collapsed.isdigit():
+            return collapsed
+        pin = _extract_pin_digits(after)
+        if pin:
+            return pin
+
+    # Look for a bare digit run of 4+ characters (typical PIN length).
+    digit_run = re.search(r"\b(\d{4,})\b", candidate)
+    if digit_run:
+        return digit_run.group(1)
+
+    # "Two four six eight is the pin for the shutdown" — number-words before tail.
+    stripped_tail = _PIN_TAIL_RE.sub("", candidate).strip()
+    stripped_tail = re.sub(r"[.,،؟?!]+$", "", stripped_tail).strip()
+    if stripped_tail != candidate.strip():
+        pin = _extract_pin_digits(stripped_tail)
+        if pin:
+            return pin
+
+    return None
 
 

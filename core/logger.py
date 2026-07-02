@@ -1,5 +1,7 @@
 import json
 import logging
+import os
+import shutil
 import time
 from logging.handlers import RotatingFileHandler
 
@@ -16,6 +18,32 @@ def _level(value, default):
     resolved = logging.getLevelName(str(value or "").strip().upper())
     return resolved if isinstance(resolved, int) else default
 
+
+class _WindowsSafeRotatingFileHandler(RotatingFileHandler):
+    """RotatingFileHandler that avoids WinError 32 on Windows.
+
+    The standard handler uses os.rename() which fails when another process
+    holds a handle on the log file.  This subclass copies the current log to
+    the backup slot and then truncates the original in-place, so the file
+    descriptor stays valid for all open handles.
+    """
+
+    def rotate(self, source: str, dest: str) -> None:
+        if os.path.exists(dest):
+            try:
+                os.remove(dest)
+            except OSError:
+                pass
+        try:
+            shutil.copy2(source, dest)
+            # Truncate the source file in-place so existing handles still work.
+            with open(source, "w", encoding="utf-8"):
+                pass
+        except OSError:
+            # Fall back to the default rename behaviour on non-Windows.
+            super().rotate(source, dest)
+
+
 logger = logging.getLogger("jarvis")
 
 if not logger.handlers:
@@ -26,11 +54,12 @@ if not logger.handlers:
 
     formatter = logging.Formatter("%(asctime)s | %(levelname)-7s | %(name)s | %(message)s")
 
-    file_handler = RotatingFileHandler(
+    file_handler = _WindowsSafeRotatingFileHandler(
         LOG_FILE,
         maxBytes=max(1, int(LOG_ROTATE_MAX_BYTES)),
         backupCount=max(0, int(LOG_ROTATE_BACKUPS)),
         encoding="utf-8",
+        delay=True,
     )
     file_handler.setLevel(file_level)
     file_handler.setFormatter(formatter)

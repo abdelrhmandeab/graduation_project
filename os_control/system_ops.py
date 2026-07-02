@@ -136,6 +136,18 @@ SYSTEM_COMMANDS = {
         "destructive": False,
         "requires_confirmation": False,
     },
+    "airplane_on": {
+        "template": "airplane_on",
+        "description": "Enable airplane mode (turn off all radios)",
+        "destructive": False,
+        "requires_confirmation": False,
+    },
+    "airplane_off": {
+        "template": "airplane_off",
+        "description": "Disable airplane mode (restore radios)",
+        "destructive": False,
+        "requires_confirmation": False,
+    },
     "notifications_on": {
         "template": "notifications_on",
         "description": "Enable desktop notifications",
@@ -145,6 +157,54 @@ SYSTEM_COMMANDS = {
     "notifications_off": {
         "template": "notifications_off",
         "description": "Disable desktop notifications",
+        "destructive": False,
+        "requires_confirmation": False,
+    },
+    "dnd_on": {
+        "template": "dnd_on",
+        "description": "Enable Do Not Disturb (Focus Assist)",
+        "destructive": False,
+        "requires_confirmation": False,
+    },
+    "dnd_off": {
+        "template": "dnd_off",
+        "description": "Disable Do Not Disturb (Focus Assist)",
+        "destructive": False,
+        "requires_confirmation": False,
+    },
+    "night_light_on": {
+        "template": "night_light_on",
+        "description": "Enable night light (warm screen)",
+        "destructive": False,
+        "requires_confirmation": False,
+    },
+    "night_light_off": {
+        "template": "night_light_off",
+        "description": "Disable night light",
+        "destructive": False,
+        "requires_confirmation": False,
+    },
+    "energy_saver_on": {
+        "template": "energy_saver_on",
+        "description": "Enable energy saver / battery saver",
+        "destructive": False,
+        "requires_confirmation": False,
+    },
+    "energy_saver_off": {
+        "template": "energy_saver_off",
+        "description": "Disable energy saver / battery saver",
+        "destructive": False,
+        "requires_confirmation": False,
+    },
+    "live_caption_on": {
+        "template": "live_caption_on",
+        "description": "Enable live captions",
+        "destructive": False,
+        "requires_confirmation": False,
+    },
+    "live_caption_off": {
+        "template": "live_caption_off",
+        "description": "Disable live captions",
         "destructive": False,
         "requires_confirmation": False,
     },
@@ -261,6 +321,12 @@ SYSTEM_COMMANDS = {
         "destructive": False,
         "requires_confirmation": False,
     },
+    "browser_close_named_tab": {
+        "template": "browser_close_named_tab",
+        "description": "Close a browser tab by title/name (focus then Ctrl+W)",
+        "destructive": False,
+        "requires_confirmation": False,
+    },
     "browser_back": {
         "template": "browser_back",
         "description": "Browser back",
@@ -282,6 +348,36 @@ SYSTEM_COMMANDS = {
     "browser_search_web": {
         "template": "browser_search_web",
         "description": "Search web query",
+        "destructive": False,
+        "requires_confirmation": False,
+    },
+    "clipboard_read": {
+        "template": "clipboard_read",
+        "description": "Read clipboard contents",
+        "destructive": False,
+        "requires_confirmation": False,
+    },
+    "clipboard_write": {
+        "template": "clipboard_write",
+        "description": "Write text to clipboard",
+        "destructive": False,
+        "requires_confirmation": False,
+    },
+    "clipboard_clear": {
+        "template": "clipboard_clear",
+        "description": "Clear the clipboard",
+        "destructive": False,
+        "requires_confirmation": False,
+    },
+    "screen_record_start": {
+        "template": "screen_record_start",
+        "description": "Start screen recording",
+        "destructive": False,
+        "requires_confirmation": False,
+    },
+    "screen_record_stop": {
+        "template": "screen_record_stop",
+        "description": "Stop screen recording",
         "destructive": False,
         "requires_confirmation": False,
     },
@@ -333,6 +429,41 @@ ALIASES = {
     "disable bluetooth": "bluetooth_off",
     "turn on bluetooth": "bluetooth_on",
     "enable bluetooth": "bluetooth_on",
+    # Mixed-language Bluetooth variants that STT commonly produces
+    "اقفل bluetooth": "bluetooth_off",
+    "اطفي bluetooth": "bluetooth_off",
+    "إطفئ bluetooth": "bluetooth_off",
+    "إيقاف bluetooth": "bluetooth_off",
+    "ايقاف bluetooth": "bluetooth_off",
+    "شغل bluetooth": "bluetooth_on",
+    "تشغيل bluetooth": "bluetooth_on",
+    "فعل bluetooth": "bluetooth_on",
+    "اقفل بلوتوث": "bluetooth_off",
+    "اطفي بلوتوث": "bluetooth_off",
+    "إطفئ بلوتوث": "bluetooth_off",
+    "إيقاف بلوتوث": "bluetooth_off",
+    "ايقاف بلوتوث": "bluetooth_off",
+    "شغل بلوتوث": "bluetooth_on",
+    "تشغيل بلوتوث": "bluetooth_on",
+    "فعل بلوتوث": "bluetooth_on",
+    # Mixed-language Wi-Fi variants
+    "اقفل wifi": "wifi_off",
+    "اطفي wifi": "wifi_off",
+    "إطفئ wifi": "wifi_off",
+    "إيقاف wifi": "wifi_off",
+    "ايقاف wifi": "wifi_off",
+    "شغل wifi": "wifi_on",
+    "تشغيل wifi": "wifi_on",
+    "فعل wifi": "wifi_on",
+    "airplane mode on": "airplane_on",
+    "airplane mode off": "airplane_off",
+    "flight mode on": "airplane_on",
+    "flight mode off": "airplane_off",
+    "enable airplane mode": "airplane_on",
+    "disable airplane mode": "airplane_off",
+    "turn on airplane mode": "airplane_on",
+    "turn off airplane mode": "airplane_off",
+    "turn notifications on": "notifications_on",
     "turn on notifications": "notifications_on",
     "enable notifications": "notifications_on",
     "notifications on": "notifications_on",
@@ -342,19 +473,59 @@ ALIASES = {
     "notifications off": "notifications_off",
     "mute notifications": "notifications_off",
     "silence notifications": "notifications_off",
-    "turn on do not disturb": "notifications_off",
-    "enable do not disturb": "notifications_off",
-    "do not disturb on": "notifications_off",
-    "dnd on": "notifications_off",
-    "focus assist on": "notifications_off",
-    "turn off do not disturb": "notifications_on",
-    "disable do not disturb": "notifications_on",
-    "do not disturb off": "notifications_on",
-    "dnd off": "notifications_on",
-    "focus assist off": "notifications_on",
+    # Do Not Disturb / Focus Assist (FIXED: was wrongly pointing to notifications)
+    "turn on do not disturb": "dnd_on",
+    "enable do not disturb": "dnd_on",
+    "do not disturb on": "dnd_on",
+    "dnd on": "dnd_on",
+    "focus assist on": "dnd_on",
+    "turn off do not disturb": "dnd_off",
+    "disable do not disturb": "dnd_off",
+    "do not disturb off": "dnd_off",
+    "dnd off": "dnd_off",
+    "focus assist off": "dnd_off",
+    # Night light
+    "turn on night light": "night_light_on",
+    "enable night light": "night_light_on",
+    "night light on": "night_light_on",
+    "turn off night light": "night_light_off",
+    "disable night light": "night_light_off",
+    "night light off": "night_light_off",
+    "warm screen": "night_light_on",
+    "cool screen": "night_light_off",
+    # Energy saver
+    "turn on energy saver": "energy_saver_on",
+    "enable energy saver": "energy_saver_on",
+    "energy saver on": "energy_saver_on",
+    "battery saver on": "energy_saver_on",
+    "turn on battery saver": "energy_saver_on",
+    "turn off energy saver": "energy_saver_off",
+    "disable energy saver": "energy_saver_off",
+    "energy saver off": "energy_saver_off",
+    "battery saver off": "energy_saver_off",
+    "turn off battery saver": "energy_saver_off",
+    # Live captions
+    "turn on live captions": "live_caption_on",
+    "enable live captions": "live_caption_on",
+    "live captions on": "live_caption_on",
+    "live caption on": "live_caption_on",
+    "turn off live captions": "live_caption_off",
+    "disable live captions": "live_caption_off",
+    "live captions off": "live_caption_off",
+    "live caption off": "live_caption_off",
     "take a screenshot": "screenshot",
     "capture the screen": "screenshot",
     "screenshot": "screenshot",
+    # Screen recording — English
+    "start recording": "screen_record_start",
+    "start screen recording": "screen_record_start",
+    "record screen": "screen_record_start",
+    "record my screen": "screen_record_start",
+    "begin recording": "screen_record_start",
+    "stop recording": "screen_record_stop",
+    "stop screen recording": "screen_record_stop",
+    "end recording": "screen_record_stop",
+    "finish recording": "screen_record_stop",
     "empty the trash": "empty_recycle_bin",
     "empty recycle bin": "empty_recycle_bin",
     "what is open right now": "list_processes",
@@ -413,17 +584,73 @@ ALIASES = {
     "\u0634\u063a\u0644 \u0627\u0644\u0648\u0627\u064a \u0641\u0627\u064a": "wifi_on",
     "\u0627\u0637\u0641\u064a \u0627\u0644\u0628\u0644\u0648\u062a\u0648\u062b": "bluetooth_off",
     "\u0634\u063a\u0644 \u0627\u0644\u0628\u0644\u0648\u062a\u0648\u062b": "bluetooth_on",
+    # Airplane mode \u2014 Arabic aliases
+    "\u0648\u0636\u0639 \u0627\u0644\u0637\u064a\u0627\u0631\u0627\u0646": "airplane_on",
+    "\u0634\u063a\u0644 \u0648\u0636\u0639 \u0627\u0644\u0637\u064a\u0627\u0631\u0627\u0646": "airplane_on",
+    "\u0637\u064a\u0627\u0631\u0627\u0646": "airplane_on",
+    "\u0645\u0648\u062f \u0637\u064a\u0627\u0631\u0627\u0646": "airplane_on",
+    "\u0641\u0644\u0627\u064a\u062a \u0645\u0648\u062f": "airplane_on",
+    "\u0627\u0644\u063a\u064a \u0648\u0636\u0639 \u0627\u0644\u0637\u064a\u0627\u0631\u0627\u0646": "airplane_off",
+    "\u0623\u0644\u063a\u064a \u0648\u0636\u0639 \u0627\u0644\u0637\u064a\u0627\u0631\u0627\u0646": "airplane_off",
+    "\u0627\u0644\u063a\u064a \u0648\u0636\u0639 \u0627\u0644\u0637\u064a\u0631\u0627\u0646": "airplane_off",
+    "\u0623\u0644\u063a\u064a \u0648\u0636\u0639 \u0627\u0644\u0637\u064a\u0631\u0627\u0646": "airplane_off",
+    "\u0625\u064a\u0642\u0641 \u0648\u0636\u0639 \u0627\u0644\u0637\u064a\u0631\u0627\u0646": "airplane_off",
+    "\u0625\u064a\u0642\u0641 \u0627\u0644\u0648\u0636\u0639 \u0627\u0644\u0637\u064a\u0631\u0627\u0646": "airplane_off",
+    "\u0627\u064a\u0642\u0641 \u0648\u0636\u0639 \u0627\u0644\u0637\u064a\u0631\u0627\u0646": "airplane_off",
+    "\u0648\u0642\u0641 \u0648\u0636\u0639 \u0627\u0644\u0637\u064a\u0631\u0627\u0646": "airplane_off",
+    "\u0627\u0648\u0642\u0641 \u0648\u0636\u0639 \u0627\u0644\u0637\u064a\u0631\u0627\u0646": "airplane_off",
+    "\u0627\u0642\u0641\u0644 \u0648\u0636\u0639 \u0627\u0644\u0637\u064a\u0627\u0631\u0627\u0646": "airplane_off",
+    "\u0627\u0637\u0641\u064a \u0645\u0648\u062f \u0627\u0644\u0637\u064a\u0627\u0631\u0627\u0646": "airplane_off",
+    # airplane on variants with \u0627\u0644\u0637\u064a\u0631\u0627\u0646 (without \u0627\u0646)
+    "\u0648\u0636\u0639 \u0627\u0644\u0637\u064a\u0631\u0627\u0646": "airplane_on",
+    "\u0634\u063a\u0644 \u0648\u0636\u0639 \u0627\u0644\u0637\u064a\u0631\u0627\u0646": "airplane_on",
+    "\u0641\u0639\u0644 \u0648\u0636\u0639 \u0627\u0644\u0637\u064a\u0631\u0627\u0646": "airplane_on",
+    "\u0645\u0648\u062f \u0637\u064a\u0631\u0627\u0646": "airplane_on",
+    "\u0641\u0644\u0627\u064a\u062a \u0645\u0648\u062f": "airplane_on",
+    # STT variant with tatweel/kashida: "\u0634\u063a\u0644 \u0627\u0644\u0640 Airplane mode"
+    "\u0634\u063a\u0644 \u0627\u0644 airplane mode": "airplane_on",
+    "\u0634\u063a\u0644 \u0627\u0644 airplane": "airplane_on",
+    "\u0634\u063a\u0644 \u0627\u0644 \u0637\u064a\u0631\u0627\u0646": "airplane_on",
     "\u0634\u063a\u0644 \u0627\u0644\u0627\u0634\u0639\u0627\u0631\u0627\u062a": "notifications_on",
     "\u0641\u0639\u0644 \u0627\u0644\u0627\u0634\u0639\u0627\u0631\u0627\u062a": "notifications_on",
     "\u0627\u0637\u0641\u064a \u0627\u0644\u0627\u0634\u0639\u0627\u0631\u0627\u062a": "notifications_off",
     "\u0627\u0642\u0641\u0644 \u0627\u0644\u0627\u0634\u0639\u0627\u0631\u0627\u062a": "notifications_off",
     "\u0627\u0643\u062a\u0645 \u0627\u0644\u0627\u0634\u0639\u0627\u0631\u0627\u062a": "notifications_off",
-    "\u0648\u0636\u0639 \u0639\u062f\u0645 \u0627\u0644\u0627\u0632\u0639\u0627\u062c": "notifications_off",
-    "\u0648\u0636\u0639 \u0639\u062f\u0645 \u0627\u0644\u0625\u0632\u0639\u0627\u062c": "notifications_off",
-    "\u0634\u063a\u0644 \u0648\u0636\u0639 \u0639\u062f\u0645 \u0627\u0644\u0627\u0632\u0639\u0627\u062c": "notifications_off",
-    "\u0634\u063a\u0644 \u0648\u0636\u0639 \u0639\u062f\u0645 \u0627\u0644\u0625\u0632\u0639\u0627\u062c": "notifications_off",
-    "\u0627\u0642\u0641\u0644 \u0648\u0636\u0639 \u0639\u062f\u0645 \u0627\u0644\u0627\u0632\u0639\u0627\u062c": "notifications_on",
-    "\u0627\u0642\u0641\u0644 \u0648\u0636\u0639 \u0639\u062f\u0645 \u0627\u0644\u0625\u0632\u0639\u0627\u062c": "notifications_on",
+    # DND Arabic aliases (FIXED: were wrongly pointing to notifications)
+    "\u0648\u0636\u0639 \u0639\u062f\u0645 \u0627\u0644\u0627\u0632\u0639\u0627\u062c": "dnd_on",
+    "\u0648\u0636\u0639 \u0639\u062f\u0645 \u0627\u0644\u0625\u0632\u0639\u0627\u062c": "dnd_on",
+    "\u0634\u063a\u0644 \u0648\u0636\u0639 \u0639\u062f\u0645 \u0627\u0644\u0627\u0632\u0639\u0627\u062c": "dnd_on",
+    "\u0634\u063a\u0644 \u0648\u0636\u0639 \u0639\u062f\u0645 \u0627\u0644\u0625\u0632\u0639\u0627\u062c": "dnd_on",
+    "\u0627\u0642\u0641\u0644 \u0648\u0636\u0639 \u0639\u062f\u0645 \u0627\u0644\u0627\u0632\u0639\u0627\u062c": "dnd_off",
+    "\u0627\u0642\u0641\u0644 \u0648\u0636\u0639 \u0639\u062f\u0645 \u0627\u0644\u0625\u0632\u0639\u0627\u062c": "dnd_off",
+    "\u0639\u062f\u0645 \u0627\u0644\u0625\u0632\u0639\u0627\u062c": "dnd_on",
+    "\u0639\u062f\u0645 \u0627\u0644\u0627\u0632\u0639\u0627\u062c": "dnd_on",
+    "\u0627\u0644\u063a\u064a \u0639\u062f\u0645 \u0627\u0644\u0625\u0632\u0639\u0627\u062c": "dnd_off",
+    "\u0627\u0644\u063a\u064a \u0639\u062f\u0645 \u0627\u0644\u0627\u0632\u0639\u0627\u062c": "dnd_off",
+    # Night light Arabic
+    "\u0627\u0644\u0625\u0636\u0627\u0621\u0629 \u0627\u0644\u0644\u064a\u0644\u064a\u0629": "night_light_on",
+    "\u0627\u0644\u0648\u0636\u0639 \u0627\u0644\u0644\u064a\u0644\u064a": "night_light_on",
+    "\u0634\u063a\u0644 \u0627\u0644\u0625\u0636\u0627\u0621\u0629 \u0627\u0644\u0644\u064a\u0644\u064a\u0629": "night_light_on",
+    "\u0634\u063a\u0644 \u0627\u0644\u0648\u0636\u0639 \u0627\u0644\u0644\u064a\u0644\u064a": "night_light_on",
+    "\u0627\u0637\u0641\u064a \u0627\u0644\u0625\u0636\u0627\u0621\u0629 \u0627\u0644\u0644\u064a\u0644\u064a\u0629": "night_light_off",
+    "\u0627\u0637\u0641\u064a \u0627\u0644\u0648\u0636\u0639 \u0627\u0644\u0644\u064a\u0644\u064a": "night_light_off",
+    "\u0646\u0627\u064a\u062a \u0644\u0627\u064a\u062a": "night_light_on",
+    "\u0627\u0637\u0641\u064a \u0646\u0627\u064a\u062a \u0644\u0627\u064a\u062a": "night_light_off",
+    # Energy saver Arabic
+    "\u062a\u0648\u0641\u064a\u0631 \u0627\u0644\u0637\u0627\u0642\u0629": "energy_saver_on",
+    "\u0648\u0636\u0639 \u062a\u0648\u0641\u064a\u0631 \u0627\u0644\u0637\u0627\u0642\u0629": "energy_saver_on",
+    "\u0634\u063a\u0644 \u062a\u0648\u0641\u064a\u0631 \u0627\u0644\u0637\u0627\u0642\u0629": "energy_saver_on",
+    "\u062a\u0648\u0641\u064a\u0631 \u0627\u0644\u0628\u0637\u0627\u0631\u064a\u0629": "energy_saver_on",
+    "\u0648\u0636\u0639 \u062a\u0648\u0641\u064a\u0631 \u0627\u0644\u0628\u0637\u0627\u0631\u064a\u0629": "energy_saver_on",
+    "\u0627\u0637\u0641\u064a \u062a\u0648\u0641\u064a\u0631 \u0627\u0644\u0637\u0627\u0642\u0629": "energy_saver_off",
+    "\u0627\u0644\u063a\u064a \u062a\u0648\u0641\u064a\u0631 \u0627\u0644\u0637\u0627\u0642\u0629": "energy_saver_off",
+    "\u0627\u0637\u0641\u064a \u062a\u0648\u0641\u064a\u0631 \u0627\u0644\u0628\u0637\u0627\u0631\u064a\u0629": "energy_saver_off",
+    # Live captions Arabic
+    "\u0627\u0644\u062a\u0631\u062c\u0645\u0629 \u0627\u0644\u062d\u064a\u0629": "live_caption_on",
+    "\u0627\u0644\u0644\u0627\u064a\u0641 \u0643\u0627\u0628\u0634\u0646": "live_caption_on",
+    "\u0634\u063a\u0644 \u0627\u0644\u062a\u0631\u062c\u0645\u0629 \u0627\u0644\u062d\u064a\u0629": "live_caption_on",
+    "\u0627\u0637\u0641\u064a \u0627\u0644\u062a\u0631\u062c\u0645\u0629 \u0627\u0644\u062d\u064a\u0629": "live_caption_off",
+    "\u0627\u0637\u0641\u064a \u0627\u0644\u0644\u0627\u064a\u0641 \u0643\u0627\u0628\u0634\u0646": "live_caption_off",
     "\u062e\u0630 \u0635\u0648\u0631\u0629 \u0644\u0644\u0634\u0627\u0634\u0629": "screenshot",
     "\u0635\u0648\u0631\u0629 \u0634\u0627\u0634\u0629": "screenshot",
     "\u0627\u0641\u0631\u063a \u0633\u0644\u0629 \u0627\u0644\u0645\u062d\u0630\u0648\u0641\u0627\u062a": "empty_recycle_bin",
@@ -530,11 +757,45 @@ ALIASES = {
     "\u0633\u0643\u0631\u064a\u0646 \u0634\u0648\u062a": "screenshot",
     "\u0635\u0648\u0631\u0629 \u0644\u0644\u0634\u0627\u0634\u0629": "screenshot",
     "\u0633\u0643\u0631\u064a\u0646\u0634\u0648\u062a": "screenshot",
+    # Screen recording \u2014 Arabic / Egyptian
+    "\u0627\u0628\u062f\u0623 \u0627\u0644\u062a\u0633\u062c\u064a\u0644": "screen_record_start",
+    "\u0633\u062c\u0651\u0644 \u0627\u0644\u0634\u0627\u0634\u0629": "screen_record_start",
+    "\u0633\u062c\u0644 \u0627\u0644\u0634\u0627\u0634\u0629": "screen_record_start",
+    "\u0627\u0628\u062f\u0623 \u062a\u0633\u062c\u064a\u0644 \u0627\u0644\u0634\u0627\u0634\u0629": "screen_record_start",
+    "\u0634\u063a\u0651\u0644 \u0627\u0644\u062a\u0633\u062c\u064a\u0644": "screen_record_start",
+    "\u0634\u063a\u0644 \u0627\u0644\u062a\u0633\u062c\u064a\u0644": "screen_record_start",
+    "\u0648\u0642\u0651\u0641 \u0627\u0644\u062a\u0633\u062c\u064a\u0644": "screen_record_stop",
+    "\u0648\u0642\u0641 \u0627\u0644\u062a\u0633\u062c\u064a\u0644": "screen_record_stop",
+    "\u0627\u0648\u0642\u0641 \u0627\u0644\u062a\u0633\u062c\u064a\u0644": "screen_record_stop",
+    "\u062e\u0644\u0651\u0635 \u0627\u0644\u062a\u0633\u062c\u064a\u0644": "screen_record_stop",
+    "\u062e\u0644\u0635 \u0627\u0644\u062a\u0633\u062c\u064a\u0644": "screen_record_stop",
     # Other
     "\u0641\u0636\u064a\u0644\u064a \u0633\u0644\u0629 \u0627\u0644\u0645\u062d\u0630\u0648\u0641\u0627\u062a": "empty_recycle_bin",
     "\u0641\u0636\u064a\u0644\u064a \u0627\u0644\u0632\u0628\u0627\u0644\u0647": "empty_recycle_bin",
     "\u062e\u0631\u0648\u062c": "logoff",
     "\u0627\u062e\u0631\u062c \u0645\u0646 \u0627\u0644\u062d\u0633\u0627\u0628": "logoff",
+    # Clipboard \u2014 English
+    "read clipboard": "clipboard_read",
+    "what's in my clipboard": "clipboard_read",
+    "show clipboard": "clipboard_read",
+    "clipboard read": "clipboard_read",
+    "paste content": "clipboard_read",
+    "write to clipboard": "clipboard_write",
+    "copy to clipboard": "clipboard_write",
+    "clipboard write": "clipboard_write",
+    "clear clipboard": "clipboard_clear",
+    "empty clipboard": "clipboard_clear",
+    "clipboard clear": "clipboard_clear",
+    # Clipboard \u2014 Arabic / Egyptian dialect
+    "\u0627\u0642\u0631\u0623 \u0627\u0644\u0643\u0644\u064a\u0628\u0628\u0648\u0631\u062f": "clipboard_read",
+    "\u0627\u0639\u0631\u0636 \u0627\u0644\u0643\u0644\u064a\u0628\u0628\u0648\u0631\u062f": "clipboard_read",
+    "\u0627\u064a\u0647 \u0641\u064a \u0627\u0644\u0643\u0644\u064a\u0628\u0628\u0648\u0631\u062f": "clipboard_read",
+    "\u0627\u064a\u0647 \u0641\u064a \u0627\u0644\u0643\u0644\u0628\u0648\u0631\u062f": "clipboard_read",
+    "\u0627\u0643\u062a\u0628 \u0641\u064a \u0627\u0644\u0643\u0644\u064a\u0628\u0628\u0648\u0631\u062f": "clipboard_write",
+    "\u0627\u0646\u0633\u062e \u0644\u0644\u0643\u0644\u064a\u0628\u0628\u0648\u0631\u062f": "clipboard_write",
+    "\u0627\u0646\u0633\u062e \u0641\u064a \u0627\u0644\u0643\u0644\u064a\u0628\u0628\u0648\u0631\u062f": "clipboard_write",
+    "\u0627\u0645\u0633\u062d \u0627\u0644\u0643\u0644\u064a\u0628\u0628\u0648\u0631\u062f": "clipboard_clear",
+    "\u0641\u0636\u064a\u0644\u064a \u0627\u0644\u0643\u0644\u064a\u0628\u0628\u0648\u0631\u062f": "clipboard_clear",
 }
 
 _RETRYABLE_NON_DESTRUCTIVE_ERRORS = ("timed out", "temporarily unavailable")
@@ -546,7 +807,7 @@ _PERMISSION_DENIED_ERROR_MARKERS = (
     "requested operation requires elevation",
     "not have sufficient privilege",
 )
-_NETWORK_RADIO_ACTIONS = {"wifi_on", "wifi_off", "bluetooth_on", "bluetooth_off"}
+_NETWORK_RADIO_ACTIONS = {"wifi_on", "wifi_off", "bluetooth_on", "bluetooth_off", "airplane_on", "airplane_off"}
 _URL_RE = re.compile(r"^(?:https?://|www\.)[^\s]+$", flags=re.IGNORECASE)
 _DURATION_UNIT_SECONDS = {
     "s": 1,
@@ -812,6 +1073,29 @@ def _normalize_system_command_args(action_key, command_args):
             return None, "Search query is required (for example: Python asyncio tutorial)."
         return {"search_query": query[:200]}, ""
 
+    if action_key == "clipboard_write":
+        text = str(
+            args.get("text")
+            or args.get("content")
+            or args.get("value")
+            or ""
+        )
+        if not text.strip():
+            return None, "Text to copy is required."
+        return {"text": text[:4000]}, ""
+
+    if action_key == "browser_close_named_tab":
+        query = str(
+            args.get("tab_query")
+            or args.get("tab_name")
+            or args.get("query")
+            or args.get("target")
+            or ""
+        ).strip().lower()
+        if not query:
+            return None, "Tab name is required (for example: YouTube)."
+        return {"tab_query": query[:120]}, ""
+
     return {}, ""
 
 
@@ -828,6 +1112,8 @@ def _template_env_overrides(action_key, normalized_args):
         return {"JARVIS_BROWSER_URL": str(normalized_args.get("url", ""))}
     if action_key == "browser_search_web":
         return {"JARVIS_BROWSER_QUERY": str(normalized_args.get("search_query", ""))}
+    if action_key == "browser_close_named_tab":
+        return {"JARVIS_TAB_QUERY": str(normalized_args.get("tab_query", ""))}
     return {}
 
 
@@ -846,6 +1132,8 @@ def _render_system_description(action_key, fallback_description, normalized_args
         return f"Open website {normalized_args.get('url')}"
     if action_key == "browser_search_web":
         return f"Search web for {normalized_args.get('search_query')}"
+    if action_key == "browser_close_named_tab":
+        return f"Close browser tab matching '{normalized_args.get('tab_query')}'"
     return fallback_description
 
 
@@ -861,6 +1149,180 @@ def _send_media_key(vk_code):
         return True
     except Exception:
         return False
+
+
+_VK_CONTROL = 0x11
+_VK_MENU = 0x12   # Alt
+_VK_SHIFT = 0x10
+_VK_LEFT = 0x25
+_VK_RIGHT = 0x27
+_VK_F4 = 0x73
+_VK_T = 0x54
+_VK_W = 0x57
+
+
+def _send_hotkey(*vk_codes):
+    """Press and release a sequence of VK codes as a chord (press all, release all reversed)."""
+    try:
+        user32 = ctypes.windll.user32
+        for vk in vk_codes:
+            user32.keybd_event(vk, 0, 0, 0)
+        for vk in reversed(vk_codes):
+            user32.keybd_event(vk, 0, _KEYEVENTF_KEYUP, 0)
+        return True
+    except Exception:
+        return False
+
+
+_BROWSER_PROCESS_NAMES = {"firefox", "chrome", "msedge", "opera", "brave", "vivaldi", "iexplore"}
+
+
+def _close_named_browser_tab(normalized_args, is_ar):
+    """Find a browser window whose title matches *tab_query*, focus it, then send Ctrl+W."""
+    import time as _time
+
+    tab_query = str((normalized_args or {}).get("tab_query", "")).strip().lower()
+    if not tab_query:
+        msg = "مش عارف أقفل إيه — قولي اسم التاب." if is_ar else "I don't know which tab to close — tell me the tab name."
+        return False, msg, {}
+
+    if not hasattr(ctypes, "windll"):
+        return False, "", {}
+
+    user32 = ctypes.windll.user32
+
+    EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_size_t, ctypes.c_size_t)
+
+    best_hwnd = [0]
+    best_score = [0.0]
+    best_title = [""]
+
+    def _enum_cb(hwnd, _):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length == 0 or length > 512:
+            return True
+        buf = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buf, length + 1)
+        title = buf.value.strip()
+        title_lower = title.lower()
+        if not title_lower:
+            return True
+        # Only consider windows from known browsers (check class name)
+        class_buf = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(hwnd, class_buf, 256)
+        cls = class_buf.value.lower()
+        # Firefox: "mozillawindowclass", Chrome/Edge: "chrome_widgetwin_1"
+        if not any(b in cls for b in ("mozilla", "chrome", "edge", "opera", "brave")):
+            return True
+        score = SequenceMatcher(a=tab_query, b=title_lower).ratio()
+        if tab_query in title_lower:
+            score = max(score, 0.75)
+        if score > best_score[0]:
+            best_score[0] = score
+            best_hwnd[0] = hwnd
+            best_title[0] = title
+        return True
+
+    user32.EnumWindows(EnumWindowsProc(_enum_cb), 0)
+
+    if best_score[0] >= 0.40 and best_hwnd[0]:
+        hwnd = best_hwnd[0]
+        if user32.IsIconic(hwnd):
+            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+        user32.SetForegroundWindow(hwnd)
+        _time.sleep(0.15)  # let the OS switch focus before sending keys
+        if _send_hotkey(_VK_CONTROL, _VK_W):
+            title = best_title[0]
+            msg = f"قفّلت تاب '{title}'." if is_ar else f"Closed tab: {title}"
+            return True, msg, {"method": "close_named_tab", "title": title, "score": best_score[0]}
+
+    msg = (f"مش لاقي تاب اسمه '{tab_query}'." if is_ar else f"No browser tab found matching '{tab_query}'.")
+    return False, msg, {"method": "close_named_tab", "query": tab_query, "score": best_score[0]}
+
+
+def _run_native_window_command(action_key, language=None):
+    """Native ctypes dispatch for window management and browser tab shortcuts."""
+    if not hasattr(ctypes, "windll"):
+        return False, "", {}
+
+    is_ar = _is_arabic_language(language)
+    user32 = ctypes.windll.user32
+
+    try:
+        if action_key == "window_maximize":
+            hwnd = user32.GetForegroundWindow()
+            if not hwnd:
+                return False, "", {}
+            user32.ShowWindow(hwnd, 3)  # SW_MAXIMIZE
+            msg = "كبّرت الشبابك." if is_ar else "Window maximized."
+            return True, msg, {"method": "native_window", "sw": "SW_MAXIMIZE"}
+
+        if action_key == "window_minimize":
+            hwnd = user32.GetForegroundWindow()
+            if not hwnd:
+                return False, "", {}
+            user32.ShowWindow(hwnd, 6)  # SW_MINIMIZE
+            msg = "صغّرت الشبابك." if is_ar else "Window minimized."
+            return True, msg, {"method": "native_window", "sw": "SW_MINIMIZE"}
+
+        if action_key == "window_snap_left":
+            if _send_hotkey(0x5B, _VK_LEFT):  # Win+Left
+                msg = "دفعت الشبابك ناحية اليسار." if is_ar else "Window snapped left."
+                return True, msg, {"method": "native_hotkey", "keys": "Win+Left"}
+            return False, "", {}
+
+        if action_key == "window_snap_right":
+            if _send_hotkey(0x5B, _VK_RIGHT):  # Win+Right
+                msg = "دفعت الشبابك ناحية اليمين." if is_ar else "Window snapped right."
+                return True, msg, {"method": "native_hotkey", "keys": "Win+Right"}
+            return False, "", {}
+
+        if action_key == "window_next":
+            if _send_hotkey(_VK_MENU, 0x09):  # Alt+Tab
+                msg = "غيّرت للشبابك التانية." if is_ar else "Switched to next window."
+                return True, msg, {"method": "native_hotkey", "keys": "Alt+Tab"}
+            return False, "", {}
+
+        if action_key == "window_close_active":
+            hwnd = user32.GetForegroundWindow()
+            if not hwnd:
+                return False, "", {}
+            WM_CLOSE = 0x0010
+            user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+            msg = "اتقفل الشبابك." if is_ar else "Window closed."
+            return True, msg, {"method": "native_window", "msg": "WM_CLOSE"}
+
+        if action_key == "browser_new_tab":
+            if _send_hotkey(_VK_CONTROL, _VK_T):  # Ctrl+T
+                msg = "فتحت تاب جديد." if is_ar else "Opened new browser tab."
+                return True, msg, {"method": "native_hotkey", "keys": "Ctrl+T"}
+            return False, "", {}
+
+        if action_key == "browser_close_tab":
+            if _send_hotkey(_VK_CONTROL, _VK_W):  # Ctrl+W
+                msg = "قفّلت التاب." if is_ar else "Closed browser tab."
+                return True, msg, {"method": "native_hotkey", "keys": "Ctrl+W"}
+            return False, "", {}
+
+        if action_key == "browser_back":
+            if _send_hotkey(_VK_MENU, _VK_LEFT):  # Alt+Left
+                msg = "رجعت للصفحة السابقة." if is_ar else "Went back."
+                return True, msg, {"method": "native_hotkey", "keys": "Alt+Left"}
+            return False, "", {}
+
+        if action_key == "browser_forward":
+            if _send_hotkey(_VK_MENU, _VK_RIGHT):  # Alt+Right
+                msg = "رحت للصفحة الجاية." if is_ar else "Went forward."
+                return True, msg, {"method": "native_hotkey", "keys": "Alt+Right"}
+            return False, "", {}
+
+    except Exception as exc:
+        logger.debug("_run_native_window_command(%s) failed: %s", action_key, exc)
+        return False, "", {}
+
+    return False, "", {}
 
 
 def _resize_active_window(amount_percent=10, language=None):
@@ -927,12 +1389,17 @@ def _run_native_media_command(action_key, language=None):
 
 
 def _render_system_success_message(action_key, normalized_args, output, language=None):
+    is_ar = _is_arabic_language(language)
     if action_key == "browser_search_web":
         query = str((normalized_args or {}).get("search_query") or "").strip()
+        if is_ar:
+            return f"بدور على: {query}" if query else "بفتح البحث."
         return f"Searching the web for: {query}" if query else "Searching the web."
 
     if action_key == "browser_open_url":
         url = str((normalized_args or {}).get("url") or "").strip()
+        if is_ar:
+            return f"بفتح الموقع: {url}" if url else "بفتح الموقع."
         return f"Opening website: {url}" if url else "Opening website."
 
     if action_key == "volume_set":
@@ -1011,6 +1478,19 @@ def _permission_denied_message(action_key):
     )
 
 
+# Transliteration map: Latin tech-words that STT produces in mixed phrases
+# mapped to the Arabic form used in ALIASES (so "\u0634\u063a\u0644 Bluetooth" \u2192 "\u0634\u063a\u0644 \u0627\u0644\u0628\u0644\u0648\u062a\u0648\u062b").
+_LATIN_TO_ARABIC_TECH = {
+    "bluetooth": "\u0627\u0644\u0628\u0644\u0648\u062a\u0648\u062b",
+    "wifi": "\u0627\u0644\u0648\u0627\u064a \u0641\u0627\u064a",
+    "wi-fi": "\u0627\u0644\u0648\u0627\u064a \u0641\u0627\u064a",
+    "wi fi": "\u0627\u0644\u0648\u0627\u064a \u0641\u0627\u064a",
+    "airplane": "\u0627\u0644\u0637\u064a\u0631\u0627\u0646",
+    "airplane mode": "\u0648\u0636\u0639 \u0627\u0644\u0637\u064a\u0631\u0627\u0646",
+    "flight mode": "\u0648\u0636\u0639 \u0627\u0644\u0637\u064a\u0631\u0627\u0646",
+}
+
+
 def normalize_system_action(text):
     phrase = text.lower().strip()
     if phrase.startswith("system "):
@@ -1020,6 +1500,25 @@ def normalize_system_action(text):
     phrase = phrase.replace("please ", "")
     phrase = phrase.replace("\u0645\u0646 \u0641\u0636\u0644\u0643 ", "")
     phrase = phrase.replace("\u0644\u0648 \u0633\u0645\u062d\u062a ", "")
+
+    # Strip tatweel (kashida, U+0640) and definite-article ligatures like "\u0627\u0644\u0640"
+    # that STT sometimes inserts in mixed phrases.
+    phrase = phrase.replace("\u0640", "")  # tatweel
+    phrase = re.sub(r"\u0627\u0644\s+", "\u0627\u0644", phrase)  # "\u0627\u0644 " with space \u2192 "\u0627\u0644"
+
+    # Transliterate mixed-language tech-words (only when Arabic script is present
+    # so we don't corrupt pure-English phrases like "turn off wifi").
+    # Sort longest-key-first so "airplane mode" matches before "airplane".
+    _has_arabic = bool(re.search(r"[\u0600-\u06FF]", phrase))
+    if _has_arabic:
+        for latin in sorted(_LATIN_TO_ARABIC_TECH, key=len, reverse=True):
+            phrase = re.sub(
+                r"\b" + re.escape(latin) + r"\b",
+                _LATIN_TO_ARABIC_TECH[latin],
+                phrase,
+                flags=re.IGNORECASE,
+            )
+
     phrase = re.sub(r"[^a-z0-9_\s\-\u0600-\u06FF]", " ", phrase)
     phrase = " ".join(phrase.split())
     if phrase in SYSTEM_COMMANDS:
@@ -1238,6 +1737,209 @@ def _run_native_system_command(action_key):
     return False, "", {}
 
 
+def _run_native_windows_toggle(action_key, language=None):
+    """Toggle Night Light, DND, Energy Saver, or Live Captions via windows_toggles.
+
+    Returns:
+        tuple[bool, str, dict] - (success, message, debug_info)
+    """
+    try:
+        from os_control.windows_toggles import (
+            set_night_light,
+            set_dnd,
+            set_energy_saver,
+            set_live_captions,
+        )
+    except ImportError:
+        return False, "", {}
+
+    is_ar = _is_arabic_language(language)
+
+    _TOGGLE_DISPATCH = {
+        "night_light_on":   (set_night_light,   True,  "شغّلت الإضاءة الليلية.",      "Night light on."),
+        "night_light_off":  (set_night_light,   False, "أطفيت الإضاءة الليلية.",      "Night light off."),
+        "dnd_on":           (set_dnd,           True,  "شغّلت وضع عدم الإزعاج.",      "Do not disturb on."),
+        "dnd_off":          (set_dnd,           False, "ألغيت وضع عدم الإزعاج.",      "Do not disturb off."),
+        "energy_saver_on":  (set_energy_saver,  True,  "شغّلت توفير الطاقة.",          "Energy saver on."),
+        "energy_saver_off": (set_energy_saver,  False, "ألغيت توفير الطاقة.",          "Energy saver off."),
+        "live_caption_on":  (set_live_captions, True,  "شغّلت الترجمة الحية.",         "Live captions on."),
+        "live_caption_off": (set_live_captions, False, "أطفيت الترجمة الحية.",         "Live captions off."),
+    }
+
+    if action_key not in _TOGGLE_DISPATCH:
+        return False, "", {}
+
+    fn, arg, msg_ar, msg_en = _TOGGLE_DISPATCH[action_key]
+    ok = fn(arg)
+    if ok:
+        msg = msg_ar if is_ar else msg_en
+        return True, msg, {"method": "windows_toggles", "action": action_key}
+    return False, "", {}
+
+
+def _run_native_radio_command(action_key, language=None):
+    """Toggle Wi-Fi, Bluetooth, or Airplane mode via radio_ops (WinRT-first).
+
+    Returns:
+        tuple[bool, str, dict] - (success, message, debug_info)
+    """
+    try:
+        from os_control.radio_ops import set_radio, set_airplane
+    except ImportError:
+        return False, "", {}
+
+    is_ar = _is_arabic_language(language)
+
+    if action_key == "wifi_on":
+        ok = set_radio("wifi", True)
+        if ok:
+            msg = "شغّلت الواي فاي." if is_ar else "Wi-Fi enabled."
+            return True, msg, {"method": "radio_ops", "radio": "wifi", "state": "on"}
+        return False, "", {}
+
+    if action_key == "wifi_off":
+        ok = set_radio("wifi", False)
+        if ok:
+            msg = "أطفيت الواي فاي." if is_ar else "Wi-Fi disabled."
+            return True, msg, {"method": "radio_ops", "radio": "wifi", "state": "off"}
+        return False, "", {}
+
+    if action_key == "bluetooth_on":
+        ok = set_radio("bluetooth", True)
+        if ok:
+            msg = "شغّلت البلوتوث." if is_ar else "Bluetooth enabled."
+            return True, msg, {"method": "radio_ops", "radio": "bluetooth", "state": "on"}
+        return False, "", {}
+
+    if action_key == "bluetooth_off":
+        ok = set_radio("bluetooth", False)
+        if ok:
+            msg = "أطفيت البلوتوث." if is_ar else "Bluetooth disabled."
+            return True, msg, {"method": "radio_ops", "radio": "bluetooth", "state": "off"}
+        return False, "", {}
+
+    if action_key == "airplane_on":
+        ok = set_airplane(True)
+        if ok:
+            msg = "شغّلت وضع الطياران." if is_ar else "Airplane mode on. All radios off."
+            return True, msg, {"method": "radio_ops", "radio": "all", "state": "airplane_on"}
+        return False, "", {}
+
+    if action_key == "airplane_off":
+        ok = set_airplane(False)
+        if ok:
+            msg = "ألغيت وضع الطياران." if is_ar else "Airplane mode off. Radios restored."
+            return True, msg, {"method": "radio_ops", "radio": "all", "state": "airplane_off"}
+        return False, "", {}
+
+    return False, "", {}
+
+
+def _run_native_clipboard_command(action_key, normalized_args, language=None):
+    try:
+        from os_control.clipboard_ops import clear_clipboard, read_clipboard, write_clipboard
+        from core.config import CLIPBOARD_READ_MAX_CHARS
+    except ImportError:
+        return False, "", {}
+
+    is_ar = _is_arabic_language(language)
+
+    if action_key == "clipboard_read":
+        content = read_clipboard()
+        if content and not content.startswith("Could not") and not content.startswith("Clipboard access"):
+            if len(content) > CLIPBOARD_READ_MAX_CHARS:
+                content = content[:CLIPBOARD_READ_MAX_CHARS] + "…"
+            return True, content, {"method": "clipboard_ops", "length": len(content)}
+        return True, content, {"method": "clipboard_ops"}
+
+    if action_key == "clipboard_write":
+        text = str((normalized_args or {}).get("text", ""))
+        result = write_clipboard(text)
+        msg = f"نسخت {len(text)} حرف للكليببورد." if is_ar else result
+        return True, msg, {"method": "clipboard_ops", "length": len(text)}
+
+    if action_key == "clipboard_clear":
+        result = clear_clipboard()
+        msg = "مسحت الكليببورد." if is_ar else result
+        return True, msg, {"method": "clipboard_ops"}
+
+    return False, "", {}
+
+
+def _run_native_capture_command(action_key, language=None):
+    """Dispatch screen_record_start / screen_record_stop via capture_ops."""
+    try:
+        from os_control.capture_ops import start_recording, stop_recording
+    except ImportError:
+        return False, "", {}
+
+    lang = language or "en"
+    if action_key == "screen_record_start":
+        ok, msg = start_recording(language=lang)
+        return ok, msg, {"method": "capture_ops", "action": action_key}
+    if action_key == "screen_record_stop":
+        ok, msg = stop_recording(language=lang)
+        return ok, msg, {"method": "capture_ops", "action": action_key}
+    return False, "", {}
+
+
+def _run_native_focus_window(normalized_args, language=None):
+    if not hasattr(ctypes, "windll"):
+        return False, "", {}
+
+    query = str((normalized_args or {}).get("window_query", "")).strip().lower()
+    if not query:
+        return False, "", {}
+
+    try:
+        user32 = ctypes.windll.user32
+        is_ar = _is_arabic_language(language)
+
+        EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_size_t, ctypes.c_size_t)
+
+        best_hwnd = [0]
+        best_score = [0.0]
+        best_title = [""]
+
+        def _enum_callback(hwnd, lparam):
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length == 0 or length > 512:
+                return True
+            buf = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buf, length + 1)
+            title = buf.value.lower().strip()
+            if not title:
+                return True
+            score = SequenceMatcher(a=query, b=title).ratio()
+            if query in title:
+                score = max(score, 0.75)
+            if score > best_score[0]:
+                best_score[0] = score
+                best_hwnd[0] = hwnd
+                best_title[0] = buf.value.strip()
+            return True
+
+        user32.EnumWindows(EnumWindowsProc(_enum_callback), 0)
+
+        if best_score[0] >= 0.55 and best_hwnd[0]:
+            hwnd = best_hwnd[0]
+            _SW_RESTORE = 9
+            if user32.IsIconic(hwnd):
+                user32.ShowWindow(hwnd, _SW_RESTORE)
+            user32.SetForegroundWindow(hwnd)
+            title = best_title[0]
+            msg = f"فتحت '{title}'." if is_ar else f"Focused window: {title}"
+            return True, msg, {"method": "enum_windows", "title": title, "score": best_score[0]}
+
+        msg = ("مش لاقي الشباك ده." if is_ar else f"No window found matching '{query}'.")
+        return False, msg, {"method": "enum_windows", "score": best_score[0]}
+    except Exception as exc:
+        logger.debug("focus_window native failed: %s", exc)
+        return False, "", {}
+
+
 def _run_native_brightness_command(action_key, normalized_args):
     """Try native brightness controls before falling back to PowerShell.
 
@@ -1317,6 +2019,18 @@ def execute_system_command_result(action_key, command_args=None, language=None):
             log_structured("system_command_executed", action=action_key, success=True, method=native_debug.get("method"))
             return success_result(native_msg, debug_info={"action": action_key, **native_debug})
 
+    if action_key == "screenshot":
+        try:
+            from os_control.capture_ops import take_screenshot
+            ss_ok, ss_msg = take_screenshot(language=language or "en")
+            if ss_ok:
+                log_action("system_command", "success", details={"action": action_key})
+                log_structured("system_command_executed", action=action_key, success=True, method="capture_ops")
+                return success_result(ss_msg, debug_info={"action": action_key, "method": "capture_ops"})
+        except Exception as _ss_exc:
+            logger.debug("capture_ops.take_screenshot failed: %s", _ss_exc)
+        # fall through to native_ops path below
+
     if action_key in {"lock", "sleep", "screenshot"}:
         native_ok, native_msg, native_debug = _run_native_system_command(action_key)
         if native_ok:
@@ -1334,12 +2048,93 @@ def execute_system_command_result(action_key, command_args=None, language=None):
         log_structured("system_command_executed", action=action_key, success=False, error="native_window_resize_failed")
         return failure_result("Could not resize the active window.", error_code="execution_failed", debug_info={"action": action_key})
 
+    _NATIVE_WINDOW_ACTIONS = {
+        "window_maximize", "window_minimize",
+        "window_snap_left", "window_snap_right",
+        "window_next", "window_close_active",
+        "browser_new_tab", "browser_close_tab",
+        "browser_back", "browser_forward",
+    }
+    if action_key in _NATIVE_WINDOW_ACTIONS:
+        native_ok, native_msg, native_debug = _run_native_window_command(action_key, language=language)
+        if native_ok:
+            log_action("system_command", "success", details={"action": action_key, **native_debug})
+            log_structured("system_command_executed", action=action_key, success=True, method=native_debug.get("method"))
+            return success_result(native_msg, debug_info={"action": action_key, **native_debug})
+        log_action("system_command", "failed", details={"action": action_key}, error="native_window_command_failed")
+        log_structured("system_command_executed", action=action_key, success=False, error="native_window_command_failed")
+        err_msg = "مش قدرت أنفّذ الأمر." if _is_arabic_language(language) else "Could not execute window/browser command."
+        return failure_result(err_msg, error_code="execution_failed", debug_info={"action": action_key})
+
+    if action_key == "browser_close_named_tab":
+        is_ar = _is_arabic_language(language)
+        native_ok, native_msg, native_debug = _close_named_browser_tab(normalized_args, is_ar)
+        if native_ok:
+            log_action("system_command", "success", details={"action": action_key, **native_debug})
+            log_structured("system_command_executed", action=action_key, success=True, method=native_debug.get("method"))
+            return success_result(native_msg, debug_info={"action": action_key, **native_debug})
+        log_action("system_command", "failed", details={"action": action_key, **native_debug})
+        log_structured("system_command_executed", action=action_key, success=False)
+        return failure_result(native_msg or "Could not find or close that browser tab.", error_code="not_found", debug_info={"action": action_key, **native_debug})
+
     if action_key in {"brightness_up", "brightness_down", "brightness_set"}:
         native_ok, native_msg, native_debug = _run_native_brightness_command(action_key, normalized_args)
         if native_ok:
             log_action("system_command", "success", details={"action": action_key, **native_debug})
             log_structured("system_command_executed", action=action_key, success=True, method=native_debug.get("method"))
             return success_result(native_msg, debug_info={"action": action_key, **native_debug})
+
+    _TOGGLE_ACTIONS = {
+        "night_light_on", "night_light_off",
+        "dnd_on", "dnd_off",
+        "energy_saver_on", "energy_saver_off",
+        "live_caption_on", "live_caption_off",
+    }
+    if action_key in _TOGGLE_ACTIONS:
+        native_ok, native_msg, native_debug = _run_native_windows_toggle(action_key, language=language)
+        if native_ok:
+            log_action("system_command", "success", details={"action": action_key, **native_debug})
+            log_structured("system_command_executed", action=action_key, success=True, method=native_debug.get("method"))
+            return success_result(native_msg, debug_info={"action": action_key, **native_debug})
+        # Toggles always have a URI fallback inside windows_toggles — if we got False
+        # back it means the URI was opened (user needs to confirm manually) or everything
+        # failed. Return a best-effort message rather than a hard failure.
+        msg = (
+            "فتحت صفحة الإعدادات — غيّر الإعداد يدويًا." if _is_arabic_language(language)
+            else "Settings page opened — please toggle manually."
+        )
+        return success_result(msg, debug_info={"action": action_key, "method": "settings_uri"})
+
+    if action_key in _NETWORK_RADIO_ACTIONS:
+        native_ok, native_msg, native_debug = _run_native_radio_command(action_key, language=language)
+        if native_ok:
+            log_action("system_command", "success", details={"action": action_key, **native_debug})
+            log_structured("system_command_executed", action=action_key, success=True, method=native_debug.get("method"))
+            return success_result(native_msg, debug_info={"action": action_key, **native_debug})
+
+    if action_key in {"clipboard_read", "clipboard_write", "clipboard_clear"}:
+        native_ok, native_msg, native_debug = _run_native_clipboard_command(action_key, normalized_args, language=language)
+        log_action("system_command", "success" if native_ok else "failed", details={"action": action_key, **native_debug})
+        log_structured("system_command_executed", action=action_key, success=native_ok, method=native_debug.get("method"))
+        if native_ok:
+            return success_result(native_msg, debug_info={"action": action_key, **native_debug})
+        return failure_result("Clipboard operation failed.", error_code="execution_failed", debug_info={"action": action_key})
+
+    if action_key == "focus_window":
+        native_ok, native_msg, native_debug = _run_native_focus_window(normalized_args, language=language)
+        log_action("system_command", "success" if native_ok else "failed", details={"action": action_key, **native_debug})
+        log_structured("system_command_executed", action=action_key, success=native_ok, method=native_debug.get("method"))
+        if native_ok:
+            return success_result(native_msg, debug_info={"action": action_key, **native_debug})
+        return failure_result(native_msg or "No matching window found.", error_code="not_found", debug_info={"action": action_key})
+
+    if action_key in {"screen_record_start", "screen_record_stop"}:
+        native_ok, native_msg, native_debug = _run_native_capture_command(action_key, language=language)
+        log_action("system_command", "success" if native_ok else "failed", details={"action": action_key, **native_debug})
+        log_structured("system_command_executed", action=action_key, success=native_ok, method=native_debug.get("method"))
+        if native_ok:
+            return success_result(native_msg, debug_info={"action": action_key, **native_debug})
+        return failure_result(native_msg or "Recording operation failed.", error_code="execution_failed", debug_info={"action": action_key})
 
     ok, error, output, attempts = _run_system_template_with_safe_retry(
         cfg["template"],

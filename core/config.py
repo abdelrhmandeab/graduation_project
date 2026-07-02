@@ -288,6 +288,7 @@ SEMANTIC_ROUTER_CONFIDENCE_THRESHOLD = _env_float("JARVIS_SEMANTIC_ROUTER_CONFID
 NLU_INTENT_CACHE_ENABLED = _env_bool("JARVIS_NLU_INTENT_CACHE_ENABLED", True)
 NLU_INTENT_CACHE_MAX_SIZE = _env_int("JARVIS_NLU_INTENT_CACHE_MAX_SIZE", 256)
 NLU_INTENT_CACHE_TTL_SECONDS = _env_int("JARVIS_NLU_INTENT_CACHE_TTL_SECONDS", 600)
+NLU_SCHEMA_ENABLED = _env_bool("JARVIS_NLU_SCHEMA_ENABLED", True)
 
 NLU_INTENT_THRESHOLD_BY_FAMILY = {
     "OS_APP_OPEN": _env_float("JARVIS_NLU_THRESHOLD_OS_APP_OPEN", 0.72),
@@ -332,20 +333,38 @@ APP_RESOLUTION_RUNNING_BONUS_OPEN = _env_float("JARVIS_APP_RUNNING_BONUS_OPEN", 
 APP_RESOLUTION_RUNNING_BONUS_CLOSE = _env_float("JARVIS_APP_RUNNING_BONUS_CLOSE", 0.16)
 APP_RESOLUTION_AVAILABLE_BONUS = _env_float("JARVIS_APP_AVAILABLE_BONUS", 0.03)
 
+# Phase 5 — app catalog startup scan + refresh-on-miss
+APP_SCAN_ON_STARTUP = _env_bool("JARVIS_APP_SCAN_ON_STARTUP", True)
+APP_CATALOG_TTL_HOURS = max(1, _env_int("JARVIS_APP_CATALOG_TTL_HOURS", 24))
+APP_WATCH_STARTMENU = _env_bool("JARVIS_APP_WATCH_STARTMENU", True)
+APP_REFRESH_ON_MISS = _env_bool("JARVIS_APP_REFRESH_ON_MISS", True)
+
+# Phase 6 — clipboard + controls
+CLIPBOARD_READ_MAX_CHARS = max(80, _env_int("JARVIS_CLIPBOARD_READ_MAX_CHARS", 280))
+
+# Email compose
+# When True, Jarvis asks for to/subject/body before opening the compose window.
+# When False (default), opens an empty compose window immediately.
+EMAIL_ASK_DETAILS = _env_bool("JARVIS_EMAIL_ASK_DETAILS", False)
+# Prefer Outlook when available; Gmail web is the fallback.
+EMAIL_PREFER_OUTLOOK = _env_bool("JARVIS_EMAIL_PREFER_OUTLOOK", True)
+
 # Speech / TTS
 TTS_ENABLED = True
 TTS_DEFAULT_BACKEND = _env("JARVIS_TTS_BACKEND", "hybrid")  # hybrid | edge_tts | auto | console
 TTS_QUALITY_MODE = _env("JARVIS_TTS_QUALITY_MODE", "natural")  # natural | standard
-TTS_EDGE_VOICE = _env("JARVIS_TTS_EDGE_VOICE", "en-US-AriaNeural")
-TTS_EDGE_RATE = _env("JARVIS_TTS_EDGE_RATE", "+0%")
-TTS_EDGE_ARABIC_VOICE = _env("JARVIS_TTS_EDGE_ARABIC_VOICE", "ar-EG-SalmaNeural")
-TTS_EDGE_ARABIC_VOICE_FALLBACKS = _env_list(
-    "JARVIS_TTS_EDGE_ARABIC_VOICE_FALLBACKS",
-    ("ar-EG-ShakirNeural", "ar-SA-HamedNeural"),
-)
-TTS_EDGE_ARABIC_RATE = _env("JARVIS_TTS_EDGE_ARABIC_RATE", "-4%")
-TTS_EDGE_ARABIC_PITCH = _env("JARVIS_TTS_EDGE_ARABIC_PITCH", "-8Hz")
-TTS_EDGE_ARABIC_VOLUME = _env("JARVIS_TTS_EDGE_ARABIC_VOLUME", "+4%")
+
+# Voice profile: one switch picks ElevenLabs + edge-tts pair together.
+# Built-in profiles: jarvis_male_classic | jarvis_female_warm | jarvis_male_calm | custom
+# All voice profile env keys (JARVIS_TTS_VOICE_PROFILE, JARVIS_TTS_ELEVENLABS_VOICE_ID,
+# JARVIS_TTS_EDGE_VOICE_EN, JARVIS_TTS_EDGE_VOICE_AR, etc.) are read from os.environ
+# by core/tts_voices.py — no Python symbols needed here.
+
+# Deprecated env keys (JARVIS_TTS_EDGE_VOICE, JARVIS_TTS_EDGE_ARABIC_VOICE,
+# JARVIS_TTS_EDGE_ARABIC_VOICE_FALLBACKS, JARVIS_TTS_ELEVENLABS_ARABIC_VOICE_ID,
+# JARVIS_TTS_EDGE_RATE, JARVIS_TTS_EDGE_ARABIC_RATE, JARVIS_TTS_EDGE_ARABIC_PITCH,
+# JARVIS_TTS_EDGE_ARABIC_VOLUME) are still read from os.environ by the alias
+# bridge in core/tts_voices.py.  They no longer have Python symbols here.
 TTS_EDGE_MIXED_SCRIPT_CHUNKING = _env_bool("JARVIS_TTS_EDGE_MIXED_SCRIPT_CHUNKING", True)
 TTS_EDGE_MIXED_SCRIPT_MAX_CHUNKS = max(2, _env_int("JARVIS_TTS_EDGE_MIXED_SCRIPT_MAX_CHUNKS", 6))
 TTS_EDGE_MIXED_SCRIPT_MAX_TEXT_LENGTH = max(80, _env_int("JARVIS_TTS_EDGE_MIXED_SCRIPT_MAX_TEXT_LENGTH", 220))
@@ -353,13 +372,32 @@ TTS_EDGE_MIXED_SCRIPT_MAX_TEXT_LENGTH = max(80, _env_int("JARVIS_TTS_EDGE_MIXED_
 # Short responses (shorter than this) will be synthesized in a single shot
 # to avoid unnecessary chunk boundaries and playback gaps.
 TTS_EDGE_MIXED_SCRIPT_MIN_TEXT_LENGTH = max(24, _env_int("JARVIS_TTS_EDGE_MIXED_SCRIPT_MIN_TEXT_LENGTH", 120))
+# Sentence-level streaming playback (Phase 2)
+TTS_SENTENCE_STREAMING_ENABLED = _env_bool("JARVIS_TTS_SENTENCE_STREAMING_ENABLED", True)
+TTS_SENTENCE_SYNTH_WORKERS = max(1, _env_int("JARVIS_TTS_SENTENCE_SYNTH_WORKERS", 2))
+TTS_SENTENCE_FIRST_FLUSH_MIN_CHARS = max(8, _env_int("JARVIS_TTS_SENTENCE_FIRST_FLUSH_MIN_CHARS", 18))
+TTS_SENTENCE_GAP_MS = max(0, _env_int("JARVIS_TTS_SENTENCE_GAP_MS", 120))
+TTS_PARAGRAPH_GAP_MS = max(0, _env_int("JARVIS_TTS_PARAGRAPH_GAP_MS", 300))
+
+# Prosody tuning (Phase 3)
+TTS_SSML_BREAKS_ENABLED = _env_bool("JARVIS_TTS_SSML_BREAKS_ENABLED", True)
+TTS_SSML_BREAK_AFTER_COMMA_MS = max(0, _env_int("JARVIS_TTS_SSML_BREAK_AFTER_COMMA_MS", 80))
+TTS_SSML_BREAK_AFTER_PERIOD_MS = max(0, _env_int("JARVIS_TTS_SSML_BREAK_AFTER_PERIOD_MS", 180))
+TTS_SSML_BREAK_AFTER_QUESTION_MS = max(0, _env_int("JARVIS_TTS_SSML_BREAK_AFTER_QUESTION_MS", 220))
+TTS_SSML_BREAK_AFTER_AR_SEMICOLON_MS = max(0, _env_int("JARVIS_TTS_SSML_BREAK_AFTER_AR_SEMICOLON_MS", 120))
+TTS_ELEVENLABS_MODEL_ID = _env("JARVIS_TTS_ELEVENLABS_MODEL_ID", "eleven_multilingual_v2").strip() or "eleven_multilingual_v2"
+
+# Prosody polisher (Phase 4)
+TTS_PROSODY_POLISHER_ENABLED = _env_bool("JARVIS_TTS_PROSODY_POLISHER_ENABLED", True)
+TTS_EGY_DISCOURSE_COMMA_ENABLED = _env_bool("JARVIS_TTS_EGY_DISCOURSE_COMMA_ENABLED", True)
+TTS_FORMAL_CONNECTOR_REWRITE_ENABLED = _env_bool("JARVIS_TTS_FORMAL_CONNECTOR_REWRITE_ENABLED", True)
+TTS_PUNCTUATION_DEDUP_ENABLED = _env_bool("JARVIS_TTS_PUNCTUATION_DEDUP_ENABLED", True)
+
+# Slim EGY rewriter (Phase 5)
+TTS_EGY_REWRITE_AGGRESSIVE = _env_bool("JARVIS_TTS_EGY_REWRITE_AGGRESSIVE", False)
+TTS_EGY_REWRITE_SKIP_THRESHOLD = max(1, _env_int("JARVIS_TTS_EGY_REWRITE_SKIP_THRESHOLD", 3))
+
 TTS_ELEVENLABS_ARABIC_ENABLED = _env_bool("JARVIS_TTS_ELEVENLABS_ARABIC_ENABLED", False)
-TTS_ELEVENLABS_ARABIC_VOICE_ID = _env("JARVIS_TTS_ELEVENLABS_ARABIC_VOICE_ID", "").strip()
-TTS_ELEVENLABS_ARABIC_MODEL_ID = _env("JARVIS_TTS_ELEVENLABS_ARABIC_MODEL_ID", "eleven_multilingual_v2").strip() or "eleven_multilingual_v2"
-# Arabic TTS backend: "edge" uses edge-tts ar-EG-SalmaNeural (default); "elevenlabs" uses ElevenLabs.
-TTS_ARABIC_BACKEND = str(_env("JARVIS_TTS_ARABIC_BACKEND", "edge")).strip().lower()
-if TTS_ARABIC_BACKEND not in {"edge", "elevenlabs"}:
-    TTS_ARABIC_BACKEND = "edge"
 TTS_ELEVENLABS_TIMEOUT_SECONDS = max(3.0, _env_float("JARVIS_TTS_ELEVENLABS_TIMEOUT_SECONDS", 15.0))
 TTS_PREWARM_ENABLED = _env_bool("JARVIS_TTS_PREWARM_ENABLED", True)
 STARTUP_PARSER_NLP_PREWARM_ENABLED = _env_bool("JARVIS_STARTUP_PARSER_NLP_PREWARM_ENABLED", True)
@@ -370,6 +408,19 @@ GREETING_ENABLED = _env_bool("JARVIS_GREETING_ENABLED", True)
 GREETING_LANGUAGE = _env("JARVIS_GREETING_LANGUAGE", "en").strip().lower()
 GREETING_TEXT_EN = _env("JARVIS_GREETING_TEXT_EN", "Jarvis is online and ready.")
 GREETING_TEXT_AR = _env("JARVIS_GREETING_TEXT_AR", "أهلاً بيك، جارفيس جاهز معاك.")
+GREETING_PRESPEAK_SETTLE_MS = max(0, _env_int("JARVIS_GREETING_PRESPEAK_SETTLE_MS", 150))
+GREETING_DEVICE_WARMUP = _env_bool("JARVIS_GREETING_DEVICE_WARMUP", True)
+LLM_PREWARM_BEFORE_GREETING = _env_bool("JARVIS_LLM_PREWARM_BEFORE_GREETING", True)
+IDENTITY_MODE = _env("JARVIS_IDENTITY_MODE", "pool").strip().lower()
+IDENTITY_AVOID_REPEAT = _env_bool("JARVIS_IDENTITY_AVOID_REPEAT", True)
+IDENTITY_LLM_TEMPERATURE = max(0.0, min(2.0, _env_float("JARVIS_IDENTITY_LLM_TEMPERATURE", 0.9)))
+NOTE_DIR = _env("JARVIS_NOTE_DIR", "Desktop").strip()
+NOTE_BASENAME = _env("JARVIS_NOTE_BASENAME", "note").strip() or "note"
+NOTE_PENDING_TIMEOUT_SECONDS = max(10, _env_int("JARVIS_NOTE_PENDING_TIMEOUT_SECONDS", 30))
+SCREEN_DESCRIBE_MODE = _env("JARVIS_SCREEN_DESCRIBE_MODE", "window").strip().lower()
+if SCREEN_DESCRIBE_MODE not in {"window", "vision"}:
+    SCREEN_DESCRIBE_MODE = "window"
+SCREEN_DESCRIBE_MAX_APPS = max(2, min(20, _env_int("JARVIS_SCREEN_DESCRIBE_MAX_APPS", 8)))
 TTS_ARABIC_SPOKEN_DIALECT = str(_env("JARVIS_TTS_ARABIC_SPOKEN_DIALECT", "egyptian")).strip().lower()
 if TTS_ARABIC_SPOKEN_DIALECT not in {"egyptian", "msa", "auto"}:
     TTS_ARABIC_SPOKEN_DIALECT = "egyptian"
@@ -597,10 +648,24 @@ DOCTOR_INCLUDE_MODEL_LOAD_CHECKS = False
 MAX_FILE_RESULTS = 5
 DEFAULT_WORKING_DIRECTORY = os.path.expanduser("~")
 DEFAULT_SEARCH_PATH = DEFAULT_WORKING_DIRECTORY
+
+# Phase 2 — path-smart file commands + human-spoken locations
+# Maximum number of search results spoken aloud before offering "want the rest?".
+FILE_SPOKEN_RESULTS_MAX = max(1, _env_int("JARVIS_FILE_SPOKEN_RESULTS_MAX", 3))
+# When True, responses speak friendly locations ("in Documents") not raw paths.
+FILE_HUMANIZE_PATHS = _env_bool("JARVIS_FILE_HUMANIZE_PATHS", True)
+# Comma-separated friendly folder names searched when no location is given.
+FILE_DEFAULT_SEARCH_ROOTS = _env_list(
+    "JARVIS_FILE_DEFAULT_SEARCH_ROOTS",
+    ("Documents", "Downloads", "Desktop"),
+)
 POWERSHELL_EXECUTABLE = _env("JARVIS_POWERSHELL_EXECUTABLE", "powershell")
 ACTION_LOG_FILE = _project_path("jarvis_actions.log")
 ROLLBACK_DIR_NAME = ".jarvis_rollback"
 CONFIRMATION_TIMEOUT_SECONDS = 45
+# Deprecated: the hex-token confirmation system is retired in favor of a
+# spoken PIN (see SENSITIVE_CONFIRM_MODE below). Kept only for any remaining
+# legacy references during the Phase 1->9 transition; Phase 9 removes them.
 CONFIRMATION_TOKEN_BYTES = max(4, min(32, _env_int("JARVIS_CONFIRMATION_TOKEN_BYTES", 8)))
 CONFIRMATION_TOKEN_MIN_HEX_LEN = max(
     6,
@@ -615,10 +680,56 @@ ALLOW_DESTRUCTIVE_SYSTEM_COMMANDS = False
 ALLOW_PERMANENT_DELETE = False
 STATE_DB_FILE = _project_path("jarvis_state.db")
 SECOND_FACTOR_REQUIRED_FOR_DESTRUCTIVE = True
-SECOND_FACTOR_PIN = _env("JARVIS_SECOND_FACTOR_PIN", "")
+SECOND_FACTOR_PIN = _env("JARVIS_SECOND_FACTOR_PIN", "1234")
 SECOND_FACTOR_PASSPHRASE = _env("JARVIS_SECOND_FACTOR_PASSPHRASE", "")
 SECOND_FACTOR_MAX_ATTEMPTS_PER_TOKEN = _env_int("JARVIS_SECOND_FACTOR_MAX_ATTEMPTS_PER_TOKEN", 3)
-SECOND_FACTOR_LOCKOUT_SECONDS = _env_int("JARVIS_SECOND_FACTOR_LOCKOUT_SECONDS", 90)
+SECOND_FACTOR_LOCKOUT_SECONDS = _env_int("JARVIS_SECOND_FACTOR_LOCKOUT_SECONDS", 120)
+
+# Spoken-PIN confirmation (Phase 1). Sensitive commands prompt for the PIN
+# instead of a hex token; the next utterance is treated as the PIN.
+SENSITIVE_CONFIRM_MODE = str(_env("JARVIS_SENSITIVE_CONFIRM_MODE", "pin")).strip().lower()
+if SENSITIVE_CONFIRM_MODE not in {"pin", "off"}:
+    SENSITIVE_CONFIRM_MODE = "pin"
+SENSITIVE_PIN_PENDING_TIMEOUT_SECONDS = max(
+    5, _env_int("JARVIS_SENSITIVE_PIN_PENDING_TIMEOUT_SECONDS", 30)
+)
+# Phase 3 — radio/connectivity toggles
+RADIO_BACKEND = str(_env("JARVIS_RADIO_BACKEND", "auto")).strip().lower()
+if RADIO_BACKEND not in {"auto", "winrt", "powershell"}:
+    RADIO_BACKEND = "auto"
+AIRPLANE_RESTORE_RADIOS = _env_bool("JARVIS_AIRPLANE_RESTORE_RADIOS", True)
+
+# Phase 4 — Windows system toggles
+TOGGLE_NIGHT_LIGHT_METHOD = str(_env("JARVIS_TOGGLE_NIGHT_LIGHT_METHOD", "registry")).strip().lower()
+if TOGGLE_NIGHT_LIGHT_METHOD not in {"registry", "uri", "auto"}:
+    TOGGLE_NIGHT_LIGHT_METHOD = "registry"
+TOGGLE_DND_METHOD = str(_env("JARVIS_TOGGLE_DND_METHOD", "registry")).strip().lower()
+if TOGGLE_DND_METHOD not in {"registry", "uri", "auto"}:
+    TOGGLE_DND_METHOD = "registry"
+TOGGLE_ENERGY_SAVER_METHOD = str(_env("JARVIS_TOGGLE_ENERGY_SAVER_METHOD", "powercfg")).strip().lower()
+if TOGGLE_ENERGY_SAVER_METHOD not in {"powercfg", "registry", "uri", "auto"}:
+    TOGGLE_ENERGY_SAVER_METHOD = "powercfg"
+LIVE_CAPTION_HOTKEY = str(_env("JARVIS_LIVE_CAPTION_HOTKEY", "win+ctrl+l")).strip().lower()
+
+# Phase 8 — timers
+TIMER_PERSISTENCE_ENABLED = _env_bool("JARVIS_TIMER_PERSISTENCE_ENABLED", True)
+TIMER_OPEN_CLOCK_APP = _env_bool("JARVIS_TIMER_OPEN_CLOCK_APP", False)
+TIMER_FIRE_USE_TTS = _env_bool("JARVIS_TIMER_FIRE_USE_TTS", True)
+
+# Phase 7 — screenshot + screen recording
+SCREENSHOT_DIR = _env(
+    "JARVIS_SCREENSHOT_DIR",
+    str(Path.home() / "Pictures" / "Jarvis" / "Screenshots"),
+)
+SCREENRECORD_DIR = _env(
+    "JARVIS_SCREENRECORD_DIR",
+    str(Path.home() / "Videos" / "Jarvis" / "Recordings"),
+)
+SCREENRECORD_BACKEND = str(_env("JARVIS_SCREENRECORD_BACKEND", "auto")).strip().lower()
+if SCREENRECORD_BACKEND not in {"auto", "ffmpeg", "gamebar"}:
+    SCREENRECORD_BACKEND = "auto"
+SCREENRECORD_FPS = max(5, min(60, _env_int("JARVIS_SCREENRECORD_FPS", 30)))
+
 SEARCH_INDEX_DB_FILE = _project_path("jarvis_index.db")
 SEARCH_INDEX_REFRESH_SECONDS = 60
 SEARCH_INDEX_MAX_RESULTS = 20

@@ -23,7 +23,9 @@ from core.voice_normalizer import normalize_search_block, normalize_weather_bloc
 from tools.weather import get_weather
 from tools.web_search import search_web
 
-_LIVE_DATA_TIMEOUT = 3.0  # Total timeout for all live data fetches
+_LIVE_DATA_TIMEOUT = 7.0  # Total timeout for all live data fetches; must exceed
+# web_search's own internal timeout (6.0s in tools/web_search.py) or this outer
+# timeout fires first and silently discards results that were about to land.
 
 # Per-tool framing tells the LLM which block is authoritative for which question.
 # Keep these short — Qwen-class models follow brief instructions better than long
@@ -60,8 +62,8 @@ def _detect_weather_intent(query_text: str) -> Optional[Dict]:
         # Extract city if mentioned (optional — use default if not found).
         # First try preposition-anchored forms ("weather in X", "الطقس في X").
         city_match = re.search(
-            r"(?:in|at|weather in|forecast for|في|ب)\s+([a-zA-Z؀-ۿ\s]+?)"
-            r"(?:\s+(?:today|tomorrow|weather|forecast)|$)",
+            r"\b(?:weather in|forecast for|in|at|في|ب)\s+([a-zA-Z؀-ۿ][a-zA-Z؀-ۿ\s]*?)"
+            r"(?:\s+(?:today|tomorrow|weather|forecast|right now|now|in\s+this\s+weather)\b|$|[?.!,])",
             query,
             re.IGNORECASE,
         )
@@ -70,8 +72,10 @@ def _detect_weather_intent(query_text: str) -> Optional[Dict]:
         else:
             # Egyptian Arabic often drops the preposition: "طقس الاسكندرية".
             # Look for an Arabic city token following the weather keyword.
+            # Skip a leading "في"/"ب" so "الطقس في الاسكندرية" doesn't capture
+            # the preposition itself as part of the city name.
             tail_match = re.search(
-                r"(?:طقس|الطقس|حرارة|الحرارة)\s+([؀-ۿ]+(?:\s+[؀-ۿ]+)?)",
+                r"(?:طقس|الطقس|حرارة|الحرارة)\s+(?:في\s+|ب)?([؀-ۿ]+(?:\s+[؀-ۿ]+)?)",
                 query,
             )
             city = tail_match.group(1).strip() if tail_match else WEATHER_DEFAULT_CITY
@@ -95,7 +99,12 @@ def _detect_web_search_intent(query_text: str) -> Optional[Dict]:
         "current", "today", "news",
         # Egyptian/MSA — include "ابحث" with the alef prefix and "اخبار"/"أخبار"
         # so news queries do not silently fall through to plain LLM mode.
-        "بحث", "ابحث", "أبحث", "ادور", "ادوّر", "ايه", "مين", "كيف",
+        # NOTE: bare "ايه"/"مين"/"كيف" ("what"/"who"/"how") were removed from
+        # here — they match nearly any casual Arabic sentence (including
+        # greetings like "عامل ايه") and caused searches to fire on chit-chat.
+        # The caller's force_search flag (see command_router._fetch_live_tool_context)
+        # is now the primary signal for when to search at all.
+        "بحث", "ابحث", "أبحث", "ادور", "ادوّر",
         "اخبار", "أخبار", "آخر",
     ]
 
@@ -182,7 +191,13 @@ def gather_live_data(user_query: str, parallel: bool = True, force_search: bool 
     language = "ar" if re.search(r"[\u0600-\u06FF]", query) else "en"
 
     weather_intent = _detect_weather_intent(query)
-    search_intent = _detect_web_search_intent(query)
+    # When weather already answers the query, skip the generic keyword-based
+    # search detector — it matches very broad terms like "today"/"now" that
+    # overlap heavily with weather phrasing, which previously caused every
+    # weather/clothing question to also fire a parallel web search that timed
+    # out 6s later having found nothing useful. The caller (command_router)
+    # still controls force_search explicitly when a real search is wanted.
+    search_intent = None if weather_intent else _detect_web_search_intent(query)
 
     if not weather_intent and not search_intent and force_search and WEB_SEARCH_ENABLED:
         search_intent = {"type": "search", "query": query}

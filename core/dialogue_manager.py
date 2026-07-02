@@ -130,6 +130,16 @@ class DialogueManager:
                 return max(0.0, self._confirming_timeout - (now - self._state_entered_at))
         return 0.0
 
+    def reset_window(self) -> None:
+        """Restart the countdown for the current timed state (FOLLOW_UP or CONFIRMING).
+
+        Call this after TTS finishes speaking a long clarification so the user
+        gets the full window to reply rather than a timer that started mid-speech.
+        """
+        with self._lock:
+            if self._state in {DialogueState.FOLLOW_UP, DialogueState.CONFIRMING}:
+                self._state_entered_at = time.monotonic()
+
     def transition(self, new_state: DialogueState, **kwargs) -> None:
         with self._lock:
             old = self._state

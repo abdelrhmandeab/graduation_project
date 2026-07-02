@@ -177,7 +177,11 @@ def _classify_language_by_script(text: str) -> str:
             latin_letters += 1
 
     if arabic_letters and latin_letters:
-        return "ar" if arabic_letters >= latin_letters else "en"
+        # Egyptian Arabic speakers commonly mix English words (app names,
+        # technical terms).  Even a small Arabic presence is a strong signal
+        # the user is speaking Arabic — bias toward Arabic unless Latin
+        # characters dominate by a wide margin (3:1 or more).
+        return "en" if latin_letters > arabic_letters * 3 else "ar"
     if arabic_letters:
         return "ar"
     if latin_letters:
@@ -258,6 +262,7 @@ def _pick_locked_language(
             else:
                 preview = ""
                 probe_path = ""
+                whisper_detected_lang = ""
                 try:
                     probe_path = _make_one_second_probe(audio_file)
                     model = probe_model if probe_model is not None else _get_partial_whisper_model()
@@ -268,6 +273,9 @@ def _pick_locked_language(
                         language=None,
                         task="transcribe",
                         condition_on_previous_text=False,
+                    )
+                    whisper_detected_lang = _normalize_detected_language(
+                        str(getattr(_info, "language", "") or "")
                     )
                     preview_parts: List[str] = []
                     for segment in segments:
@@ -285,8 +293,15 @@ def _pick_locked_language(
                             Path(probe_path).unlink(missing_ok=True)
                         except Exception:
                             pass
-                lang = _classify_language_by_script(preview)
-                source = "probe" if lang in {"ar", "en"} else "default"
+                script_lang = _classify_language_by_script(preview)
+                if script_lang in {"ar", "en"}:
+                    lang = script_lang
+                    source = "probe"
+                elif whisper_detected_lang in {"ar", "en"}:
+                    lang = whisper_detected_lang
+                    source = "probe"
+                else:
+                    source = "default"
         else:
             source = "partial"
 
@@ -314,6 +329,10 @@ def _is_weak_transcript_for_language(text: str, locked_lang: str) -> bool:
         return True
     if locked_lang == "en" and counts["latin"] < 3:
         return True
+    # Mixed Arabic+Latin text is legitimate code-switched speech — never
+    # reject it as "weak" due to the presence of the "other" script.
+    if counts["arabic"] > 0 and counts["latin"] > 0:
+        return False
     return any(
         not _is_allowed_transcript_char(ch, allow_arabic=(locked_lang == "ar"))
         for ch in normalized
@@ -331,6 +350,11 @@ def _validate_transcript_language(text: str, locked_lang: str) -> bool:
             return False
         if bool(STT_FORBID_OTHER_LANGUAGES) and counts["other_alpha"] / float(total_alpha) > 0.05:
             return False
+        # Accept genuinely mixed Arabic+Latin text (Egyptian Arabic code-switching).
+        # The dominant-script floor only applies when one script is nearly absent —
+        # mixed speech almost never reaches 70% one script, but it is still valid.
+        if counts["arabic"] > 0 and counts["latin"] > 0:
+            return True
         dominant = counts["arabic"] if locked_lang == "ar" else counts["latin"]
         return dominant / float(total_alpha) >= float(STT_VALIDATION_DOMINANT_SCRIPT_MIN)
 
@@ -728,6 +752,8 @@ def _transcribe_with_faster_whisper_model(
 
     parts: List[str] = []
     no_speech_probs: List[float] = []
+    avg_logprobs: List[float] = []
+    compression_ratios: List[float] = []
     beam_size = (
         int(STT_BEAM_SIZE_SHORT)
         if duration_seconds < float(STT_BEAM_SIZE_SHORT_THRESHOLD_SECONDS)
@@ -754,6 +780,12 @@ def _transcribe_with_faster_whisper_model(
             no_speech_prob = getattr(segment, "no_speech_prob", None)
             if isinstance(no_speech_prob, (float, int)):
                 no_speech_probs.append(float(no_speech_prob))
+            avg_logprob = getattr(segment, "avg_logprob", None)
+            if isinstance(avg_logprob, (float, int)):
+                avg_logprobs.append(float(avg_logprob))
+            compression_ratio = getattr(segment, "compression_ratio", None)
+            if isinstance(compression_ratio, (float, int)):
+                compression_ratios.append(float(compression_ratio))
             piece = str(getattr(segment, "text", "") or "").strip()
             if not piece:
                 continue
@@ -766,6 +798,35 @@ def _transcribe_with_faster_whisper_model(
             rms=rms,
             duration_seconds=duration_seconds,
         )
+
+    # Hallucination guard: forced-language decoding on mixed/ambiguous audio
+    # often produces fluent-sounding but fabricated text.  avg_logprob < -1.0
+    # (log-probability of the decode) and compression_ratio > 2.4 (repetitive
+    # output) are the standard Whisper heuristics for low-quality / hallucinated
+    # segments.  If ALL segments fail both checks simultaneously, the transcript
+    # is almost certainly confabulated — return empty rather than send it through.
+    if parts and avg_logprobs and compression_ratios:
+        mean_logprob = sum(avg_logprobs) / len(avg_logprobs)
+        mean_compression = sum(compression_ratios) / len(compression_ratios)
+        if mean_logprob < -1.0 and mean_compression > 2.4:
+            _STT_LOG.warning(
+                "Local Whisper hallucination guard triggered "
+                "(avg_logprob=%.3f compression_ratio=%.2f lang=%s); discarding transcript",
+                mean_logprob,
+                mean_compression,
+                whisper_language,
+            )
+            return {
+                "text": "",
+                "confidence": 0.0,
+                "language": whisper_language or "",
+                "backend": _LOCAL_BACKEND,
+                "method": _LOCAL_BACKEND,
+                "fallback_used": False,
+                "audio_duration": duration_seconds,
+                "audio_rms": rms,
+                "errors": ["stt:hallucination_guard"],
+            }
 
     text = " ".join(parts).strip()
     language = _normalize_detected_language(str(getattr(info, "language", "") or ""))
@@ -1042,6 +1103,10 @@ def _transcribe_with_hybrid_elevenlabs(
     cloud_allowed = duration_seconds <= float(STT_MAX_AUDIO_SECONDS)
     cloud_lang = locked_lang
     local_lang = locked_lang if locked_lang in {"ar", "en"} else "en"
+    # Best cloud result that had text but failed the strict dominance gate.
+    # Used as a last-resort fallback rather than discarding a correct mixed
+    # transcript in favour of forced-lock local Whisper (which hallucinates).
+    best_cloud_mixed: Optional[Dict[str, Any]] = None
 
     if bool(STT_ELEVENLABS_ENABLED) and cloud_allowed:
         try:
@@ -1068,6 +1133,14 @@ def _transcribe_with_hybrid_elevenlabs(
                 primary_text = str(primary.get("text", "") or "").strip()
                 if primary_text:
                     logger.warning("ElevenLabs STT returned invalid-language text; trying recovery")
+                    # Keep as mixed-language candidate in case local also fails.
+                    counts = _language_counts(primary_text)
+                    if counts["arabic"] > 0 and counts["latin"] > 0:
+                        primary["backend"] = _HYBRID_BACKEND
+                        primary["method"] = _ELEVENLABS_METHOD
+                        primary["validation_ok"] = True
+                        primary["language"] = cloud_lang
+                        best_cloud_mixed = primary
                 else:
                     logger.debug("ElevenLabs STT returned empty transcript; skipping opposite-language cloud retry")
                 if bool(STT_RETRY_OPPOSITE_LANGUAGE) and primary_text and not is_shutdown_requested():
@@ -1088,6 +1161,16 @@ def _transcribe_with_hybrid_elevenlabs(
                         retry_validated["retry_used"] = True
                         return retry_validated
                     errors.append("elevenlabs:retry_invalid_language")
+                    # Also check retry as a mixed-language candidate.
+                    retry_text = str(retry.get("text", "") or "").strip()
+                    if retry_text and best_cloud_mixed is None:
+                        retry_counts = _language_counts(retry_text)
+                        if retry_counts["arabic"] > 0 and retry_counts["latin"] > 0:
+                            retry["backend"] = _HYBRID_BACKEND
+                            retry["method"] = _ELEVENLABS_METHOD
+                            retry["validation_ok"] = True
+                            retry["language"] = retry_lang
+                            best_cloud_mixed = retry
         except Exception as exc:
             errors.append(f"elevenlabs:{exc}")
             if "quota_exceeded" in str(exc) or "http 401" in str(exc).lower():
@@ -1153,6 +1236,20 @@ def _transcribe_with_hybrid_elevenlabs(
             retry_validated["errors"] = errors
             return retry_validated
         errors.append("local:retry_invalid_language")
+
+    # All local paths failed. If the cloud returned a mixed-language transcript
+    # that only failed the strict dominance gate, use it — it is almost certainly
+    # more accurate than any forced-lock local Whisper output on mixed audio.
+    if best_cloud_mixed is not None:
+        logger.info(
+            "All strict-validation paths failed; using best cloud mixed-language candidate "
+            "(len=%d lang=%s)",
+            len(str(best_cloud_mixed.get("text", "") or "")),
+            best_cloud_mixed.get("language", "?"),
+        )
+        best_cloud_mixed["fallback_used"] = True
+        best_cloud_mixed["errors"] = errors
+        return best_cloud_mixed
 
     return _invalid_language_result(
         backend=_HYBRID_BACKEND,

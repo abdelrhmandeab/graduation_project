@@ -880,7 +880,10 @@ class LatencyTracker:
         "intent_detection": 0.02,
         "action_execution": 0.1,
         "llm_first_token": 1.5,
-        "tts_first_word": 0.3,
+        "tts_rewrite": 0.03,
+        "tts_synth": 0.8,
+        "tts_first_word": 1.0,
+        "tts_playback": 10.0,
         "e2e_command": 1.5,
         "e2e_llm_query": 4.0,
     }

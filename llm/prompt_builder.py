@@ -76,29 +76,52 @@ def _filter_template_lines(lines):
 # Few-shot examples for small models (1.7B–4B): minimal set (2-3 examples)
 # Keeps the prompt lean while steering toward Egyptian Arabic and concise English.
 # ---------------------------------------------------------------------------
-_FEW_SHOT_EXAMPLES_MINIMAL = """\
-USER: افتحلي كروم
-ASSISTANT: تمام، بفتح جوجل كروم دلوقتي.
+_FEW_SHOT_EXAMPLES_MINIMAL_EN = """\
+USER: how can I become a better computer engineer?
+ASSISTANT: Start with fundamentals: programming, operating systems, networking, and databases. Then build small real projects every month, read other people's code, and ask for feedback.
 
 USER: what is machine learning?
-ASSISTANT: Machine learning teaches computers to learn from data rather than writing explicit rules."""
+ASSISTANT: Machine learning is teaching computers to spot patterns from examples, instead of hand-writing every rule."""
+
+_FEW_SHOT_EXAMPLES_MINIMAL_AR = """\
+USER: عايز أكون مهندس كمبيوتر شاطر، أعمل إيه؟
+ASSISTANT: ركز على الأساسيات الأول — برمجة وداتا ستركتشر وشبكات. بعد كده ابني مشاريع صغيرة حقيقية كل شهر وخلي حد أحسن منك يراجع شغلك.
+
+USER: مصر هتقابل مين في الدور الثاني من كأس العالم؟
+ASSISTANT: معلوماتي محدودة بتاريخ معين ومش عندي نتايج لحظية دلوقتي. دور على Google أو beIN Sports عشان تعرف آخر الأخبار.
+
+USER: اشرحلي يعني إيه تعلم آلي
+ASSISTANT: ببساطة، الكمبيوتر بيتعلم من أمثلة كتير بدل ما تكتبله كل قاعدة بإيدك. زي فلتر السبام — بيتعلم من إيميلات قديمة إيه اللي سبام وإيه لأ."""
 
 # ---------------------------------------------------------------------------
 # Few-shot examples for large models (8B+): comprehensive set (4+ examples)
 # Provides richer context for higher-capacity models.
 # ---------------------------------------------------------------------------
-_FEW_SHOT_EXAMPLES_FULL = """\
-USER: الجو عامل ازاي؟
-ASSISTANT: مش معايا بيانات طقس دلوقتي، بس لو في القاهرة الأيام دي الجو حر — البس خفيف واشرب مية كتير.
+_FEW_SHOT_EXAMPLES_FULL_EN = """\
+USER: how can I become a successful computer engineer?
+ASSISTANT: Build strong fundamentals first: coding, data structures, operating systems, networking, and databases. Then pick a track, ship projects, read good code, and practice explaining your decisions clearly.
 
-USER: افتحلي كروم
-ASSISTANT: تمام، بفتح جوجل كروم دلوقتي.
+USER: what's the weather in Cairo?
+ASSISTANT: If live weather data is available, use it directly. If not, say you don't have live weather right now and give a useful general suggestion.
 
-USER: what is machine learning?
-ASSISTANT: Machine learning is when computers learn patterns from data instead of being explicitly programmed. Think of it like teaching by example rather than writing rules.
+USER: explain machine learning simply
+ASSISTANT: Machine learning is when software learns patterns from examples. A spam filter, for example, learns from old emails instead of relying only on hand-written rules."""
 
-USER: احكيلي عن الأهرامات
-ASSISTANT: الأهرامات اتبنت من حوالي 4500 سنة في الجيزة. أكبرهم هرم خوفو — ارتفاعه 146 متر وكان أطول مبنى في العالم لمدة 3800 سنة."""
+_FEW_SHOT_EXAMPLES_FULL_AR = """\
+USER: عايز أكون مهندس كمبيوتر ناجح، أعمل إيه؟
+ASSISTANT: ابدأ بالأساسيات — برمجة وداتا ستركتشر وشبكات. بعد كده اختار مسار يعجبك وابني فيه مشاريع حقيقية، واقرأ كود ناس شاطرة عشان تتعلم منهم.
+
+USER: الجو عامل إزاي في القاهرة؟
+ASSISTANT: لو معايا بيانات طقس هقولهالك مباشرة. لو مش معايا دلوقتي، البس خفيف واشرب مية كتير لأن الجو حر الأيام دي.
+
+USER: مصر هتقابل مين في الدور الثاني من كأس العالم؟
+ASSISTANT: مش عندي بيانات نتايج لحظية — معلوماتي محدودة بتاريخ معين. دور على beIN Sports أو Google عشان تعرف آخر أخبار البطولة.
+
+USER: إيه التخصصات الموجودة في هندسة الكمبيوتر؟
+ASSISTANT: التخصصات الشائعة في هندسة الكمبيوتر: برمجيات (software engineering)، شبكات ونظم موزعة، ذكاء اصطناعي وتعلم آلي، أمن معلومات، نظم مدمجة (embedded systems)، وعلم البيانات. اختار اللي بيشدك حسب اهتمامك.
+
+USER: اشرحلي التعلم الآلي ببساطة
+ASSISTANT: ببساطة، البرنامج بيتعلم من أمثلة كتير بدل ما تكتبله كل قاعدة بإيدك. زي فلتر السبام — بيشوف إيميلات قديمة ويتعلم يفرق بين العادي والسبام."""
 
 _PROMPT_MEMORY_CONTEXT_MAX_CHARS = 600
 
@@ -214,8 +237,12 @@ def _split_fewshot_examples(examples: str) -> list[str]:
     return [block for block in blocks if block]
 
 
-def _fewshot_examples_for_tier(tier: str) -> str:
-    source = _FEW_SHOT_EXAMPLES_MINIMAL if _get_model_tier(tier) in ("minimal", "low") else _FEW_SHOT_EXAMPLES_FULL
+def _fewshot_examples_for_tier(tier: str, response_language: str = "en") -> str:
+    lang = _normalize_response_language(response_language)
+    if _get_model_tier(tier) in ("minimal", "low"):
+        source = _FEW_SHOT_EXAMPLES_MINIMAL_AR if lang == "ar" else _FEW_SHOT_EXAMPLES_MINIMAL_EN
+    else:
+        source = _FEW_SHOT_EXAMPLES_FULL_AR if lang == "ar" else _FEW_SHOT_EXAMPLES_FULL_EN
     return "\n\n".join(_split_fewshot_examples(source)[: _fewshot_limit_for_tier(tier)])
 
 
@@ -247,6 +274,28 @@ def get_prompt_tier() -> str:
     return get_runtime_model_tier(default="medium")
 
 
+def _answer_quality_contract(response_language: str) -> list[str]:
+    if _normalize_response_language(response_language) == "ar":
+        return [
+            "مهمتك: افهم طلب المستخدم وجاوب عليه هو بالظبط.",
+            "اكتب بالعربية بالحروف العربية دايماً. ممنوع تكتب عربي بحروف إنجليزي (romanized) زي 'marhaba' أو 'ahlan'.",
+            "جاوب بالعامية المصرية زي ما الناس بتتكلم في الشارع. ممنوع فصحى أو أسلوب رسمي.",
+            "لو السؤال عن حاجة بتتغير زي نتايج ماتشات أو أخبار أو أسعار، قول بوضوح 'أنا مش متأكد' أو 'معلوماتي لحد [سنة]، ممكن اتغير' — ممنوع تخترع معلومات.",
+            "لو السؤال محتاج بيانات لحظية (طقس، أخبار، نتايج)، استخدم البيانات اللي موجودة في الـ CONTEXT أو قول إنك مش عندك بيانات دلوقتي.",
+            "لو في كلمة غلط من الصوت، فهمها من السياق.",
+            "ممنوع تكرر السؤال أو تقول كلام عام فاضي. خليك مباشر ومفيد.",
+        ]
+    return [
+        "Task: answer the user's exact request, not a nearby topic.",
+        "Always write in the same script as the question. Never romanize Arabic (e.g. never write 'marhaba' — write 'مرحبا').",
+        "For advice or explanation questions, give practical concrete steps; do not refuse harmless requests.",
+        "If the question is about live or changing data (scores, news, prices), clearly say 'I'm not sure' or 'my data goes up to [year], this may have changed' — never fabricate facts.",
+        "If speech-to-text looks slightly wrong, infer the likely meaning from context and ask one clarification only if the meaning is impossible.",
+        "Do not repeat the user's question. Do not give generic filler like 'share your goal' when the goal is already present.",
+        "Sound like a helpful human: direct, specific, natural, no fluff.",
+    ]
+
+
 def _build_system_block(response_language, include_few_shot=True, tier="medium"):
     """Build the system prompt block for the given tier.
 
@@ -263,25 +312,6 @@ def _build_system_block(response_language, include_few_shot=True, tier="medium")
         else ""
     )
 
-    # --- Template path ---
-    if include_few_shot:
-        template = _load_prompt_template(inferred_tier)
-        if template is not None:
-            try:
-                rendered = template.format(
-                    ar_rule=ar_rule,
-                ).strip()
-            except (KeyError, ValueError):
-                rendered = None
-            if rendered:
-                rendered = _cap_template_examples(rendered, inferred_tier)
-                lines = _filter_template_lines([ln for ln in rendered.splitlines() if ln.strip()])
-                if persona_block:
-                    lines = [persona_block] + lines
-                if language_pin:
-                    lines = [language_pin] + lines
-                return ["SYSTEM:"] + lines
-
     # --- Inline fallback ---
     sections = [
         "SYSTEM:",
@@ -290,13 +320,13 @@ def _build_system_block(response_language, include_few_shot=True, tier="medium")
         sections.append(language_pin)
     if persona_block:
         sections.append(persona_block)
-    sections.append("Keep the wording natural for the user.")
+    sections.extend(_answer_quality_contract(response_language))
     if ar_rule:
         sections.append(ar_rule)
     if include_few_shot:
         sections.append("")
         sections.append("Examples:")
-        sections.append(_fewshot_examples_for_tier(inferred_tier))
+        sections.append(_fewshot_examples_for_tier(inferred_tier, response_language))
     return sections
 
 
@@ -418,9 +448,16 @@ def build_tool_augmented_prompt(user_text, tool_context, response_language="en",
     # system block lean so weather/news queries spend fewer tokens on prompt setup.
     sections = _build_system_block(response_language, include_few_shot=False, tier=tier)
     live_data_rule = (
-        "بيانات جاهزة للصوت. استخدمها كحقائق ورد بنفس لغة المستخدم:"
+        "نتايج بحث ممكن تفيدك. لو بتجاوب على سؤال حقيقي/معلومة محتاجة تحديث "
+        "(زي نتيجة ماتش، سعر، خبر، تاريخ، شخص)، استخدم النتايج دي كحقائق. "
+        "لو مش مرتبطة بالسؤال (زي نصيحة أو رأي أو كلام عادي)، تجاهلها تماماً "
+        "وجاوب من فهمك العادي من غير ما تذكرها:"
         if response_language == "ar"
-        else "Voice-ready live data. Use it as factual context and answer in the user's language:"
+        else "Search results that may help. If the user is asking a factual or "
+        "time-sensitive question (scores, prices, news, history, people), use "
+        "these results as facts. If they are not relevant to the question "
+        "(e.g. advice, opinions, casual talk), ignore them completely and "
+        "answer from your own understanding without mentioning them:"
     )
     sections.extend([
         "",

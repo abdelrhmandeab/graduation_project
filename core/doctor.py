@@ -322,6 +322,40 @@ def collect_diagnostics(*, include_model_load_checks=False):
                 }
             )
 
+    try:
+        from core.metrics import latency_tracker
+        from audio.tts import _elevenlabs_tts_on_cooldown
+
+        latency_report = latency_tracker.report()
+        tts_first_word_p95 = float(
+            (latency_report.get("tts_first_word") or {}).get("p95_ms") or 0.0
+        )
+        tts_playback_stats = latency_report.get("tts_playback") or {}
+        tts_playback_count = int(tts_playback_stats.get("count") or 0)
+        el_cooldown = _elevenlabs_tts_on_cooldown()
+        tts_ok = bool(tts_first_word_p95 <= 1500.0 and not el_cooldown)
+        checks.append(
+            {
+                "name": "tts_health",
+                "ok": tts_ok,
+                "details": (
+                    f"first_word_p95_ms={tts_first_word_p95:.1f} "
+                    f"playback_count={tts_playback_count} "
+                    f"elevenlabs_cooldown={el_cooldown}"
+                ),
+                "required": False,
+            }
+        )
+    except Exception as exc:
+        checks.append(
+            {
+                "name": "tts_health",
+                "ok": True,
+                "details": f"tts_health probe skipped: {exc}",
+                "required": False,
+            }
+        )
+
     vram_ok, vram_details = _probe_vram_status()
     checks.append(
         {

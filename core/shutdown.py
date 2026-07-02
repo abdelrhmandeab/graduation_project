@@ -59,11 +59,21 @@ def setup_shutdown():
         _ = sig, frame
         if _shutdown_event.is_set():
             return
-        logger.info("Graceful shutdown initiated")
+        # Set the event first so the main loop can detect shutdown.
         _shutdown_event.set()
-        perform_shutdown_cleanup()
-        print("\nJarvis shutting down safely.")
+        # Defer all logging and cleanup to a thread — signal handlers must not
+        # call non-reentrant functions like RotatingFileHandler (Python bug
+        # CPython issue #84619 / "reentrant call inside BufferedWriter").
+        t = threading.Thread(target=_deferred_shutdown, daemon=True)
+        t.start()
 
     signal.signal(signal.SIGINT, handle_exit)
     signal.signal(signal.SIGTERM, handle_exit)
     return _shutdown_event
+
+
+def _deferred_shutdown():
+    """Run from a fresh thread so logging calls are safe (non-reentrant)."""
+    logger.info("Graceful shutdown initiated")
+    perform_shutdown_cleanup()
+    print("\nJarvis shutting down safely.")
