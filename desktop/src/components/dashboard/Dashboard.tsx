@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import type { UICommand, FeatureFlags } from '../../protocol';
 import { backToOverlay, closeApp } from '../../lib/app';
+import { GradientBackground } from '../GradientBackground';
 import { PromptInput } from '../overlay/PromptInput';
 import { useJarvisStore, type AvatarDirection, type UiLanguage } from '../../stores/jarvisStore';
 import { Chip, FloatingPanel, PanelLabel } from '../ui/Chip';
@@ -123,8 +124,15 @@ export function Dashboard({ send }: DashboardProps) {
   };
 
   return (
-    <div className="frameless-scroll h-screen overflow-y-auto bg-black/45 px-4 py-6 text-white backdrop-blur-sm sm:px-6 lg:px-8">
-      <FloatingPanel className="mx-auto grid w-full max-w-5xl gap-5 bg-black/70 p-4 text-sm shadow-black/55 sm:p-5">
+    <div className="frameless-scroll relative h-screen overflow-y-auto px-4 py-6 text-white sm:px-6 lg:px-8">
+      {/* animated gradient background (pink / blue / amber) over a light base */}
+      <div aria-hidden="true" className="pointer-events-none fixed inset-0 z-0 bg-[#2a2f45]">
+        <GradientBackground
+          containerClassName="h-full w-full"
+          gradientColors={['rgb(255, 100, 150)', 'rgb(100, 150, 255)', 'rgb(255, 200, 100)']}
+        />
+      </div>
+      <FloatingPanel className="relative z-10 mx-auto grid w-full max-w-5xl gap-5 bg-black/55 p-4 text-sm shadow-black/55 sm:p-5">
         {/* Frameless window: this header doubles as the drag handle. */}
         <header
           data-tauri-drag-region
