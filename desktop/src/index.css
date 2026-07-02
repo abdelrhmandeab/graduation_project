@@ -8,3 +8,21 @@ body,
      Dashboard and views paint their own opaque surfaces. */
   background: transparent;
 }
+
+/* Thin, subtle scrollbar for frameless windows so the OS scrollbar doesn't
+   read as a gray "sidebar" against the dark glass. */
+.frameless-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
+.frameless-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.frameless-scroll::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.16);
+  border-radius: 9999px;
+}
+.frameless-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
