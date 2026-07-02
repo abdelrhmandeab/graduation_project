@@ -4,7 +4,7 @@ import { backToOverlay, closeApp } from '../../lib/app';
 import { GradientBackground } from '../GradientBackground';
 import { PromptInput } from '../overlay/PromptInput';
 import { useJarvisStore, type AvatarDirection, type UiLanguage } from '../../stores/jarvisStore';
-import { Chip, FloatingPanel, PanelLabel } from '../ui/Chip';
+import { Chip, PanelLabel } from '../ui/Chip';
 import { Select, type SelectOption } from './Select';
 import { Toggle } from './Toggle';
 
@@ -125,14 +125,18 @@ export function Dashboard({ send }: DashboardProps) {
 
   return (
     <div className="frameless-scroll relative h-screen overflow-y-auto px-4 py-6 text-white sm:px-6 lg:px-8">
-      {/* animated gradient background (pink / blue / amber) over a light base */}
-      <div aria-hidden="true" className="pointer-events-none fixed inset-0 z-0 bg-[#2a2f45]">
-        <GradientBackground
-          containerClassName="h-full w-full"
-          gradientColors={['rgb(255, 100, 150)', 'rgb(100, 150, 255)', 'rgb(255, 200, 100)']}
-        />
+      {/* translucent frosted gradient background (pink / blue / amber) — no opaque
+          frame, lets the desktop show through lightly */}
+      <div aria-hidden="true" className="pointer-events-none fixed inset-0 z-0">
+        <div className="absolute inset-0 bg-white/5 backdrop-blur-2xl" />
+        <div className="absolute inset-0 opacity-60">
+          <GradientBackground
+            containerClassName="h-full w-full"
+            gradientColors={['rgb(255, 100, 150)', 'rgb(100, 150, 255)', 'rgb(255, 200, 100)']}
+          />
+        </div>
       </div>
-      <FloatingPanel className="relative z-10 mx-auto grid w-full max-w-5xl gap-5 bg-black/55 p-4 text-sm shadow-black/55 sm:p-5">
+      <div className="relative z-10 mx-auto grid w-full max-w-5xl gap-5 p-4 text-sm sm:p-5">
         {/* Frameless window: this header doubles as the drag handle. */}
         <header
           data-tauri-drag-region
@@ -254,7 +258,7 @@ export function Dashboard({ send }: DashboardProps) {
             </dl>
           </Section>
         </div>
-      </FloatingPanel>
+      </div>
     </div>
   );
 }
