@@ -63,11 +63,15 @@ export function Overlay({ send }: OverlayProps) {
             stays visible even when the input bar is hidden */}
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute inset-x-8 bottom-1 -z-10 h-28 rounded-[999px]"
+          className="pointer-events-none absolute inset-x-0 bottom-0 -z-10 h-40"
           style={{
             backgroundColor: stateColor,
-            opacity: 0.34,
-            filter: 'blur(64px)',
+            opacity: 0.4,
+            filter: 'blur(48px)',
+            // radial mask so the glow fades softly to transparent at every edge
+            // instead of getting clipped square by the window's overflow.
+            WebkitMaskImage: 'radial-gradient(72% 85% at 50% 100%, #000 0%, transparent 72%)',
+            maskImage: 'radial-gradient(72% 85% at 50% 100%, #000 0%, transparent 72%)',
             transition: 'background-color 0.4s ease',
           }}
         />
