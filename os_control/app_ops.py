@@ -1,9 +1,12 @@
 import re
 import shutil
+import threading
 import time
 from difflib import SequenceMatcher
 
 from core.config import (
+    APP_CATALOG_TTL_HOURS,
+    APP_REFRESH_ON_MISS,
     APP_RESOLUTION_AVAILABLE_BONUS,
     APP_RESOLUTION_RECENT_BONUS_SECONDS,
     APP_RESOLUTION_RUNNING_BONUS_CLOSE,
@@ -19,9 +22,11 @@ from os_control.action_log import log_action
 from os_control.adapter_result import confirmation_result, failure_result, success_result, to_legacy_pair
 from os_control.confirmation import confirmation_manager
 from os_control.policy import policy_engine
-from os_control.app_scanner import scan_installed_apps
+from os_control.app_scanner import get_catalog_age_seconds, scan_installed_apps
 from os_control.powershell_bridge import run_template
 from os_control.risk_policy import risk_tier_for_app_operation
+
+_REFRESH_LOCK = threading.Lock()
 
 
 _APP_CATALOG = {
@@ -258,6 +263,47 @@ _APP_CATALOG = {
             "\u062f\u064a\u0633\u0643\u0648\u0631\u062f",
         ],
     },
+    # Brand aliases for apps whose catalog name differs from what users say
+    "claude.exe": {
+        "canonical_name": "Claude",
+        "aliases": ["claude", "claude ai", "anthropic claude", "\u0643\u0644\u0648\u062f"],
+    },
+    "cursor.exe": {
+        "canonical_name": "Cursor",
+        "aliases": ["cursor", "cursor editor", "\u0643\u064a\u0631\u0633\u0648\u0631"],
+    },
+    "obsidian.exe": {
+        "canonical_name": "Obsidian",
+        "aliases": ["obsidian", "obsidian notes", "\u0623\u0648\u0628\u0633\u064a\u062f\u064a\u0627\u0646"],
+    },
+    "notion.exe": {
+        "canonical_name": "Notion",
+        "aliases": ["notion", "notion app", "\u0646\u0648\u0634\u0646"],
+    },
+    "slack.exe": {
+        "canonical_name": "Slack",
+        "aliases": ["slack", "slack app", "\u0633\u0644\u0627\u0643"],
+    },
+    "zoom.exe": {
+        "canonical_name": "Zoom",
+        "aliases": ["zoom", "zoom meeting", "\u0632\u0648\u0645"],
+    },
+    "teams.exe": {
+        "canonical_name": "Microsoft Teams",
+        "aliases": ["teams", "microsoft teams", "ms teams", "\u062a\u064a\u0645\u0632"],
+    },
+    "postman.exe": {
+        "canonical_name": "Postman",
+        "aliases": ["postman", "api client", "\u0628\u0648\u0633\u062a\u0645\u0627\u0646"],
+    },
+    "figma.exe": {
+        "canonical_name": "Figma",
+        "aliases": ["figma", "design tool", "\u0641\u064a\u062c\u0645\u0627"],
+    },
+    "gimp.exe": {
+        "canonical_name": "GIMP",
+        "aliases": ["gimp", "image editor", "\u062c\u064a\u0645\u0628"],
+    },
 }
 
 _BASE_APP_CATALOG = dict(_APP_CATALOG)
@@ -272,6 +318,20 @@ def _apply_app_catalog(app_catalog):
         for executable, payload in _APP_CATALOG.items()
     }
     KNOWN_APPS = _build_known_apps_alias_map()
+
+
+def refresh_app_catalog(force: bool = True) -> int:
+    """Rescan installed apps and apply the result. Returns catalog size. Thread-safe."""
+    with _REFRESH_LOCK:
+        try:
+            catalog = scan_installed_apps(_BASE_APP_CATALOG, force=force)
+            _apply_app_catalog(catalog)
+            count = len(catalog)
+            logger.info("app catalog refreshed: %d entries (force=%s)", count, force)
+            return count
+        except Exception as exc:
+            logger.warning("app catalog refresh failed: %s", exc)
+            return len(_APP_CATALOG)
 
 
 def _normalize_alias(text):
@@ -316,6 +376,18 @@ _PROCESS_NAME_OVERRIDES = {
     "start chrome": "chrome.exe",
     "start microsoft-edge:": "msedge.exe",
     "ms-settings:": "SystemSettings.exe",
+    # UWP apps: scanner names them <short>.uwp but the real process is different
+    "spotifymusic.uwp": "Spotify.exe",
+    "spotify.uwp": "Spotify.exe",
+    "whatsappdesktop.uwp": "WhatsApp.exe",
+    "whatsapp.uwp": "WhatsApp.exe",
+    "microsoftteams.uwp": "ms-teams.exe",
+    "msteams.uwp": "ms-teams.exe",
+    "windowsterminal.uwp": "WindowsTerminal.exe",
+    "microsoftnotepad.uwp": "Notepad.exe",
+    "notepad.uwp": "Notepad.exe",
+    "clipchamp.uwp": "Clipchamp.exe",
+    "microsoftclipchamp.uwp": "Clipchamp.exe",
 }
 _PROCESS_SNAPSHOT_TTL_SECONDS = 8.0
 _PROCESS_SNAPSHOT_CACHE = {"captured_at": 0.0, "names": set()}
@@ -369,7 +441,20 @@ def _to_process_name(target):
     base = raw.replace("/", "\\").split("\\")[-1]
     if not base:
         return ""
-    if not base.lower().endswith(".exe"):
+    base_lower = base.lower()
+    # UWP apps from the scanner are named "<short>.uwp" but don't have a matching
+    # process. Try to find the real running process by matching the short name.
+    if base_lower.endswith(".uwp"):
+        short = base_lower[:-4]  # strip ".uwp"
+        running = _running_process_names_snapshot()
+        # Prefer an exact prefix match (e.g. "spotify" → "spotify.exe")
+        for proc in sorted(running):
+            proc_base = proc.rstrip(".exe").rstrip(".EXE").lower() if proc.lower().endswith(".exe") else proc.lower()
+            if proc_base == short or proc_base.startswith(short):
+                return proc  # already lowercase with .exe from psutil
+        # No match found — return a best-guess so the error message is meaningful
+        return f"{short}.exe"
+    if not base_lower.endswith(".exe"):
         return f"{base}.exe"
     return base
 
@@ -514,31 +599,74 @@ def resolve_app_candidates(app_name, limit=5, operation="open"):
     return candidates[: max(1, int(limit))]
 
 
+# These words are Windows folder names / generic nouns — they must never fuzzy-match
+# an app unless the query IS an exact catalog alias (e.g. "downloads" is a folder, not an app).
+_FOLDER_WORDS_BLOCKLIST = {
+    "download", "downloads", "documents", "desktop", "pictures", "videos", "music",
+    "folder", "directory", "drive", "disk", "partition", "files", "file",
+    "تنزيلات", "مستندات", "صور", "فيديوهات", "موسيقى", "سطح المكتب",
+}
+
+
 def resolve_app_request(app_name, operation="open"):
     query = _normalize_alias(app_name)
-    candidates = resolve_app_candidates(query, limit=5, operation=operation)
     if not query:
         return {"status": "none", "query": query, "candidates": []}
 
-    if query in KNOWN_APPS:
-        return {"status": "exact", "query": query, "candidates": candidates}
-
-    if not candidates:
+    # Block generic folder/noun words from resolving as apps — even if the scanner
+    # accidentally aliased something to one of these words (e.g. "desktop" → Telegram).
+    # These words should route to OS_FILE_NAVIGATION instead.
+    if query in _FOLDER_WORDS_BLOCKLIST:
         return {"status": "none", "query": query, "candidates": []}
 
-    top = candidates[0]
-    second = candidates[1] if len(candidates) > 1 else None
-    second_score = float(second["score"]) if second else 0.0
-    delta = float(top["score"]) - second_score
+    # Single-token queries get a lower similarity floor (brand names like "claude",
+    # "figma", "notion" are short and won't score above 0.74 against longer catalog
+    # names without this adjustment).
+    is_single_token = len(query.split()) == 1
 
-    if float(top["score"]) >= 0.90 and delta >= 0.08:
-        return {"status": "high_confidence", "query": query, "candidates": [top]}
+    def _resolve(q):
+        if q in KNOWN_APPS:
+            cands = resolve_app_candidates(q, limit=5, operation=operation)
+            return {"status": "exact", "query": q, "candidates": cands}
 
-    if len(candidates) > 1 and float(top["score"]) >= 0.62 and delta < 0.14:
-        return {"status": "ambiguous", "query": query, "candidates": candidates[:3]}
+        cands = resolve_app_candidates(q, limit=5, operation=operation)
+        if not cands:
+            return None
 
-    if float(top["score"]) >= 0.74:
-        return {"status": "likely", "query": query, "candidates": [top]}
+        top = cands[0]
+        second = cands[1] if len(cands) > 1 else None
+        second_score = float(second["score"]) if second else 0.0
+        delta = float(top["score"]) - second_score
+
+        high_floor = 0.82 if is_single_token else 0.90
+        likely_floor = 0.62 if is_single_token else 0.74
+
+        if float(top["score"]) >= high_floor and delta >= 0.08:
+            return {"status": "high_confidence", "query": q, "candidates": [top]}
+
+        if len(cands) > 1 and float(top["score"]) >= 0.62 and delta < 0.14:
+            return {"status": "ambiguous", "query": q, "candidates": cands[:3]}
+
+        if float(top["score"]) >= likely_floor:
+            return {"status": "likely", "query": q, "candidates": [top]}
+
+        return None
+
+    result = _resolve(query)
+    if result is not None:
+        return result
+
+    # Refresh-on-miss: if the catalog might be stale, rescan once and retry.
+    if APP_REFRESH_ON_MISS:
+        ttl_seconds = float(APP_CATALOG_TTL_HOURS) * 3600
+        age = get_catalog_age_seconds()
+        if age > ttl_seconds:
+            logger.info("app_ops: catalog stale (age=%.0fs), refreshing for query=%r", age, query)
+            refresh_app_catalog(force=True)
+            result = _resolve(query)
+            if result is not None:
+                result["refresh_used"] = True
+                return result
 
     return {"status": "none", "query": query, "candidates": []}
 
@@ -561,7 +689,40 @@ def _run_open_template(target):
     return False, last_error, attempts
 
 
+def _close_explorer_windows():
+    """Close open File Explorer windows without killing the shell process."""
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        WM_CLOSE = 0x0010
+        EXPLORER_CLASS = "CabinetWClass"
+
+        closed = [0]
+
+        EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_size_t, ctypes.c_size_t)
+
+        def _cb(hwnd, _):
+            buf = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(hwnd, buf, 256)
+            if buf.value == EXPLORER_CLASS:
+                user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+                closed[0] += 1
+            return True
+
+        user32.EnumWindows(EnumWindowsProc(_cb), 0)
+        if closed[0]:
+            return True, "", 1
+        return False, "No open File Explorer windows found.", 1
+    except Exception as exc:
+        return False, str(exc), 1
+
+
 def _run_close_template(process_name):
+    # explorer.exe is the Windows shell — killing it crashes the desktop.
+    # Instead, close only the open File Explorer folder windows via WM_CLOSE.
+    if process_name.lower() in ("explorer.exe", "explorer"):
+        return _close_explorer_windows()
+
     attempts = 0
     last_error = ""
     while attempts < 2:

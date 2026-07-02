@@ -1,10 +1,18 @@
 import os
 import re
+import hashlib
 import threading
 import time
 from collections import OrderedDict
 
-from core.command_parser import ParsedCommand, parse_command, parse_duration_from_text
+from core.command_parser import (
+    ParsedCommand,
+    parse_command,
+    parse_duration_from_text,
+    try_parse_pin_confirm,
+    extract_pin_from_text,
+    _looks_like_explanatory_llm_query,
+)
 from core.config import (
     CLARIFICATION_CORRECTION_WINDOW_SECONDS,
     CODE_SWITCH_CONTINUITY_ENABLED,
@@ -24,11 +32,16 @@ from core.config import (
     FOLLOWUP_REFERENCE_MAX_AGE_SECONDS,
     FOLLOWUP_REFERENCE_MIN_CONFIDENCE,
     LLM_APPEND_SOURCE_CITATIONS,
+    LLM_DEFAULT_LANGUAGE,
     LLM_LIGHTWEIGHT_NUM_CTX,
     LLM_RESPONSE_CACHE_ENABLED,
+    LLM_RESPONSE_CACHE_KEY_INCLUDES_PERSONA,
     LLM_RESPONSE_CACHE_MAX_QUERY_WORDS,
     LLM_RESPONSE_CACHE_MAX_SIZE,
+    LLM_RESPONSE_CACHE_TTL_FACTUAL_SECONDS,
+    LLM_RESPONSE_CACHE_TTL_OPINION_SECONDS,
     LLM_RESPONSE_CACHE_TTL_SECONDS,
+    STT_LANGUAGE_HINT,
     NLU_ENTITY_EXTRACTION_ENABLED,
     RESPONSE_SHAPER_ENABLED,
     NLU_PARSER_FASTPATH_CONFIDENCE_FLOOR,
@@ -38,14 +51,17 @@ from core.config import (
     NLU_INTENT_THRESHOLD_BY_FAMILY,
     SEMANTIC_ROUTER_ENABLED,
     SEMANTIC_ROUTER_CONFIDENCE_THRESHOLD,
-    LIVE_DATA_FORCE_QUESTIONS,
     WEB_SEARCH_ENABLED,
+    WEATHER_DEFAULT_CITY,
     PERSONA_LENGTH_TARGET_ENABLED,
     PERSONA_RESPONSE_MAX_WORDS,
     RESPONSE_MODE_FEATURE_ENABLED,
     TONE_SENSITIVE_NEUTRAL_ENABLED,
     TONE_ADAPTATION_ENABLED,
     LLM_BACKEND,
+    SENSITIVE_CONFIRM_MODE,
+    FILE_HUMANIZE_PATHS,
+    FILE_SPOKEN_RESULTS_MAX,
 )
 from core.demo_mode import is_enabled as is_demo_mode_enabled
 from core.demo_mode import set_enabled as set_demo_mode
@@ -61,16 +77,20 @@ from core.intent_confidence import (
     build_clarification_payload,
     resolve_clarification_reply,
 )
-from core.language_gate import UNSUPPORTED_LANGUAGE_MESSAGE, detect_supported_language
-from core.logger import logger, log_structured
+from core.language_gate import UNSUPPORTED_LANGUAGE_MESSAGE, detect_supported_language, looks_romanized_arabic
+from core.logger import get_logger, logger, log_structured
 from core.metrics import metrics
 from core.persona import persona_manager
 from core.response_templates import anti_repetition_prefixes, detect_language_hint, normalize_language, render_template
 from core.response_shaper import response_shaper
 from core.session_memory import session_memory
-from llm.ollama_client import ask_llm, ask_llm_streaming, get_runtime_lightweight_num_ctx, get_runtime_model_tier, get_runtime_num_ctx
+from core.voice_normalizer import normalize_for_voice, normalize_weather_block
+from llm.ollama_client import ask_llm_streaming, get_runtime_lightweight_num_ctx, get_runtime_model_tier, get_runtime_num_ctx
 from llm.prompt_builder import build_prompt_package, build_lightweight_prompt, build_tool_augmented_prompt, build_claude_messages
 from tools.live_data import gather_live_data
+from utils.language_detector import detect_language
+
+llm_logger = get_logger("llm")
 try:
     from nlp.intent_classifier import classify_intent as _classify_keyword_intent
 except Exception:
@@ -103,6 +123,7 @@ from os_control.file_ops import (
     get_current_directory,
     undo_last_action,
 )
+from os_control.path_resolver import humanize_path
 from os_control.job_queue import job_queue_service
 from os_control.policy import policy_engine
 from os_control.search_index import search_index_service
@@ -166,6 +187,7 @@ _PARSER_FASTPATH_INTENTS = {
     "OS_FILE_NAVIGATION_BATCH",
     "COMMAND_CHAIN",
     "OS_SYSTEM_COMMAND",
+    "OS_SCREEN_DESCRIBE",
     "OS_TIMER",
     "OS_REMINDER",
     "JOB_QUEUE_COMMAND",
@@ -494,6 +516,13 @@ _KEYWORD_NLP_INFORMATIONAL_QUERY_MARKERS = {
     "اشرح",
     "اشرحلي",
     "اشرح لي",
+    "قولي",
+    "قوللي",
+    "عاوزك تقولي",
+    "اعرفني",
+    "ابعتلي",
+    "وضحلي",
+    "فهملي",
     "ايه هو",
     "ايه هي",
     "إيه هو",
@@ -562,6 +591,8 @@ def _has_keyword_nlp_screenshot_marker(source_text, matched_keywords):
 
 
 def _looks_keyword_nlp_informational_query(source_text):
+    if _looks_like_explanatory_llm_query(source_text):
+        return True
     normalized_text = " ".join(str(source_text or "").lower().split()).strip()
     if not normalized_text:
         return False
@@ -1233,6 +1264,55 @@ def _should_bypass_pending_clarification(parsed, pending_payload=None, source_te
         return True
 
     pending_reason = _normalize_compact((pending_payload or {}).get("reason") or "")
+
+    # A new high-confidence OS command always bypasses a stale file-search
+    # clarification — unless it looks like a pick-by-number reply ("افتح الأول",
+    # "افتح رقم 1") which resolve_clarification_reply handles better.
+    if (
+        pending_reason in {"file_search_multiple_matches", "file_delete_ambiguous_target"}
+        and intent in {
+            "OS_FILE_NAVIGATION", "OS_FILE_SEARCH", "OS_APP_OPEN", "OS_APP_CLOSE",
+            "OS_SYSTEM_COMMAND", "OS_PIN_CONFIRM",
+        }
+    ):
+        # Ordinal/number/pronoun pick disguised as a real command — let the
+        # clarification resolver handle it rather than treating it as a new command.
+        # Covers: "افتح الأول", "Open number one", "open it", "افتح ده"
+        if pending_reason == "file_search_multiple_matches":
+            args = getattr(parsed, "args", None) or {}
+            if intent == "OS_FILE_NAVIGATION":
+                candidate = _normalize_compact(str(args.get("path") or ""))
+            elif intent == "OS_APP_OPEN":
+                candidate = _normalize_compact(str(args.get("app_name") or ""))
+            else:
+                candidate = ""
+            if candidate:
+                # Pure ordinal/number pick: "number one", "رقم 1", "اول واحد", "3"
+                # Also matches bare "number" / "رقم" (STT sometimes truncates the digit).
+                _ordinal_words = re.compile(
+                    r"^(?:"
+                    # bare prefix alone — STT cut off the digit
+                    r"number|رقم"
+                    r"|(?:number|رقم|the|ال)?\s*"
+                    r"(?:\d+|الاول|اول|الثاني|ثاني|الثالث|ثالث|"
+                    r"first|second|third|one|two|three|"
+                    r"واحد|اتنين|تلاتة)"
+                    r"(?:\s+(?:\d+|الاول|اول|الثاني|ثاني|واحد|اتنين|تلاتة|"
+                    r"one|two|three|first|second|third))*"
+                    r")$",
+                    re.IGNORECASE | re.UNICODE,
+                )
+                if _ordinal_words.match(candidate):
+                    return False
+                # Short pronoun reference: "it", "this", "that", "ده", "دي"
+                _pronoun_words = {
+                    "it", "this", "that", "this one", "that one",
+                    "ده", "دي", "دا", "هو", "هي", "ده ده",
+                }
+                if candidate in _pronoun_words:
+                    return False
+        return True
+
     if pending_reason != "low_confidence_unclear_query":
         return False
 
@@ -1280,23 +1360,61 @@ def _normalize_compact(text):
     return " ".join(str(text or "").lower().split()).strip()
 
 
-def _llm_cache_key(prompt: str, language: str):
-    return (_normalize_compact(language or "en"), _normalize_compact(prompt or ""))
+_OPINION_CACHE_CUES = (
+    "how do",
+    "why",
+    "explain",
+    "what do you think",
+    "opinion",
+    "should i",
+    "should we",
+    "هل",
+    "ليه",
+    "ازاي",
+    "إزاي",
+    "رأيك",
+)
 
 
-def _cache_get_llm_response(prompt: str, language: str):
+def _llm_cache_entry_type(query: str) -> str:
+    normalized = f" {_normalize_compact(query)} "
+    return "opinion" if any(cue in normalized for cue in _OPINION_CACHE_CUES) else "factual"
+
+
+def _llm_cache_ttl_seconds(entry_type: str) -> int:
+    if str(entry_type or "").strip().lower() == "opinion":
+        return max(1, int(LLM_RESPONSE_CACHE_TTL_OPINION_SECONDS or LLM_RESPONSE_CACHE_TTL_SECONDS or 300))
+    return max(1, int(LLM_RESPONSE_CACHE_TTL_FACTUAL_SECONDS or LLM_RESPONSE_CACHE_TTL_SECONDS or 3600))
+
+
+def _llm_cache_key(query: str, language: str, tier: str = "medium"):
+    normalized_query = _normalize_compact(query or "")
+    normalized_language = _normalize_compact(language or LLM_DEFAULT_LANGUAGE or "en")
+    normalized_tier = _normalize_compact(tier or "medium")
+    persona_profile = ""
+    if LLM_RESPONSE_CACHE_KEY_INCLUDES_PERSONA:
+        try:
+            persona_profile = _normalize_compact(persona_manager.get_profile())
+        except Exception:
+            persona_profile = ""
+    payload = "\x1f".join([normalized_query, normalized_language, persona_profile, normalized_tier])
+    return hashlib.sha1(payload.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _cache_get_llm_response(query: str, language: str, tier: str = "medium"):
     if not LLM_RESPONSE_CACHE_ENABLED:
         return None
 
     now = time.time()
-    key = _llm_cache_key(prompt, language)
+    key = _llm_cache_key(query, language, tier)
     entry = _LLM_RESPONSE_CACHE.get(key)
     if not entry:
         _LLM_RESPONSE_CACHE_STATS["misses"] += 1
         return None
 
     cached_at = float(entry.get("cached_at") or 0.0)
-    if cached_at <= 0 or (now - cached_at) > max(1, int(LLM_RESPONSE_CACHE_TTL_SECONDS or 600)):
+    ttl_seconds = _llm_cache_ttl_seconds(entry.get("type"))
+    if cached_at <= 0 or (now - cached_at) > ttl_seconds:
         _LLM_RESPONSE_CACHE.pop(key, None)
         _LLM_RESPONSE_CACHE_STATS["misses"] += 1
         _LLM_RESPONSE_CACHE_STATS["evictions"] += 1
@@ -1304,10 +1422,11 @@ def _cache_get_llm_response(prompt: str, language: str):
 
     _LLM_RESPONSE_CACHE.move_to_end(key)
     _LLM_RESPONSE_CACHE_STATS["hits"] += 1
+    llm_logger.info("llm_response_cache cache_hit=true type=%s tier=%s", entry.get("type") or "factual", tier)
     return str(entry.get("value") or "").strip()
 
 
-def _cache_put_llm_response(prompt: str, language: str, response: str):
+def _cache_put_llm_response(query: str, language: str, response: str, tier: str = "medium"):
     if not LLM_RESPONSE_CACHE_ENABLED:
         return
 
@@ -1315,9 +1434,13 @@ def _cache_put_llm_response(prompt: str, language: str, response: str):
     if not value:
         return
 
-    key = _llm_cache_key(prompt, language)
+    entry_type = _llm_cache_entry_type(query)
+    key = _llm_cache_key(query, language, tier)
     _LLM_RESPONSE_CACHE[key] = {
         "cached_at": time.time(),
+        "language": _normalize_compact(language or "en"),
+        "tier": _normalize_compact(tier or "medium"),
+        "type": entry_type,
         "value": value,
     }
     _LLM_RESPONSE_CACHE.move_to_end(key)
@@ -1343,8 +1466,43 @@ def get_llm_response_cache_stats():
         "stores": int(_LLM_RESPONSE_CACHE_STATS["stores"]),
         "evictions": int(_LLM_RESPONSE_CACHE_STATS["evictions"]),
         "ttl_seconds": int(LLM_RESPONSE_CACHE_TTL_SECONDS or 600),
+        "ttl_factual_seconds": int(LLM_RESPONSE_CACHE_TTL_FACTUAL_SECONDS or 3600),
+        "ttl_opinion_seconds": int(LLM_RESPONSE_CACHE_TTL_OPINION_SECONDS or 300),
         "max_size": int(LLM_RESPONSE_CACHE_MAX_SIZE or 256),
     }
+
+
+def prime_llm_response_cache_async():
+    """Seed common short opener replies without blocking startup."""
+    if not LLM_RESPONSE_CACHE_ENABLED:
+        return None
+
+    def _worker():
+        started = time.perf_counter()
+        openers = [
+            ("hello", "en", "Hey — I'm here."),
+            ("hi", "en", "Hey — I'm here."),
+            ("how are you", "en", "I'm good and ready. What do you need?"),
+            ("اهلا", "ar", "أهلا، أنا معاك."),
+            ("أهلاً", "ar", "أهلا، أنا معاك."),
+            ("كيفك", "ar", "تمام، أنا معاك."),
+            ("ايه اخبارك", "ar", "تمام، أنا معاك."),
+        ]
+        tier = get_runtime_model_tier()
+        for query, language, response in openers:
+            try:
+                _cache_put_llm_response(query, language, response, tier)
+            except Exception:
+                continue
+        llm_logger.info(
+            "LLM response cache primed entries=%d in %.2fs",
+            len(openers),
+            time.perf_counter() - started,
+        )
+
+    thread = threading.Thread(target=_worker, name="jarvis-llm-cache-prime", daemon=True)
+    thread.start()
+    return thread
 
 
 def _normalize_quality_text(text):
@@ -1353,6 +1511,14 @@ def _normalize_quality_text(text):
         return ""
     normalized = (
         raw.replace("أ", "ا")
+        .replace("إ", "ا")
+        .replace("آ", "ا")
+        .replace("ى", "ي")
+        .replace("ؤ", "و")
+        .replace("ئ", "ي")
+    )
+    normalized = (
+        normalized.replace("أ", "ا")
         .replace("إ", "ا")
         .replace("آ", "ا")
         .replace("ى", "ي")
@@ -1399,6 +1565,38 @@ _LOW_VALUE_LLM_REPLY_MARKERS = {
     "بمجرد وجودها",
     "اسف",
     "آسف",
+    "مش هقدر أساعدك",
+    "مش اقدر اساعدك",
+    "مش قادر اساعدك",
+    "مش قادر أساعدك",
+    "مش هقدر أساعدك في",
+    "مقدرش اساعدك",
+    "مقدرش أساعدك",
+    "قولّي هدفك",
+    "قولي هدفك",
+    "اكتب هدفك",
+    "share your goal",
+}
+
+_CAREER_ADVICE_QUERY_MARKERS = {
+    "engineer",
+    "computer engineer",
+    "successful engineer",
+    "career",
+    "become successful",
+    "be better",
+    "مهندس",
+    "كمبيوتر",
+    "ناجح",
+    "شاطر",
+    "اكون",
+    "أكون",
+    "ابقى",
+    "أبقى",
+    "ازاي اعمل",
+    "إزاي أعمل",
+    "اعمل كده",
+    "أعمل كده",
 }
 
 _WEATHER_QUERY_MARKERS = {
@@ -1457,6 +1655,18 @@ _NEWS_QUERY_MARKERS = {
     "عاجل",
 }
 
+_SPORTS_QUERY_MARKERS = {
+    # English
+    "match", "score", "fixture", "fixtures", "world cup", "tournament",
+    "league", "standings", "table", "result", "results", "kickoff",
+    "vs", "against", "qualifier", "qualifiers", "playing against",
+    # Arabic
+    "ماتش", "الماتش", "مباراة", "المباراة", "مباريات",
+    "كأس العالم", "كاس العالم", "بطولة", "الدوري", "ترتيب",
+    "نتيجة", "النتيجة", "نتائج", "مع مين", "هيلعب", "بيلعب",
+    "تأهل", "تصفيات", "جدول المباريات", "موعد المباراة",
+}
+
 _SEARCH_QUERY_MARKERS = {
     # English price/money markers
     "price of", "cost of", "how much", "stock", "exchange rate",
@@ -1471,7 +1681,8 @@ _SEARCH_QUERY_MARKERS = {
     "what is", "who is", "when did", "where is",
     # Arabic question stems
     "ايه هو", "ايه هي", "مين هو", "مين هي", "امتى", "فين",
-    "قولي", "ابعتلي", "اعرفني", "احكيلي",
+    # Note: "قولي"/"احكيلي"/"اعرفني"/"عاوزك تقولي" are informational markers,
+    # NOT search triggers — they belong in _KEYWORD_NLP_INFORMATIONAL_QUERY_MARKERS.
     # Recency / "now" markers — strong signal for live-data queries
     "latest", "recent", "new", "current", "today", "now", "currently",
     "آخر", "أحدث", "جديد", "حالي",
@@ -1488,6 +1699,39 @@ _LIVE_DATA_FORCE_MARKERS = {
     # Commodity/currency cues
     "gold", "silver", "bitcoin", "crypto", "دولار", "يورو", "ذهب", "دهب", "فضة", "عملة",
 }
+
+_NO_SEARCH_NEEDED_MARKERS = {
+    # Greetings / small talk
+    "hello", "hi", "hey", "good morning", "good evening", "good night",
+    "thanks", "thank you", "how are you", "what's up",
+    "ازيك", "إزيك", "ازيك يا", "صباح الخير", "مساء الخير", "تصبح على خير",
+    "شكرا", "شكراً", "متشكر", "ميرسي", "اخبارك ايه", "اخبارك إيه", "انت عامل ايه", "انت عامل إيه",
+    # Identity / persona questions about Jarvis itself — answer from persona, no search
+    "what's your name", "who are you", "what are you",
+    "مين انت", "انت مين", "اسمك ايه", "اسمك إيه",
+    # Farewell
+    "bye", "goodbye", "see you", "مع السلامة", "باي",
+}
+
+
+def _looks_like_no_search_needed(text):
+    """Queries that never benefit from a (parallel, 6s-timeout) web search.
+
+    Covers trivial chit-chat/persona small talk, and weather/clothing
+    questions — the latter already have a dedicated, faster weather-API path
+    (see _detect_weather_intent in tools/live_data.py), so forcing a generic
+    web search alongside it only adds latency without ever being used.
+    """
+    normalized = _normalize_quality_text(text)
+    if not normalized:
+        return True
+    if _looks_weather_or_clothing_query(text):
+        return True
+    word_count = len(normalized.split())
+    if word_count > 6:
+        return False
+    return any(marker in normalized for marker in _NO_SEARCH_NEEDED_MARKERS)
+
 
 _QUESTION_PREFIXES_EN = (
     "what",
@@ -1564,14 +1808,46 @@ def _looks_low_value_llm_reply(text):
     word_count = len(normalized.split())
     if word_count == 0:
         return True
-    has_marker = any(marker in normalized for marker in _LOW_VALUE_LLM_REPLY_MARKERS)
+    has_marker = any(_normalize_quality_text(marker) in normalized for marker in _LOW_VALUE_LLM_REPLY_MARKERS)
     return has_marker and word_count <= 90
 
 
-def _looks_weather_or_clothing_query(text):
+def _looks_career_advice_query(text):
     normalized = _normalize_quality_text(text)
     if not normalized:
         return False
+    return any(_normalize_quality_text(marker) in normalized for marker in _CAREER_ADVICE_QUERY_MARKERS)
+
+
+def _career_advice_fallback(language):
+    if normalize_language(language) == "ar":
+        return (
+            "ابدأ بالأساسيات: برمجة كويسة، هياكل بيانات، نظم تشغيل، شبكات، وقواعد بيانات. "
+            "بعد كده اختار مسار واحد، وابني مشاريع حقيقية عليه، وارفعها على GitHub، وخلّي حد شاطر يراجع شغلك كل فترة."
+        )
+    return (
+        "Start with fundamentals: programming, data structures, operating systems, networking, and databases. "
+        "Then pick one track, build real projects, put them on GitHub, and get regular feedback from stronger engineers."
+    )
+
+
+def _looks_weather_or_clothing_query(text):
+    raw_value = str(text or "")
+    normalized = _normalize_quality_text(text)
+    if not normalized:
+        return False
+    arabic_weather_terms = (
+        "\u0637\u0642\u0633",
+        "\u0627\u0644\u0637\u0642\u0633",
+        "\u0627\u0644\u062c\u0648",
+        "\u0623\u062e\u0628\u0627\u0631 \u0627\u0644\u0637\u0642\u0633",
+        "\u0627\u062e\u0628\u0627\u0631 \u0627\u0644\u0637\u0642\u0633",
+        "\u0623\u062e\u0628\u0627\u0631 \u0627\u0644\u062c\u0648",
+        "\u0627\u062e\u0628\u0627\u0631 \u0627\u0644\u062c\u0648",
+        "\u062f\u0631\u062c\u0629 \u0627\u0644\u062d\u0631\u0627\u0631\u0629",
+    )
+    if any(term in raw_value or term in normalized for term in arabic_weather_terms):
+        return True
     if any(marker in normalized for marker in _WEATHER_QUERY_MARKERS):
         return True
     return any(marker in normalized for marker in _CLOTHING_QUERY_MARKERS)
@@ -1584,6 +1860,13 @@ def _looks_news_query(text):
     return any(marker in normalized for marker in _NEWS_QUERY_MARKERS)
 
 
+def _looks_sports_query(text):
+    normalized = _normalize_quality_text(text)
+    if not normalized:
+        return False
+    return any(marker in normalized for marker in _SPORTS_QUERY_MARKERS)
+
+
 def _is_assist_first_safe_request(text):
     normalized = _normalize_quality_text(text)
     if not normalized:
@@ -1593,6 +1876,8 @@ def _is_assist_first_safe_request(text):
 
 def _looks_search_worthy_query(text):
     """Check if a query would benefit from web search context."""
+    if _looks_like_explanatory_llm_query(text):
+        return False
     normalized = _normalize_quality_text(text)
     if not normalized:
         return False
@@ -1603,7 +1888,12 @@ def _looks_live_data_trigger_query(text):
     normalized = _normalize_quality_text(text)
     if not normalized:
         return False
+    # News/sports/price topics need live data even when phrased as "tell me ...";
+    # the explanatory-query guard below only protects advice/how-to questions,
+    # which never overlap with these factual/time-sensitive topics.
     if _looks_news_query(normalized):
+        return True
+    if _looks_sports_query(normalized):
         return True
     return any(marker in normalized for marker in _LIVE_DATA_FORCE_MARKERS)
 
@@ -1670,21 +1960,15 @@ def _fetch_live_tool_context(query_text):
     if precomputed is not None:
         return precomputed
 
-    # Phase 2.1: Unified live data gathering (weather + web search)
-    force_search = False
-    if WEB_SEARCH_ENABLED:
-        if _looks_live_data_trigger_query(query_text):
-            force_search = True
-        elif _looks_search_worthy_query(query_text) and not _looks_like_question(query_text):
-            # Explicit search phrasing ("search for", "look up", etc.).
-            force_search = True
-        elif _looks_like_question(query_text):
-            if LIVE_DATA_FORCE_QUESTIONS and _looks_live_data_trigger_query(query_text):
-                force_search = True
-            else:
-                short_followup = len(str(query_text or "").split()) <= 4
-                if short_followup and _previous_turn_looks_live_data():
-                    force_search = True
+    # Default to always attempting a web search for substantive queries — small
+    # local models hallucinate confidently on anything fact-shaped (sports,
+    # prices, history, people, current events) instead of admitting they don't
+    # know. Searching first and letting the LLM decide whether the results are
+    # relevant mirrors how ChatGPT/Claude-style assistants behave, and avoids
+    # maintaining an ever-growing keyword list that misses new question types.
+    # Trivial chit-chat (greetings, thanks, identity questions) is excluded so
+    # we don't burn ~1-2s of search latency on turns that never need it.
+    force_search = bool(WEB_SEARCH_ENABLED) and not _looks_like_no_search_needed(query_text)
 
     live_context = gather_live_data(query_text, parallel=True, force_search=force_search)
     if live_context:
@@ -1726,37 +2010,65 @@ def _format_news_from_search(search_block: str, language: str) -> str:
     return "Top headlines right now:\n" + "\n".join(top)
 
 
-def _rewrite_live_data_answer(query_text, tool_context, language):
-    context = str(tool_context or "").strip()
-    if not context:
-        return ""
+_WEATHER_CONDITION_AR = {
+    "clear sky": "السما صافية",
+    "mainly clear": "الجو صافي في الغالب",
+    "partly cloudy": "الجو غائم جزئياً",
+    "overcast": "الجو ملبد بالغيوم",
+    "foggy": "فيه شبورة",
+    "light drizzle": "فيه رذاذ خفيف",
+    "moderate drizzle": "فيه رذاذ متوسط",
+    "slight rain": "فيه مطر خفيف",
+    "moderate rain": "فيه مطر متوسط",
+    "heavy rain": "فيه مطر غزير",
+    "thunderstorm": "فيه عواصف رعدية",
+}
 
+
+def _format_weather_direct_answer(weather_text, language):
+    text = " ".join(str(weather_text or "").split()).strip()
+    if not text:
+        return ""
     target_language = normalize_language(language)
-    target_label = "Arabic" if target_language == "ar" else "English"
-    rewrite_prompt = (
-        f"Rewrite the live-data answer below into a natural {target_label} assistant reply.\n"
-        "- Keep the facts accurate.\n"
-        "- Do not copy the source wording or bullet formatting.\n"
-        "- Sound like a helpful human assistant speaking directly to the user.\n"
-        "- If Arabic, use Egyptian colloquial only.\n"
-        "- Return only the rewritten answer.\n\n"
-        f"User request: {query_text}\n"
-        f"Live data:\n{context}"
+    if text.startswith(("الطقس ", "Weather in ")):
+        # Already normalized by core.voice_normalizer / tools.live_data.
+        return normalize_for_voice(text, target_language)
+    match = re.search(
+        r"Weather in (?P<city>.*?): (?P<condition>.*?), (?P<temp>[-+]?\d+(?:\.\d+)?)\s*(?:Â?°C|°C|C), "
+        r"humidity (?P<humidity>\d+(?:\.\d+)?)%, wind (?P<wind>\d+(?:\.\d+)?) km/h",
+        text,
+        flags=re.IGNORECASE,
     )
-    rewritten = (
-        ask_llm(
-            rewrite_prompt,
-            num_ctx=get_runtime_lightweight_num_ctx(default=LLM_LIGHTWEIGHT_NUM_CTX),
-        )
-        or ""
-    ).strip()
-    if not rewritten:
-        return ""
+    if not match:
+        normalized = normalize_weather_block(text, target_language)
+        return normalized or (f"حالة الطقس الحالية باختصار: {text}" if target_language == "ar" else f"Current weather summary: {text}")
 
-    rewritten_language = detect_language_hint(rewritten, fallback=target_language)
-    if rewritten_language != target_language:
-        return ""
-    return rewritten
+    city = str(match.group("city") or WEATHER_DEFAULT_CITY).strip()
+    if city in {
+        "\u0627\u0644\u0646\u0647\u0627\u0631\u062f\u0629",
+        "\u0627\u0644\u0646\u0647\u0627\u0631\u062f\u0647",
+        "\u0627\u0644\u064a\u0648\u0645",
+        "\u062f\u0644\u0648\u0642\u062a\u064a",
+    }:
+        city = str(WEATHER_DEFAULT_CITY or "Cairo")
+    condition = str(match.group("condition") or "").strip()
+    temp = str(match.group("temp") or "?").rstrip("0").rstrip(".")
+    humidity = str(match.group("humidity") or "?").rstrip("0").rstrip(".")
+    wind = str(match.group("wind") or "?").rstrip("0").rstrip(".")
+
+    if target_language == "ar":
+        condition_ar = _WEATHER_CONDITION_AR.get(condition.lower(), condition)
+        city_ar = "\u0627\u0644\u0642\u0627\u0647\u0631\u0629" if city.lower() == "cairo" else city
+        return (
+            f"الطقس في {city_ar} دلوقتي: {condition_ar}. "
+            f"الحرارة {temp} درجة، الرطوبة {humidity} في المية، "
+            f"والرياح حوالي {wind} كيلومتر في الساعة."
+        )
+    return (
+        f"Weather in {city}: {condition}. "
+        f"Temperature {temp} degrees, humidity {humidity} percent, "
+        f"wind about {wind} kilometers per hour."
+    )
 
 
 def _direct_live_data_answer(query_text, tool_context, language):
@@ -1767,9 +2079,7 @@ def _direct_live_data_answer(query_text, tool_context, language):
     if _looks_weather_or_clothing_query(query_text):
         weather_block = _extract_tool_block(context, "WEATHER")
         clean_weather = weather_block or context
-        rewritten = _rewrite_live_data_answer(query_text, clean_weather, language)
-        if rewritten:
-            return rewritten
+        return _format_weather_direct_answer(clean_weather, language)
         if normalize_language(language) == "ar":
             return f"حالة الطقس الحالية باختصار: {clean_weather}"
         return f"Current weather summary: {clean_weather}"
@@ -1778,9 +2088,6 @@ def _direct_live_data_answer(query_text, tool_context, language):
         search_block = _extract_tool_block(context, "WEB_SEARCH")
         news_text = _format_news_from_search(search_block, language)
         if news_text:
-            rewritten = _rewrite_live_data_answer(query_text, news_text, language)
-            if rewritten:
-                return rewritten
             return news_text
 
     return ""
@@ -2042,6 +2349,15 @@ def _repair_low_value_llm_response(response_text, parsed, language, original_tex
 
     target_language = normalize_language(language)
 
+    if _looks_career_advice_query(original_text):
+        assist_first = _career_advice_fallback(target_language)
+        log_structured(
+            "route_llm_career_advice_fallback",
+            language=target_language,
+            response_preview=_truncate_text(assist_first),
+        )
+        return assist_first
+
     # Hard assist-first rule: for normal safe user requests, never leave a generic
     # dead-end refusal as the final answer.
     assist_first = _fallback_assist_first_response(original_text, target_language)
@@ -2052,6 +2368,61 @@ def _repair_low_value_llm_response(response_text, parsed, language, original_tex
             response_preview=_truncate_text(assist_first),
         )
         return assist_first
+
+    return text
+
+
+def _strip_repeated_user_question(response_text, original_text):
+    """Remove a leading restatement of the user's question from an LLM answer."""
+    text = str(response_text or "").strip()
+    question = str(original_text or "").strip()
+    if not text or not question:
+        return text
+
+    def _norm(value):
+        value = " ".join(str(value or "").lower().split())
+        value = re.sub(r"^[\s:：,،.;!?؟\"'`،-]+|[\s:：,،.;!?؟\"'`،-]+$", "", value)
+        return value
+
+    def _strip_answer_label(value):
+        return re.sub(
+            r"^\s*(?:a|answer|الإجابة|الاجابة)\s*[:：-]\s*",
+            "",
+            str(value or "").strip(),
+            flags=re.IGNORECASE,
+        ).strip()
+
+    # Common "Question: ... Answer: ..." format.
+    qa_match = re.match(
+        r"^\s*(?:q|question|user|السؤال|سؤال)\s*[:：-]\s*(.+?)\s*(?:\n|\.|\?|؟|!|(?:a|answer|الإجابة|الاجابة)\s*[:：-])\s*(.+)$",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if qa_match:
+        possible_question = qa_match.group(1).strip()
+        answer = _strip_answer_label(qa_match.group(2))
+        if answer and (_norm(question).startswith(_norm(possible_question)[:30]) or _norm(possible_question).startswith(_norm(question)[:30])):
+            return answer
+
+    normalized_question = _norm(question)
+    normalized_text = _norm(text)
+    if normalized_question and normalized_text.startswith(normalized_question):
+        remainder = _strip_answer_label(text[len(question):].lstrip(" \t\r\n:：,،.;!?؟-—"))
+        if remainder:
+            return remainder
+
+    # If the first line/sentence is the question and the rest is the answer, drop it.
+    split_match = re.match(r"^(.{1,240}?[؟?!\.])\s+(.+)$", text, flags=re.DOTALL)
+    if split_match:
+        first = split_match.group(1).strip()
+        rest = split_match.group(2).strip()
+        first_norm = _norm(first)
+        if rest and normalized_question and (
+            first_norm == normalized_question
+            or normalized_question.startswith(first_norm)
+            or first_norm.startswith(normalized_question[: max(20, min(60, len(normalized_question)))])
+        ):
+            return _strip_answer_label(rest)
 
     return text
 
@@ -2093,25 +2464,40 @@ def _finalize_success_response(response_text, parsed, language, original_text, t
     action_lower = str(getattr(parsed, "action", "") or "").strip().lower()
 
     if RESPONSE_SHAPER_ENABLED and intent_upper != "LLM_QUERY":
-        # Action intent: replace with bilingual template if one exists.
-        shaped = response_shaper.shape(
-            intent_upper,
-            action_lower,
-            dict(getattr(parsed, "args", None) or {}),
-            language,
-            llm_response=None,
+        # Never override confirmation / PIN prompts with a shaper template —
+        # the actual result message IS the important user-facing text.
+        _is_confirmation_msg = (
+            session_memory.get_pending_confirmation_token() == "pin_required"
+            or "pin" in text.lower()
+            or render_template("pin_required_prompt", "en") in text
+            or render_template("pin_required_prompt", "ar") in text
         )
-        if shaped:
-            text = shaped
+        if not _is_confirmation_msg:
+            # Action intent: replace with bilingual template if one exists.
+            shaped = response_shaper.shape(
+                intent_upper,
+                action_lower,
+                dict(getattr(parsed, "args", None) or {}),
+                language,
+                llm_response=None,
+            )
+            if shaped:
+                text = shaped
 
     text = _repair_low_value_llm_response(text, parsed, language, original_text)
+    if intent_upper == "LLM_QUERY":
+        text = _strip_repeated_user_question(text, original_text)
     text = _apply_egyptian_dialect_style(text, parsed, language)
 
     if RESPONSE_SHAPER_ENABLED and intent_upper == "LLM_QUERY":
         # LLM response: strip any residual markdown and cap sentence count.
         text = response_shaper._trim_for_voice(text, language, max_sentences=4)
 
-    text = _apply_persona_length_target(text, parsed)
+    # Only enforce reply language for LLM output — OS command responses come
+    # from bilingual templates keyed to the user's actual utterance language,
+    # so a session-language mismatch is expected and correct (not an error).
+    if intent_upper == "LLM_QUERY":
+        text = _enforce_reply_language(text, language, original_text, stage="final")
     _record_response_quality(text, language, original_text)
     return text
 
@@ -2310,11 +2696,183 @@ def _execute_chained_commands(command_text, language, *, on_sentence=None):
     return True, message, {"phase4_chain": {"commands_executed": len(results), "results": results}}
 
 
+
 def _infer_language_for_response(parsed, fallback_language):
     raw_text = str(getattr(parsed, "raw", "") or "")
-    if re.search(r"[؀-ۿ]", raw_text):
+    if re.search(r"[\u0600-\u06FF]", raw_text):
         return "ar"
-    return fallback_language
+    fallback = str(fallback_language or "").strip().lower()
+    return fallback if fallback in {"en", "ar"} else "en"
+
+
+def _language_from_parsed(parsed):
+    containers = []
+    args = getattr(parsed, "args", None)
+    if isinstance(args, dict):
+        containers.append(args)
+    entities = getattr(parsed, "entities", None)
+    if isinstance(entities, dict):
+        containers.append(entities)
+    for container in containers:
+        value = str(container.get("language") or container.get("lang") or "").strip().lower()
+        if value in {"en", "ar"}:
+            return value
+    return ""
+
+
+def _last_stt_locked_language():
+    try:
+        from audio.stt import get_last_transcription_meta
+
+        meta = get_last_transcription_meta()
+    except Exception:
+        return ""
+    lang = str((meta or {}).get("lang_pick_lang") or "").strip().lower()
+    return lang if lang in {"en", "ar"} else ""
+
+
+def resolve_reply_language(spoken_language, parsed):
+    """Resolve the single reply language used for LLM prompts this turn."""
+    spoken = str(spoken_language or "").strip().lower()
+    if spoken in {"en", "ar"}:
+        return spoken
+    stt_lang = _last_stt_locked_language()
+    if stt_lang in {"en", "ar"}:
+        return stt_lang
+    parsed_lang = _language_from_parsed(parsed)
+    if parsed_lang in {"en", "ar"}:
+        return parsed_lang
+    hint_lang = str(STT_LANGUAGE_HINT or "").strip().lower()
+    if hint_lang in {"en", "ar"}:
+        return hint_lang
+    default_lang = str(LLM_DEFAULT_LANGUAGE or "").strip().lower()
+    if default_lang in {"en", "ar"}:
+        return default_lang
+    fallback = str(spoken_language or "").strip().lower()
+    return fallback if fallback in {"en", "ar"} else "en"
+
+
+def _log_llm_language_mismatch(text, expected_language):
+    if not str(text or "").strip():
+        return
+    expected = normalize_language(expected_language)
+    if expected not in {"en", "ar"}:
+        return
+    try:
+        got = detect_language(text)
+    except Exception:
+        got = detect_language_hint(text, fallback=expected)
+    if got not in {"en", "ar"}:
+        return
+    if got != expected:
+        llm_logger.warning(
+            "llm_lang_mismatch expected=%s got=%s preview=%s",
+            expected,
+            got,
+            str(text or "")[:60],
+        )
+
+
+def _is_response_language_mismatch(text, expected_language):
+    value = str(text or "").strip()
+    if not value:
+        return False
+    expected = normalize_language(expected_language)
+    try:
+        got = detect_language(value)
+    except Exception:
+        got = detect_language_hint(value, fallback=expected)
+    if expected == "ar":
+        arabic_chars = len(re.findall(r"[\u0600-\u06FF]", value))
+        latin_chars = len(re.findall(r"[A-Za-z]", value))
+        latin_heavy = latin_chars >= 12 and latin_chars >= max(8, arabic_chars)
+        english_weather_words = re.search(
+            r"\b(clear|skies|today|high|humidity|winds?|coming|kilometers?|degrees?|mostly)\b",
+            value,
+            flags=re.IGNORECASE,
+        )
+        if latin_heavy or english_weather_words:
+            return True
+    if got not in {"en", "ar"}:
+        return False
+    return got != expected
+
+
+def _looks_identity_question_legacy_unused(text):
+    value = str(text or "").strip().lower()
+    if not value:
+        return False
+    if any(phrase in value for phrase in ("who are you", "what are you", "your name", "what's your name")):
+        return True
+    compact = value.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
+    return "مين" in compact and any(token in compact for token in ("انت", "انتا", "انتي", "اسمك"))
+
+
+def _language_guard_fallback_legacy_unused(original_text, language):
+    target_language = normalize_language(language)
+    if target_language == "ar":
+        if _looks_identity_question(original_text):
+            return "أنا جارفس، مساعدك الصوتي. موجود أساعدك بسرعة وبالعامية المصرية."
+        return _fallback_assist_first_response(original_text, "ar")
+    if _looks_identity_question(original_text):
+        return "I'm Jarvis, your voice assistant. I can help with quick, practical answers and actions."
+    return _fallback_assist_first_response(original_text, "en")
+
+
+def _looks_identity_question(text):
+    value = str(text or "").strip().lower()
+    if not value:
+        return False
+    if any(phrase in value for phrase in ("who are you", "what are you", "your name", "what's your name")):
+        return True
+    compact = (
+        value.replace("\u0623", "\u0627")
+        .replace("\u0625", "\u0627")
+        .replace("\u0622", "\u0627")
+        .replace("\u0649", "\u064a")
+    )
+    return "\u0645\u064a\u0646" in compact and any(
+        token in compact
+        for token in (
+            "\u0627\u0646\u062a",
+            "\u0627\u0646\u062a\u0627",
+            "\u0627\u0646\u062a\u064a",
+            "\u0627\u0633\u0645\u0643",
+        )
+    )
+
+
+def _language_guard_fallback(original_text, language):
+    target_language = normalize_language(language)
+    if target_language == "ar":
+        if _looks_identity_question(original_text):
+            return (
+                "\u0623\u0646\u0627 \u062c\u0627\u0631\u0641\u0633\u060c "
+                "\u0645\u0633\u0627\u0639\u062f\u0643 \u0627\u0644\u0635\u0648\u062a\u064a. "
+                "\u0645\u0648\u062c\u0648\u062f \u0623\u0633\u0627\u0639\u062f\u0643 "
+                "\u0628\u0633\u0631\u0639\u0629 \u0648\u0628\u0627\u0644\u0639\u0627\u0645\u064a\u0629 "
+                "\u0627\u0644\u0645\u0635\u0631\u064a\u0629."
+            )
+        return _fallback_assist_first_response(original_text, "ar")
+    if _looks_identity_question(original_text):
+        return "I'm Jarvis, your voice assistant. I can help with quick, practical answers and actions."
+    return _fallback_assist_first_response(original_text, "en")
+
+
+def _enforce_reply_language(response_text, language, original_text, *, stage="final"):
+    text = str(response_text or "").strip()
+    expected = normalize_language(language)
+    if not text or not _is_response_language_mismatch(text, expected):
+        return response_text
+    fallback = _language_guard_fallback(original_text, expected)
+    llm_logger.warning(
+        "llm_lang_mismatch expected=%s got=%s stage=%s preview=%s",
+        expected,
+        detect_language(text),
+        stage,
+        text[:60],
+    )
+    return fallback or response_text
 
 
 def _execute_confirmed_payload(payload):
@@ -2424,6 +2982,23 @@ def _rewrite_followup_command(text, language="en"):
             "followup_rewrite": "confirmation_implicit_no",
             "token": pending_token,
         }
+
+    if pending_token == "pin_required":
+        # A PIN is pending: digit/number-word utterances are intercepted
+        # earlier in route_command. Anything else that looks like a
+        # confirm/yes phrase just gets re-prompted for the PIN itself.
+        if (
+            normalized in _YES_CONFIRM_FOLLOWUP_TEXTS
+            or normalized in _CONFIRM_FOLLOWUP_TEXTS
+            or _YES_WITH_FACTOR_RE.match(raw)
+            or _AR_YES_WITH_FACTOR_RE.match(raw)
+            or _CONFIRM_IT_WITH_FACTOR_RE.match(raw)
+            or _AR_CONFIRM_IT_WITH_FACTOR_RE.match(raw)
+        ):
+            return raw, {
+                "followup_blocked": True,
+                "followup_message": render_template("pin_required_prompt", language),
+            }
 
     yes_with_factor_match = _YES_WITH_FACTOR_RE.match(raw) or _AR_YES_WITH_FACTOR_RE.match(raw)
     if yes_with_factor_match:
@@ -2712,19 +3287,33 @@ def _rewrite_followup_command(text, language="en"):
 
 def _update_short_term_context(parsed, success, message, meta):
     token = str(meta.get("token") or "").strip().lower()
-    if token:
+    if token == "pin_required":
+        # PIN-pending flow: reuse the pending-confirmation slot as a flag
+        # (no real token is ever stored or spoken).
         session_memory.set_pending_confirmation_token(token)
-    elif parsed.intent == "OS_CONFIRMATION" and success:
+    elif token:
+        session_memory.set_pending_confirmation_token(token)
+    elif parsed.intent in {"OS_CONFIRMATION", "OS_PIN_CONFIRM"} and success:
         session_memory.clear_pending_confirmation_token()
     elif parsed.intent == "OS_CONFIRMATION" and not success:
         lowered_message = str(message or "").lower()
         if "not found or expired" in lowered_message or "token expired" in lowered_message:
             session_memory.clear_pending_confirmation_token()
+    elif parsed.intent == "OS_PIN_CONFIRM" and not success:
+        lowered_message = str(message or "").lower()
+        if "wrong pin" not in lowered_message:
+            session_memory.clear_pending_confirmation_token()
 
     if parsed.intent == "OS_FILE_SEARCH" and success and not meta.get("clarification_payload"):
-        candidate = str(message or "").strip()
-        if candidate and (":\\" in candidate or "/" in candidate):
-            session_memory.set_last_file(candidate)
+        # Prefer the raw resolved path from meta (present when a single match was
+        # found), falling back to the message text only when it looks like a path.
+        resolved = str(meta.get("resolved_file_path") or "").strip()
+        if resolved:
+            session_memory.set_last_file(resolved)
+        else:
+            candidate = str(message or "").strip()
+            if candidate and (":\\" in candidate or "/" in candidate):
+                session_memory.set_last_file(candidate)
 
     if parsed.intent in {"OS_APP_OPEN", "OS_APP_CLOSE"} and success:
         app_name = (
@@ -2869,17 +3458,42 @@ def _build_app_runtime_clarification(app_query, candidates, *, operation="open")
     return prompt, payload
 
 
-def _build_file_search_runtime_clarification(filename, matches):
+def _humanize_file_result(path: str, filename: str, language: str, offer_open: bool = False) -> str:
+    """Return a voice-friendly description of a search hit."""
+    loc = humanize_path(path)
+    lang_key = "ar" if language == "ar" else "en"
+    human = loc.get(lang_key) or loc.get("en") or path
+    if language == "ar":
+        msg = f"لقيت {human}"
+        if offer_open:
+            msg += " — تحب أفتحه؟"
+    else:
+        msg = f"Found {human}"
+        if offer_open:
+            msg += " — want me to open it?"
+    return msg
+
+
+def _build_file_search_runtime_clarification(filename, matches, *, action="file_info", extra_args=None):
     language = session_memory.get_preferred_language()
     all_options = []
     for index, match in enumerate(matches, start=1):
+        if FILE_HUMANIZE_PATHS:
+            loc = humanize_path(match)
+            label = loc.get("ar") if language == "ar" else loc.get("en")
+            label = label or match
+        else:
+            label = match
+        option_args = {"path": match}
+        if extra_args:
+            option_args.update(extra_args)
         all_options.append(
             {
                 "id": f"file_match_{index}",
-                "label": match,
+                "label": label,
                 "intent": "OS_FILE_NAVIGATION",
-                "action": "file_info",
-                "args": {"path": match},
+                "action": action,
+                "args": option_args,
                 "reply_tokens": [str(index), str(match).lower()],
             }
         )
@@ -2964,6 +3578,7 @@ def _execute_job_command(command_text):
 def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True, on_sentence=None):
     logger.info("Command parsed: %s (%s)", parsed.intent, parsed.action or "no-action")
     language = _infer_language_for_response(parsed, session_memory.get_preferred_language())
+    reply_language = resolve_reply_language(language, parsed)
 
     if parsed.intent == "DEMO_MODE":
         if parsed.action == "on":
@@ -3007,6 +3622,18 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
             return False, render_template("confirmation_failed", language, message=message), {}
         return _execute_confirmed_payload(payload)
 
+    if parsed.intent == "OS_PIN_CONFIRM":
+        spoken_pin = str(parsed.args.get("pin") or "")
+        status, message, payload = confirmation_manager.verify_pin_and_execute(spoken_pin)
+        if status == "executed":
+            success, exec_message, exec_meta = _execute_confirmed_payload(payload)
+            return success, exec_message, exec_meta
+        if status == "wrong":
+            return False, render_template("pin_wrong", language), {}
+        if status == "locked":
+            return False, render_template("pin_locked", language, message=message), {}
+        return False, render_template("missing_pending_confirmation", language), {}
+
     if parsed.intent == "OS_ROLLBACK":
         ok, message = undo_last_action()
         return ok, message, {}
@@ -3038,24 +3665,64 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
     if parsed.intent == "OS_FILE_SEARCH":
         filename = parsed.args.get("filename", "")
         if not filename:
-            return False, render_template("missing_filename_search", language), {}
-        root = parsed.args.get("search_path") or get_current_directory()
+            return False, render_template("missing_filename_search", reply_language), {}
+        search_path_arg = parsed.args.get("search_path")
+        root = search_path_arg or get_current_directory()
+        # When the user said "افتح/open ملف X" (open intent), selecting a result
+        # should open it; if they just said "دور على/find" it shows file info.
+        _open_verb_re = re.compile(
+            r"^(?:افتح|فتح|شغّل|شغل|open|launch|run|start)\b", re.IGNORECASE | re.UNICODE
+        )
+        clarif_action = "open_file" if _open_verb_re.search(parsed.raw or "") else "file_info"
         search_index_service.start()
         indexed_results = search_index_service.search(filename, root=root)
         if indexed_results:
             if len(indexed_results) > 1:
-                prompt, payload = _build_file_search_runtime_clarification(filename, indexed_results)
+                prompt, payload = _build_file_search_runtime_clarification(
+                    filename, indexed_results, action=clarif_action
+                )
                 return True, prompt, {"indexed_search": True, "clarification_payload": payload}
-            return True, indexed_results[0], {"indexed_search": True}
-        results = find_files(filename, search_path=parsed.args.get("search_path"))
-        if len(results) > 1:
-            prompt, payload = _build_file_search_runtime_clarification(filename, results)
+            hit = indexed_results[0]
+            msg = _humanize_file_result(hit, filename, reply_language, offer_open=True) if FILE_HUMANIZE_PATHS else hit
+            return True, msg, {"indexed_search": True, "resolved_file_path": hit}
+        results = find_files(filename, search_path=search_path_arg)
+        if not results:
+            return True, render_template("file_not_found", reply_language), {"indexed_search": False}
+        if len(results) == 1:
+            msg = _humanize_file_result(results[0], filename, reply_language, offer_open=True) if FILE_HUMANIZE_PATHS else results[0]
+            return True, msg, {"indexed_search": False, "resolved_file_path": results[0]}
+        # Multiple results: speak up to FILE_SPOKEN_RESULTS_MAX, offer more.
+        max_spoken = max(1, int(FILE_SPOKEN_RESULTS_MAX))
+        spoken = results[:max_spoken]
+        remaining = len(results) - len(spoken)
+        if FILE_HUMANIZE_PATHS:
+            parts = [_humanize_file_result(r, filename, reply_language) for r in spoken]
+        else:
+            parts = spoken
+        if remaining > 0:
+            prompt, payload = _build_file_search_runtime_clarification(
+                filename, results, action=clarif_action
+            )
             return True, prompt, {"indexed_search": False, "clarification_payload": payload}
-        message = results[0] if results else render_template("file_not_found", language)
-        return True, message, {"indexed_search": False}
+        return True, "\n".join(parts), {"indexed_search": False}
 
     if parsed.intent == "OS_FILE_NAVIGATION":
-        return file_navigation.handle(parsed)
+        if parsed.action in {"open_in_explorer", "reveal_in_explorer", "open_file"}:
+            parsed.args["_language"] = language
+        nav_success, nav_message, nav_meta = file_navigation.handle(parsed)
+        if not nav_success and (nav_meta or {}).get("error_code") == "ambiguous_target":
+            candidates = (nav_meta or {}).get("candidates") or []
+            if candidates:
+                target_name = str(parsed.args.get("path") or "").strip()
+                extra_args = {"permanent": parsed.action == "delete_item_permanent"} if parsed.action in {"delete_item", "delete_item_permanent"} else None
+                prompt, payload = _build_file_search_runtime_clarification(
+                    target_name,
+                    candidates,
+                    action=parsed.action,
+                    extra_args=extra_args,
+                )
+                return True, prompt, {"clarification_payload": payload}
+        return nav_success, nav_message, nav_meta
 
     if parsed.intent == "OS_APP_OPEN":
         app_name = parsed.args.get("app_name", "")
@@ -3138,6 +3805,40 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
         else:
             return to_router_tuple(request_system_command_result(action_key, command_args=dict(parsed.args or {}), language=language))
 
+    if parsed.intent == "OS_SCREEN_DESCRIBE":
+        from os_control.screen_context import describe_screen_auto
+        from core.config import SCREEN_DESCRIBE_MAX_APPS
+        description = describe_screen_auto(language=language, max_apps=SCREEN_DESCRIBE_MAX_APPS)
+        return True, description, {}
+
+    if parsed.intent == "IDENTITY":
+        from core.identity import get_identity_reply
+        from core.persona import get_active_persona
+        return True, get_identity_reply(language, persona=get_active_persona()), {}
+
+    if parsed.intent == "OS_NOTE":
+        from os_control.note_ops import save_note
+        from core.config import NOTE_PENDING_TIMEOUT_SECONDS
+        body = str(parsed.args.get("body") or "").strip()
+        name = str(parsed.args.get("name") or "").strip() or None
+        if body:
+            return True, save_note(body, name=name, language=language), {}
+        # No inline body — ask for it and store a pending slot
+        ask_en = "What do you want me to write in it?"
+        ask_ar = "عايز أكتب فيها إيه؟"
+        prompt = ask_ar if language == "ar" else ask_en
+        session_memory.set_pending_clarification(
+            {
+                "reason": "missing_slot",
+                "intent": "OS_NOTE",
+                "action": "create",
+                "missing_slot": "body",
+                "args": {"name": name} if name else {},
+            },
+            ttl_seconds=NOTE_PENDING_TIMEOUT_SECONDS,
+        )
+        return True, prompt, {}
+
     if parsed.intent == "OS_TIMER":
         action = parsed.action or ""
         # Semantic router may match OS_TIMER but leave action empty; re-parse the
@@ -3150,19 +3851,22 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
         if action == "set":
             seconds = parsed.args.get("seconds")
             if seconds is None:
-                return False, "Could not parse timer duration.", {}
+                _lang = language_result.language
+                return False, "مش قادر أفهم المدة." if _lang == "ar" else "Could not parse timer duration.", {}
             label = parsed.args.get("label", "Timer")
-            return True, set_timer(seconds, label=label), {}
+            return True, set_timer(seconds, label=label, language=language_result.language), {}
         if action == "set_alarm":
             alarm_time = str(parsed.args.get("alarm_time") or "").strip()
             if not alarm_time:
-                return False, "Could not parse alarm time.", {}
+                _lang = language_result.language
+                return False, "مش قادر أفهم وقت المنبه." if _lang == "ar" else "Could not parse alarm time.", {}
             label = parsed.args.get("label", "Alarm")
-            return True, set_alarm_at(alarm_time, label=label), {}
+            return True, set_alarm_at(alarm_time, label=label, language=language_result.language), {}
         if action == "cancel":
-            return True, cancel_timer(), {}
+            label = str(parsed.args.get("label") or "").strip()
+            return True, cancel_timer(label=label or None, language=language_result.language), {}
         if action == "list":
-            return True, list_timers(), {}
+            return True, list_timers(language=language_result.language), {}
         # Last resort: open Windows Clock so the user can set the timer manually.
         import subprocess
         subprocess.Popen(["cmd", "/c", "start", "", "ms-clock:"], shell=False)
@@ -3203,9 +3907,26 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
         return True, get_system_info(), {}
 
     if parsed.intent == "OS_EMAIL":
+        from core.config import EMAIL_ASK_DETAILS, NOTE_PENDING_TIMEOUT_SECONDS
         to = parsed.args.get("to", "")
         subject = parsed.args.get("subject", "")
         body = parsed.args.get("body", "")
+        # Two-turn details mode: if enabled and no details yet, ask before opening.
+        if EMAIL_ASK_DETAILS and not to and not subject and not body:
+            ask_ar = "تكتب لمين؟ وعن إيه؟"
+            ask_en = "Who do you want to email, and about what?"
+            prompt = ask_ar if language == "ar" else ask_en
+            session_memory.set_pending_clarification(
+                {
+                    "reason": "missing_slot",
+                    "intent": "OS_EMAIL",
+                    "action": "draft",
+                    "missing_slot": "to",
+                    "args": {},
+                },
+                ttl_seconds=NOTE_PENDING_TIMEOUT_SECONDS,
+            )
+            return True, prompt, {}
         return True, draft_email(to=to, subject=subject, body=body, language=language), {}
 
     if parsed.intent == "OS_CALENDAR":
@@ -3269,6 +3990,7 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
         return False, "LLM fallback is disabled for this execution path.", {}
 
     # LLM fallback — try live tool context first, then regular prompt
+    language = reply_language
     query_words = len((parsed.raw or "").split())
 
     # Phase 2: fetch live data for weather/news/search queries
@@ -3342,13 +4064,16 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
         # on the FULL response in _finalize_success_response after streaming ends.
         def _stream_callback(sentence):
             shaped = _apply_egyptian_dialect_style(sentence, parsed, language)
+            if _is_response_language_mismatch(shaped, language):
+                _log_llm_language_mismatch(shaped, language)
+                return
             stream_callback(shaped)
 
     else:
         _stream_callback = stream_callback
 
     if cache_eligible:
-        response = str(_cache_get_llm_response(package["prompt"], language) or "").strip()
+        response = str(_cache_get_llm_response(parsed.raw, language, package.get("tier")) or "").strip()
         cache_hit = bool(response)
         if cache_hit and _stream_callback:
             try:
@@ -3356,7 +4081,7 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
             except Exception:
                 pass
 
-    llm_num_ctx = (
+    llm_num_ctx = int(package.get("num_ctx") or 0) or (
         int(get_runtime_lightweight_num_ctx(default=LLM_LIGHTWEIGHT_NUM_CTX))
         if use_lightweight
         else None
@@ -3390,7 +4115,7 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
             if LLM_APPEND_SOURCE_CITATIONS and _claude_kb_sources:
                 response += _format_source_citations(_claude_kb_sources)
             if cache_eligible and response:
-                _cache_put_llm_response(_claude_msgs["user"], language, response)
+                _cache_put_llm_response(parsed.raw, language, response, package.get("tier"))
         else:
             response = (
                 ask_llm_streaming(
@@ -3404,8 +4129,9 @@ def _dispatch(parsed, *, allow_batch=True, allow_job_queue=True, allow_llm=True,
             if LLM_APPEND_SOURCE_CITATIONS and package["kb_sources"]:
                 response += _format_source_citations(package["kb_sources"])
             if cache_eligible and response:
-                _cache_put_llm_response(package["prompt"], language, response)
+                _cache_put_llm_response(parsed.raw, language, response, package.get("tier"))
 
+    _log_llm_language_mismatch(response, language)
     return (
         True,
         response,
@@ -3530,6 +4256,8 @@ def route_command(
     original_text = text or ""
     start = time.perf_counter()
     forced_language = _normalize_supported_language_tag(detected_language)
+    if looks_romanized_arabic(original_text):
+        forced_language = "ar"
     script_hint = detect_language_hint(original_text, fallback="")
     if forced_language and script_hint in {"ar", "en"} and forced_language != script_hint:
         forced_language = ""
@@ -3571,6 +4299,27 @@ def route_command(
     session_memory.set_preferred_language(language_result.language)
     session_memory.record_language_turn(language_result.language)
 
+    if (
+        SENSITIVE_CONFIRM_MODE == "pin"
+        and session_memory.get_pending_confirmation_token() == "pin_required"
+        and confirmation_manager.has_pending_pin_action()
+    ):
+        pin_parsed = try_parse_pin_confirm(effective_text) or try_parse_pin_confirm(original_text)
+        if pin_parsed is not None:
+            pin_parsed.raw = original_text
+            try:
+                success, response, dispatch_meta = _dispatch(pin_parsed)
+            except Exception as exc:
+                logger.error("PIN confirmation dispatch failed: %s", exc)
+                success, response, dispatch_meta = False, "Sorry, I had an internal error.", {}
+            latency = time.perf_counter() - start
+            meta = {"language": language_result.language}
+            if dispatch_meta:
+                meta.update(dispatch_meta)
+            metrics.record_command("OS_PIN_CONFIRM", success, latency, language=language_result.language)
+            _update_short_term_context(pin_parsed, success, response, meta)
+            return response
+
     mode_toggle_message = _try_handle_response_mode_toggle(effective_text, language_result.language)
     if mode_toggle_message:
         latency = time.perf_counter() - start
@@ -3586,7 +4335,10 @@ def route_command(
 
     if followup_meta.get("followup_cancel_confirmation"):
         token = str(followup_meta.get("token") or "").strip().lower()
-        ok, _cancel_message = confirmation_manager.cancel(token)
+        if token == "pin_required":
+            ok, _cancel_message = confirmation_manager.cancel_pending_pin()
+        else:
+            ok, _cancel_message = confirmation_manager.cancel(token)
         session_memory.clear_pending_confirmation_token()
         if ok:
             return render_template("confirmation_cancelled", language_result.language)
@@ -3740,11 +4492,23 @@ def route_command(
                 option,
                 language=language_result.language,
             )
+            resolved_action = option.get("action", "")
+            # If the reply itself contained an open verb ("open number one",
+            # "افتح الأول") and the option was baked with file_info (because
+            # the original search used "find/دور"), upgrade to open_file so
+            # the file actually opens instead of showing metadata.
+            if resolved_action == "file_info" and pending_reason == "file_search_multiple_matches":
+                _reply_open_re = re.compile(
+                    r"\b(?:open|افتح|فتح|شغل|launch|run|start)\b",
+                    re.IGNORECASE | re.UNICODE,
+                )
+                if _reply_open_re.search(original_text):
+                    resolved_action = "open_file"
             parsed = ParsedCommand(
                 intent=option.get("intent", "LLM_QUERY"),
                 raw=original_text,
                 normalized=" ".join(effective_text.lower().split()).strip(),
-                action=option.get("action", ""),
+                action=resolved_action,
                 args=dict(option.get("args") or {}),
             )
             success = False
@@ -3886,6 +4650,17 @@ def route_command(
     parser_candidate = forced_parsed or precomputed_parser_candidate or parse_command(effective_text)
     parser_candidate.raw = original_text
 
+    explanatory_llm_query = _looks_like_explanatory_llm_query(original_text)
+    if explanatory_llm_query:
+        parser_candidate = ParsedCommand(
+            intent="LLM_QUERY",
+            raw=original_text,
+            normalized=" ".join(str(effective_text or "").lower().split()).strip(),
+            action="",
+            args={},
+        )
+        parsed = parser_candidate if forced_parsed is not None else None
+
     # Quick-calc fast path: resolve math expressions before any routing tier or LLM.
     # Only runs when the parser didn't recognise a structured command (LLM_QUERY).
     if parsed is None and str(getattr(parser_candidate, "intent", "") or "") in ("LLM_QUERY", ""):
@@ -3920,7 +4695,7 @@ def route_command(
         "nlp_matched_keywords": [],
     }
 
-    if parsed is None and NLU_INTENT_ROUTING_ENABLED:
+    if parsed is None and NLU_INTENT_ROUTING_ENABLED and not explanatory_llm_query:
         # Tier 1 fast-path: high-confidence regex parser match
         parser_fastpath_assessment = _select_parser_fastpath_assessment(
             original_text,
@@ -3931,7 +4706,7 @@ def route_command(
             parsed = parser_candidate
             nlu_meta["nlu_fastpath"] = True
 
-    if parsed is None:
+    if parsed is None and not explanatory_llm_query:
         # Tier 2: Semantic router — embedding similarity (~5ms)
         semantic_parsed, semantic_meta = _try_semantic_routing(
             original_text,
@@ -3941,7 +4716,7 @@ def route_command(
         if semantic_parsed is not None:
             parsed = semantic_parsed
 
-    if parsed is None:
+    if parsed is None and not explanatory_llm_query:
         # Tier 3: Keyword NLP — fuzzy keyword matching
         keyword_nlp_parsed, keyword_nlp_meta = _try_keyword_nlp_routing(
             original_text,
@@ -3965,7 +4740,7 @@ def route_command(
             parsed = parser_candidate
             nlu_meta["informational_query_preferred_llm"] = True
 
-    if parsed is None and _should_try_tool_tier(original_text, parser_candidate):
+    if parsed is None and not explanatory_llm_query and _should_try_tool_tier(original_text, parser_candidate):
         tool_result = (
             call_tool_tier_claude(original_text)
             if LLM_BACKEND == "claude"
@@ -4382,6 +5157,43 @@ def route_command(
         success = False
 
     _update_short_term_context(parsed, success, response, meta)
+
+    # Inline-PIN shortcut: if the command just created a pending PIN action AND
+    # the same utterance already contains the PIN (e.g. "shutdown, pin is 2468"),
+    # verify it immediately rather than forcing a second turn.
+    if (
+        SENSITIVE_CONFIRM_MODE == "pin"
+        and meta.get("token", "").lower() == "pin_required"
+        and confirmation_manager.has_pending_pin_action()
+    ):
+        inline_pin = extract_pin_from_text(original_text)
+        if inline_pin:
+            status, _msg, payload = confirmation_manager.verify_pin_and_execute(inline_pin)
+            if status == "executed":
+                try:
+                    pin_success, pin_response, pin_meta = _execute_confirmed_payload(payload)
+                except Exception as exc:
+                    logger.error("Inline-PIN execution failed: %s", exc)
+                    pin_success, pin_response, pin_meta = False, "Sorry, I had an internal error.", {}
+                pin_parsed = ParsedCommand(
+                    intent="OS_PIN_CONFIRM",
+                    raw=original_text,
+                    normalized=" ".join(str(original_text or "").lower().split()),
+                    action="",
+                    args={"pin": inline_pin},
+                )
+                _update_short_term_context(pin_parsed, pin_success, pin_response, pin_meta or {})
+                session_memory.clear_pending_confirmation_token()
+                latency = time.perf_counter() - start
+                metrics.record_command("OS_PIN_CONFIRM", pin_success, latency, language=language_result.language)
+                if pin_success:
+                    pin_response = _finalize_success_response(
+                        pin_response, pin_parsed, language_result.language, original_text, tone_meta, realtime=realtime
+                    )
+                    if _should_store_turn(pin_parsed, pin_response):
+                        session_memory.add_turn(original_text, pin_response, language=language_result.language, intent="OS_PIN_CONFIRM")
+                return _format_demo_output(pin_parsed, pin_success, pin_response, pin_meta or {})
+
     latency = time.perf_counter() - start
     metrics.record_command(parsed.intent, success, latency, language=language_result.language)
     log_structured(

@@ -1,9 +1,9 @@
-"""Voice-Optimized Response Shaper — Task 2.2 / 4.2.
+"""Voice-Optimized Response Shaper -- Task 2.2 / 4.2.
 
 Two responsibilities:
   1. Action confirmation templates: for known OS intents, returns a short bilingual
      phrase instead of whatever the OS layer produced (which is always English).
-     This means "افتح كروم" gets "بفتح كروم." rather than "Opening Google Chrome."
+     This means 'افتح كروم' gets 'بيفتح كروم.' rather than 'Opening Google Chrome.'
 
   2. LLM voice constraint: provides a prompt-suffix fragment that is injected into
      the LLM prompt before generation, constraining the model to 1-4 natural spoken
@@ -20,8 +20,11 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Optional
 
+from core.persona import get_active_persona
+from core.voice_normalizer import normalize_for_voice
+
 # ---------------------------------------------------------------------------
-# Action templates — (intent, action) → {language: text}
+# Action templates -- (intent, action) -> {language: text}
 # Placeholders resolved by _render_template from the entities dict.
 # Templates that contain {n} or other optional fields return "" when the
 # field is missing; the shaper then falls through to the OS layer message.
@@ -33,11 +36,11 @@ ACTION_TEMPLATES: Dict[tuple, Dict[str, str]] = {
     # -----------------------------------------------------------------------
     ("OS_APP_OPEN", "open"): {
         "en": "Opening {app_name}.",
-        "ar": "بفتح {app_name}.",
+        "ar": "بيفتح {app_name}.",
     },
     ("OS_APP_OPEN", ""): {
         "en": "Opening {app_name}.",
-        "ar": "بفتح {app_name}.",
+        "ar": "بيفتح {app_name}.",
     },
     ("OS_APP_OPEN", "not_found"): {
         "en": "I can't find {app_name}.",
@@ -45,11 +48,11 @@ ACTION_TEMPLATES: Dict[tuple, Dict[str, str]] = {
     },
     ("OS_APP_CLOSE", "close"): {
         "en": "Closing {app_name}.",
-        "ar": "بقفل {app_name}.",
+        "ar": "بيقفل {app_name}.",
     },
     ("OS_APP_CLOSE", ""): {
         "en": "Closing {app_name}.",
-        "ar": "بقفل {app_name}.",
+        "ar": "بيقفل {app_name}.",
     },
     ("OS_APP_CLOSE", "not_found"): {
         "en": "I can't find {app_name}.",
@@ -61,15 +64,15 @@ ACTION_TEMPLATES: Dict[tuple, Dict[str, str]] = {
     # -----------------------------------------------------------------------
     ("OS_TIMER", "set"): {
         "en": "Timer set for {duration}.",
-        "ar": "التايمر اتظبط على {duration}.",
+        "ar": "تمام، التايمر اتضبط على {duration}.",
     },
     ("OS_TIMER", "set_alarm"): {
         "en": "Alarm set for {alarm_time}.",
-        "ar": "المنبه اتظبط على {alarm_time}.",
+        "ar": "تمام، المنبه اتضبط الساعة {alarm_time}.",
     },
     ("OS_TIMER", "done"): {
         "en": "Time's up! {label}",
-        "ar": "الوقت خلص! {label}",
+        "ar": "خلص الوقت! {label}",
     },
     ("OS_TIMER", "cancel"): {
         "en": "Timer cancelled.",
@@ -143,7 +146,7 @@ ACTION_TEMPLATES: Dict[tuple, Dict[str, str]] = {
     # -----------------------------------------------------------------------
     ("OS_SYSTEM_COMMAND", "lock"): {
         "en": "Locking the computer.",
-        "ar": "بقفل الجهاز.",
+        "ar": "بيقفل الجهاز.",
     },
     ("OS_SYSTEM_COMMAND", "sleep"): {
         "en": "Going to sleep.",
@@ -287,7 +290,7 @@ ACTION_TEMPLATES: Dict[tuple, Dict[str, str]] = {
     },
     ("OS_CLIPBOARD", "clear"): {
         "en": "Clipboard cleared.",
-        "ar": "الكليب بورد اتمسح.",
+        "ar": "الكليبورد اتمسح.",
     },
 
     # -----------------------------------------------------------------------
@@ -300,7 +303,7 @@ ACTION_TEMPLATES: Dict[tuple, Dict[str, str]] = {
 }
 
 # ---------------------------------------------------------------------------
-# Dialogue templates — standalone short phrases for slot-filling, errors,
+# Dialogue templates -- standalone short phrases for slot-filling, errors,
 # and conversational turn-taking.  Keyed by a simple string name.
 # ---------------------------------------------------------------------------
 DIALOGUE_TEMPLATES: Dict[str, Dict[str, str]] = {
@@ -371,13 +374,13 @@ DIALOGUE_TEMPLATES: Dict[str, Dict[str, str]] = {
 # Injected into the prompt before the ASSISTANT: marker.
 # ---------------------------------------------------------------------------
 VOICE_PROMPT_SUFFIX: Dict[str, str] = {
-    "en": "RULE: Answer in 1-2 sentences. No lists, no markdown, no formatting. Speak naturally.",
-    "ar": "RULE: جاوب في جملة أو اتنين بالمصري. من غير قوائم أو تنسيق.",
+    "en": "RULE: Answer directly in 1-2 sentences. Do not repeat or restate the user's question. No lists, no markdown, no formatting. Speak naturally.",
+    "ar": "RULE: جاوب مباشرة في جملة أو اتنين بالمصري. متكررش سؤال المستخدم ولا تعيد صياغته. من غير قوائم أو تنسيق.",
 }
 
 CONVERSATIONAL_PROMPT_SUFFIX: Dict[str, str] = {
-    "en": "RULE: Keep your answer under 4 sentences. No lists or markdown formatting.",
-    "ar": "RULE: خلي إجابتك أقل من ٤ جمل. من غير قوائم أو تنسيق.",
+    "en": "RULE: Answer directly under 4 sentences. Do not repeat or restate the user's question. No lists or markdown formatting.",
+    "ar": "RULE: جاوب مباشرة في أقل من ٤ جمل. متكررش سؤال المستخدم ولا تعيد صياغته. من غير قوائم أو تنسيق.",
 }
 
 # Intents that benefit from a short factual-answer constraint (1-2 sentences)
@@ -426,6 +429,36 @@ def _split_sentences(text: str) -> list[str]:
     """Split text into sentence-like chunks on sentence-ending punctuation."""
     parts = _SENT_END_RE.split(text.strip())
     return [p.strip() for p in parts if p.strip()]
+
+
+def _persona_sentence_cap(persona: dict, language: str, fallback: int) -> int:
+    lang = "ar" if str(language or "").strip().lower() == "ar" else "en"
+    length = str((persona.get("voice_length") or {}).get(lang) or "").strip().lower()
+    if not length:
+        return fallback
+    if lang == "ar":
+        if any(token in length for token in ("اتنين", "اثنين", "٢", "2")):
+            return min(fallback, 2)
+        if any(token in length for token in ("جملة", "واحدة", "١", "1")):
+            return min(fallback, 1)
+    numbers = [int(item) for item in re.findall(r"\d+", length)]
+    if numbers:
+        return max(1, min(fallback, max(numbers)))
+    return fallback
+
+
+def _strip_persona_forbidden(text: str, persona: dict, language: str) -> str:
+    lang = "ar" if str(language or "").strip().lower() == "ar" else "en"
+    cleaned = str(text or "")
+    for phrase in (persona.get("forbidden") or {}).get(lang, []):
+        pattern = str(phrase or "").strip()
+        if not pattern:
+            continue
+        cleaned = re.sub(re.escape(pattern), "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    cleaned = re.sub(r"\s+([.,;:!?؟])", r"\1", cleaned)
+    cleaned = re.sub(r"^[\s,.;:!?؟-]+", "", cleaned)
+    return cleaned.strip()
 
 
 class ResponseShaper:
@@ -527,19 +560,19 @@ class ResponseShaper:
     ) -> str:
         """Fill in a template string from entities dict.
 
-        Recognized placeholder → entity key mappings:
-          {app_name}     → entities["app_name"]
-          {duration}     → entities["seconds"] / entities["duration_seconds"]
-          {alarm_time}   → entities["alarm_time"]
-          {n}            → entities["volume_level"] / entities["brightness_level"]
+        Recognized placeholder -> entity key mappings:
+          {app_name}     -> entities["app_name"]
+          {duration}     -> entities["seconds"] / entities["duration_seconds"]
+          {alarm_time}   -> entities["alarm_time"]
+          {n}            -> entities["volume_level"] / entities["brightness_level"]
                            / entities["level"] / entities["value"] / entities["n"]
-          {count}        → entities["count"] / entities["n_results"]
-          {search_query} → entities["search_query"] / entities["query"]
-          {setting}      → entities["setting"] / entities["setting_name"]
+          {count}        -> entities["count"] / entities["n_results"]
+          {search_query} -> entities["search_query"] / entities["query"]
+          {setting}      -> entities["setting"] / entities["setting_name"]
                            / entities["category"]
-          {time_str}     → entities["time_str"] / entities["trigger_time"]
-          {result}       → entities["result"]
-          {label}        → entities["label"]  (optional — defaults to "")
+          {time_str}     -> entities["time_str"] / entities["trigger_time"]
+          {result}       -> entities["result"]
+          {label}        -> entities["label"]  (optional -- defaults to "")
 
         Returns empty string if a required placeholder cannot be filled, so the
         caller can fall through to the raw OS message.
@@ -642,6 +675,8 @@ class ResponseShaper:
         """Strip markdown formatting and cap to `max_sentences` sentences."""
         if not text:
             return text
+        persona = get_active_persona()
+        max_sentences = _persona_sentence_cap(persona, language, max_sentences)
 
         # Strip markdown
         text = _MD_BOLD_RE.sub(r"\1", text)
@@ -663,7 +698,8 @@ class ResponseShaper:
             if not text.endswith((".", "!", "?", "؟")):
                 text += "."
 
-        return text
+        text = _strip_persona_forbidden(text, persona, language)
+        return normalize_for_voice(text, language, persona)
 
 
 # ---------------------------------------------------------------------------

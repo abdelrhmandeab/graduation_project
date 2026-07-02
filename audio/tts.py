@@ -7,8 +7,9 @@ import time
 import wave
 import warnings
 
+import concurrent.futures as _cf
+
 from core.config import (
-    BARGE_IN_VAD_ENABLED,
     ELEVENLABS_API_KEY,
     ELEVENLABS_BASE_URL,
     TTS_ARABIC_SPOKEN_DIALECT,
@@ -17,26 +18,23 @@ from core.config import (
     TTS_EDGE_MIXED_SCRIPT_MAX_CHUNKS,
     TTS_EDGE_MIXED_SCRIPT_MAX_TEXT_LENGTH,
     TTS_EDGE_MIXED_SCRIPT_MIN_TEXT_LENGTH,
-    TTS_EDGE_ARABIC_VOICE,
-    TTS_EDGE_ARABIC_VOICE_FALLBACKS,
-    TTS_EDGE_ARABIC_RATE,
-    TTS_EDGE_ARABIC_PITCH,
-    TTS_EDGE_ARABIC_VOLUME,
-    TTS_EDGE_RATE,
-    TTS_EDGE_VOICE,
     TTS_ELEVENLABS_ARABIC_ENABLED,
-    TTS_ELEVENLABS_ARABIC_MODEL_ID,
-    TTS_ELEVENLABS_ARABIC_VOICE_ID,
+    TTS_ELEVENLABS_MODEL_ID,
     TTS_ELEVENLABS_TIMEOUT_SECONDS,
     TTS_EGYPTIAN_COLLOQUIAL_REWRITE,
     TTS_ENABLED,
+    TTS_PARAGRAPH_GAP_MS,
     TTS_QUALITY_MODE,
+    TTS_SENTENCE_FIRST_FLUSH_MIN_CHARS,
+    TTS_SENTENCE_GAP_MS,
+    TTS_SENTENCE_STREAMING_ENABLED,
+    TTS_SENTENCE_SYNTH_WORKERS,
     TTS_SIMULATED_CHAR_DELAY,
 )
-from audio.barge_in import BargeInMonitor
 from core.logger import logger
-from core.metrics import metrics, record_stage_timing
+from core.metrics import latency_tracker, metrics, record_stage_timing
 from core.persona import persona_manager
+from core.tts_voices import VoiceProfile, get_active_voice_profile, format_voice_profile_summary
 
 try:
     with warnings.catch_warnings():
@@ -196,22 +194,16 @@ _EGYPTIAN_TTS_PHRASE_REPLACEMENTS = (
     # Multi-word expressions (before their shorter components)
     ("بكل تأكيد", "اكيد"),
     ("بالتأكيد", "اكيد"),
-    ("علاوة على ذلك", "وكمان"),
     ("بالإضافة إلى ذلك", "وكمان"),
     ("بالإضافة الى ذلك", "وكمان"),
-    ("بالإضافة إلى", "كمان"),
     ("في الوقت الحالي", "دلوقتي"),
     ("في الوقت الراهن", "دلوقتي"),
     ("في هذه اللحظة", "دلوقتي"),
     ("في هذا الوقت", "دلوقتي"),
     ("على سبيل المثال", "مثلاً"),
     ("على الأرجح", "غالباً"),
-    ("على الأقل", "على الأقل"),
-    ("على الأكثر", "على الأكثر"),
-    ("بشكل عام", "بشكل عام"),
     ("بشكل خاص", "خصوصاً"),
     ("بشكل سريع", "بسرعة"),
-    ("بشكل كبير", "بشكل كبير"),
     ("من الضروري", "لازم"),
     ("من الأفضل", "الأحسن"),
     ("من الممكن", "ممكن"),
@@ -281,7 +273,6 @@ _EGYPTIAN_TTS_PHRASE_REPLACEMENTS = (
     ("كي لا", "عشان ما"),
     ("لكي", "عشان"),
     ("كذلك", "كمان"),
-    ("بحيث", "بحيث"),
     ("بينما", "وانت"),
     ("في حين", "وانت"),
     ("إذا", "لو"),
@@ -297,7 +288,6 @@ _EGYPTIAN_TTS_PHRASE_REPLACEMENTS = (
     ("أولاً", "الأول"),
     ("ثانياً", "تانياً"),
     ("ثالثاً", "تالتاً"),
-    ("رابعاً", "رابعاً"),
     ("أخيراً", "في الآخر"),
     ("من فضلك", "لو سمحت"),
     # Ownership / pronouns
@@ -337,20 +327,17 @@ _EGYPTIAN_TTS_PHRASE_REPLACEMENTS = (
     ("لذلك", "عشان كده"),
     ("لذا", "عشان كده"),
     ("ولذلك", "وعشان كده"),
-    ("وبالتالي", "وبكده"),
     ("وبذلك", "وبكده"),
     ("نتيجة لذلك", "وعشان كده"),
     ("بسبب ذلك", "عشان كده"),
     ("نظراً لذلك", "بسبب كده"),
     ("حيث أن", "بما إن"),
     ("بما أن", "بما إن"),
-    ("بحيث", "بحيث"),
     ("على الرغم من أن", "مع إن"),
     ("على الرغم من", "رغم"),
     # Contrast / comparison
     ("من ناحية أخرى", "من تاني ناحية"),
     ("من جهة أخرى", "من تاني ناحية"),
-    ("في المقابل", "في المقابل"),
     # Additional quantity/degree
     ("دائماً", "دايماً"),
     ("دائما", "دايماً"),
@@ -370,7 +357,6 @@ _EGYPTIAN_TTS_PHRASE_REPLACEMENTS = (
     # Additional connectors
     ("من خلال", "عن طريق"),
     ("بواسطة", "عن طريق"),
-    ("باستخدام", "باستخدام"),
     ("وفقاً", "حسب"),
     ("طبقاً", "حسب"),
     ("وفقاً لـ", "حسب"),
@@ -426,7 +412,6 @@ _EGYPTIAN_TTS_WORD_REPLACEMENTS = (
     ("تريدين", "عايزة"),
     ("نريد", "عايزين"),
     ("أعرف", "عارف"),
-    ("تعرف", "تعرف"),
     ("يعرف", "بيعرف"),
     ("أعلم", "عارف"),
     ("تعلم", "تعرف"),
@@ -470,12 +455,9 @@ _EGYPTIAN_TTS_WORD_REPLACEMENTS = (
     ("ببطء", "براحتك"),
     ("صحيح", "صح"),
     ("خاطئ", "غلط"),
-    ("غلط", "غلط"),
-    ("كلام", "كلام"),
     ("حسناً", "تمام"),
     ("حسنا", "تمام"),
     ("موافق", "تمام"),
-    ("شكراً", "شكراً"),
     ("عفواً", "أهلاً"),
     ("بالطبع", "طبعاً"),
     ("ربما", "يمكن"),
@@ -483,73 +465,73 @@ _EGYPTIAN_TTS_WORD_REPLACEMENTS = (
     # Quantity / degree
     ("بعض", "شوية"),
     ("معظم", "أغلب"),
-    # Common nouns commonly heard from MSA outputs
-    ("الناس", "الناس"),
+    # Common nouns
     ("الأشخاص", "الناس"),
     ("شخص", "حد"),
-    ("مكان", "مكان"),
     ("شيء", "حاجة"),
     ("أشياء", "حاجات"),
     # Additional single-word replacements
-    ("دائماً", "دايماً"),
-    ("دائما", "دايماً"),
-    ("فقط", "بس"),
-    ("أيضا", "كمان"),
-    ("إذن", "يبقى"),
-    ("الآن", "دلوقتي"),
     ("أعتقد", "بفكر"),
     ("ممتاز", "عظيم"),
-    ("رائع", "رائع"),
-    ("جميل", "جميل"),
     ("سيئ", "وحش"),
-    ("صعب", "صعب"),
-    ("سهل", "سهل"),
-    ("كبير", "كبير"),
-    ("صغير", "صغير"),
-    ("بسرعة", "بسرعة"),
-    ("ببطء", "براحتك"),
     ("قريباً", "قريب"),
     ("بعيداً", "بعيد"),
-    ("هنا", "هنا"),
-    ("هناك", "هناك"),
-    ("أحياناً", "أحياناً"),
-    ("دائماً", "دايماً"),
     ("أبداً", "خالص"),
     ("لابد", "لازم"),
-    ("ضروري", "ضروري"),
-    ("مهم", "مهم"),
     ("خطأ", "غلط"),
-    ("صحيح", "صح"),
     ("جيد", "كويس"),
     ("ليس جيداً", "مش كويس"),
-    ("تقريباً", "تقريباً"),
     ("أكيد", "اكيد"),
-    ("بالطبع", "طبعاً"),
 )
 
 
-def _rewrite_to_egyptian_colloquial(text):
-    """Rewrite an MSA-tilted line into Egyptian Arabic for natural TTS output.
+_EGY_MARKERS = frozenset((
+    "ده", "دي", "إيه", "بيّ", "كده", "يبقى", "إنت", "إنتي",
+    "النهاردة", "دلوقتي", "مش", "بيعمل", "عايز", "بحب",
+    "يلعب", "بيقول", "بيعمل", "بينور", "عاوز", "طب", "بص",
+))
 
-    Phase 2.10 hardening:
-      * word-boundary lookarounds use Unicode word characters (``\\w``) so
-        Arabic words next to punctuation (``؟``, ``،``, ``.``, ``!``) are
-        rewritten — the previous whitespace-only boundary missed them;
-      * phrase-level replacements run first so multi-word MSA expressions
-        (``لا أستطيع``, ``سوف أقوم``) win over their single-word forms.
-    """
+
+def _count_egy_markers(text):
+    count = 0
+    for marker in _EGY_MARKERS:
+        count += text.count(marker)
+    return count
+
+
+def _rewrite_to_egyptian_colloquial(text):
+    """Rewrite an MSA-tilted line into Egyptian Arabic for natural TTS output."""
+    from core.config import TTS_EGY_REWRITE_AGGRESSIVE, TTS_EGY_REWRITE_SKIP_THRESHOLD
+
     updated = str(text or "")
     if not updated:
         return updated
 
-    for source, target in _EGYPTIAN_TTS_PHRASE_REPLACEMENTS:
-        updated = updated.replace(source, target)
+    if not TTS_EGY_REWRITE_AGGRESSIVE:
+        marker_count = _count_egy_markers(updated)
+        if marker_count >= TTS_EGY_REWRITE_SKIP_THRESHOLD:
+            logger.debug("egy_rewrite skipped: already_egy markers=%d", marker_count)
+            return updated
 
+    phrase_subs = 0
+    for source, target in _EGYPTIAN_TTS_PHRASE_REPLACEMENTS:
+        if source in updated:
+            updated = updated.replace(source, target)
+            phrase_subs += 1
+
+    word_subs = 0
     for source, target in _EGYPTIAN_TTS_WORD_REPLACEMENTS:
         pattern = rf"(?<!\w){re.escape(source)}(?!\w)"
-        updated = re.sub(pattern, target, updated, flags=re.UNICODE)
+        new_text = re.sub(pattern, target, updated, flags=re.UNICODE)
+        if new_text != updated:
+            word_subs += 1
+            updated = new_text
 
     updated = re.sub(r"\s+", " ", updated).strip()
+
+    if phrase_subs > 0 or word_subs > 0:
+        logger.info("egy_rewrite phrases=%d words=%d", phrase_subs, word_subs)
+
     return updated
 
 
@@ -569,37 +551,8 @@ class SpeechEngine:
         self._edge_tts_unsupported_voices = set()
         self._elevenlabs_unavailable_logged = False
         self._enabled = bool(TTS_ENABLED)
-        # Phase 2.11 — VAD barge-in monitor (started/stopped around speak calls).
-        self._barge_in_monitor = BargeInMonitor(
-            on_barge_in=self._on_barge_in_detected,
-            is_active=self.is_speaking,
-        )
-
-    def _on_barge_in_detected(self):
-        """Stop active TTS when the VAD monitor flags user speech.
-
-        Runs on the monitor thread; ``interrupt()`` is thread-safe.
-        """
-        logger.info("Barge-in: stopping TTS so the user can speak.")
-        self.interrupt()
-        try:
-            metrics.record_stage("barge_in_interrupt", 0.0, success=True)
-        except Exception:
-            pass
-
-    def _start_barge_in_monitor(self):
-        if not BARGE_IN_VAD_ENABLED:
-            return
-        try:
-            self._barge_in_monitor.start()
-        except Exception as exc:
-            logger.debug("Could not start barge-in monitor: %s", exc)
-
-    def _stop_barge_in_monitor(self):
-        try:
-            self._barge_in_monitor.stop()
-        except Exception as exc:
-            logger.debug("Could not stop barge-in monitor: %s", exc)
+        self._voice: VoiceProfile = get_active_voice_profile()
+        logger.info(format_voice_profile_summary(self._voice))
 
     def _normalize_backend(self, backend):
         raw = str(backend or "auto").strip().lower()
@@ -694,10 +647,6 @@ class SpeechEngine:
             self._thread = None
             self._queue_thread = None
 
-        # Stop the barge-in monitor first so it doesn't fire while we're tearing
-        # the playback thread down.
-        self._stop_barge_in_monitor()
-
         if process is not None:
             try:
                 process.terminate()
@@ -735,9 +684,170 @@ class SpeechEngine:
         with self._lock:
             self._thread = thread
         thread.start()
-        # Start the VAD barge-in monitor so the user can talk over the assistant.
-        self._start_barge_in_monitor()
         return True, "Speech started."
+
+    def synthesize_one_sentence(self, text, language=None):
+        """Synthesize a single sentence and return (sample_rate, waveform) or None on failure."""
+        synth_started = time.perf_counter()
+        spoken_text = self._prepare_text_for_speech(text, preferred_language=language)
+        if not spoken_text:
+            return None
+
+        arabic_preferred = self._is_arabic_preferred_text(spoken_text, preferred_language=language)
+        backend = str(self._resolve_backend() or "auto").strip().lower()
+        result = None
+
+        if backend in {"auto", "hybrid"}:
+            result = self._synthesize_elevenlabs(spoken_text)
+            if result is None:
+                fallback_language = "ar" if arabic_preferred else "en"
+                result = self._synthesize_edge_tts(spoken_text, preferred_language=fallback_language)
+        elif backend == "edge_tts":
+            lang_hint = "ar" if arabic_preferred else "en"
+            result = self._synthesize_edge_tts(spoken_text, preferred_language=lang_hint)
+
+        synth_elapsed = time.perf_counter() - synth_started
+        record_stage_timing(
+            "tts_synth", synth_elapsed,
+            lang="ar" if arabic_preferred else "en",
+            backend=backend,
+        )
+
+        return result
+
+    def _synthesize_elevenlabs(self, normalized_text):
+        """Synthesize via ElevenLabs and return (sample_rate, waveform) or None."""
+        if not bool(TTS_ELEVENLABS_ARABIC_ENABLED):
+            return None
+        if _elevenlabs_tts_on_cooldown():
+            return None
+        if not normalized_text:
+            return None
+
+        api_key = str(ELEVENLABS_API_KEY or "").strip()
+        voice_id = self._voice.elevenlabs_voice_id or ""
+        if ElevenLabs is None or not api_key or not voice_id:
+            return None
+
+        try:
+            client = ElevenLabs(
+                api_key=api_key,
+                base_url=str(ELEVENLABS_BASE_URL or "https://api.elevenlabs.io").rstrip("/"),
+                timeout=float(TTS_ELEVENLABS_TIMEOUT_SECONDS),
+            )
+        except Exception as exc:
+            logger.warning("ElevenLabs client initialization failed: %s", exc)
+            return None
+
+        profile = self._voice
+        voice_settings = {
+            "stability": profile.stability,
+            "similarity_boost": profile.similarity_boost,
+            "style": profile.style,
+            "use_speaker_boost": profile.use_speaker_boost,
+        }
+
+        convert_kwargs = {
+            "voice_id": voice_id,
+            "text": normalized_text,
+            "model_id": str(TTS_ELEVENLABS_MODEL_ID or "eleven_multilingual_v2"),
+            "output_format": "wav_24000",
+            "optimize_streaming_latency": 1,
+            "voice_settings": voice_settings,
+        }
+
+        try:
+            response = client.text_to_speech.convert(**convert_kwargs)
+        except Exception as exc:
+            if "quota_exceeded" in str(exc) or "status_code: 401" in str(exc) or "http 401" in str(exc).lower():
+                _set_elevenlabs_tts_cooldown(f"convert:{exc}")
+            logger.warning("ElevenLabs TTS sentence synth failed (voice_id=%s): %s", voice_id, exc)
+            return None
+
+        try:
+            audio_bytes = b"".join(response)
+        except Exception as exc:
+            if "quota_exceeded" in str(exc) or "status_code: 401" in str(exc) or "http 401" in str(exc).lower():
+                _set_elevenlabs_tts_cooldown(f"stream:{exc}")
+            logger.warning("ElevenLabs TTS stream read failed (voice_id=%s): %s", voice_id, exc)
+            return None
+
+        if not audio_bytes:
+            return None
+
+        return self._decode_edge_audio_bytes(audio_bytes)
+
+    def _synthesize_edge_tts(self, normalized_text, *, preferred_language=None):
+        """Synthesize via Edge-TTS and return (sample_rate, waveform) or None."""
+        try:
+            import edge_tts  # type: ignore
+        except Exception:
+            return None
+
+        if not normalized_text:
+            return None
+
+        voice_candidates = self._edge_tts_voice_candidates(normalized_text, preferred_language=preferred_language)
+        wants_arabic = self._is_arabic_preferred_text(normalized_text, preferred_language=preferred_language)
+        profile = self._voice
+        supports_output_format = self._edge_tts_supports_output_format(edge_tts)
+        can_decode_compressed = self._can_decode_edge_compressed_stream()
+
+        if not supports_output_format and not can_decode_compressed:
+            return None
+
+        async def _collect(voice_name):
+            # edge-tts's Communicate always treats `text` as plain text to be
+            # XML-escaped and spoken verbatim — it does not parse SSML passed
+            # this way. Passing a <speak>/<prosody> wrapper here previously
+            # caused the tag markup itself to be read aloud. Rate/pitch must
+            # go through the dedicated constructor kwargs instead.
+            edge_rate = (profile.rate_ar if wants_arabic else profile.rate_en) or "+0%"
+            edge_pitch = (profile.pitch_ar if wants_arabic else profile.pitch_en) or ""
+            supports_pitch = self._edge_tts_supports_parameter(edge_tts, "pitch")
+            kwargs = {"voice": voice_name, "rate": edge_rate}
+            if supports_pitch and edge_pitch:
+                kwargs["pitch"] = edge_pitch
+            if supports_output_format:
+                kwargs["output_format"] = "riff-24khz-16bit-mono-pcm"
+            speaker = edge_tts.Communicate(normalized_text, **kwargs)
+
+            chunks = []
+            stream = speaker.stream()
+            try:
+                async for event in stream:
+                    if self._stop_event.is_set():
+                        break
+                    if str(event.get("type") or "").lower() != "audio":
+                        continue
+                    data = event.get("data")
+                    if data:
+                        chunks.append(bytes(data))
+            finally:
+                close_stream = getattr(stream, "aclose", None)
+                if close_stream is not None:
+                    await close_stream()
+            return b"".join(chunks)
+
+        for voice_name in voice_candidates:
+            try:
+                audio_bytes = self._run_async(_collect(voice_name))
+                if self._stop_event.is_set():
+                    return None
+                if not audio_bytes:
+                    continue
+                decoded = self._decode_edge_audio_bytes(audio_bytes)
+                if decoded is not None:
+                    return decoded
+            except Exception as exc:
+                if self._is_edge_voice_unavailable_error(str(exc)):
+                    self._remember_edge_voice_unavailable(voice_name)
+        return None
+
+    def _is_paragraph_boundary(self, sentence_text):
+        """Return True if the sentence ends with a period/fullstop followed by implicit paragraph break."""
+        text = str(sentence_text or "").rstrip()
+        return text.endswith((".","。", "؟", "?", "!", "\n"))
 
     def speak_sentence_queue(self, sentences_iterator, language=None):
         if sentences_iterator is None:
@@ -749,6 +859,146 @@ class SpeechEngine:
         self.interrupt()
         self._stop_event.clear()
 
+        if not TTS_SENTENCE_STREAMING_ENABLED:
+            return self._speak_sentence_queue_sequential(sentences_iterator, language)
+
+        def _run_streaming_queue():
+            import numpy as np  # type: ignore
+
+            queue_started = time.perf_counter()
+            sentence_gap_samples = 0
+            paragraph_gap_samples = 0
+            playback_rate = 24000
+            first_word_recorded = False
+            sentence_count = 0
+
+            pool = _cf.ThreadPoolExecutor(
+                max_workers=TTS_SENTENCE_SYNTH_WORKERS,
+                thread_name_prefix="tts-synth",
+            )
+            try:
+                futures = []
+                sentence_texts = []
+                first_played = False
+
+                def _submit_sentence(text):
+                    utterance = " ".join(str(text or "").split()).strip()
+                    if not utterance or len(utterance) < TTS_SENTENCE_FIRST_FLUSH_MIN_CHARS:
+                        if utterance:
+                            sentence_texts.append(utterance)
+                            futures.append(pool.submit(self.synthesize_one_sentence, utterance, language))
+                        return
+                    sentence_texts.append(utterance)
+                    futures.append(pool.submit(self.synthesize_one_sentence, utterance, language))
+
+                drain_idx = 0
+
+                for sentence in sentences_iterator:
+                    if self._stop_event.is_set():
+                        break
+                    _submit_sentence(sentence)
+
+                    while drain_idx < len(futures) and futures[drain_idx].done():
+                        result = futures[drain_idx].result()
+                        if self._stop_event.is_set():
+                            break
+                        if result is not None:
+                            sr, waveform = result
+                            if not first_played:
+                                playback_rate = sr
+                                sentence_gap_samples = int(sr * TTS_SENTENCE_GAP_MS / 1000)
+                                paragraph_gap_samples = int(sr * TTS_PARAGRAPH_GAP_MS / 1000)
+                                first_played = True
+                                if not first_word_recorded:
+                                    first_word_recorded = True
+                                    latency_tracker.record(
+                                        "tts_first_word",
+                                        time.perf_counter() - queue_started,
+                                    )
+                            else:
+                                is_para = self._is_paragraph_boundary(
+                                    sentence_texts[drain_idx - 1] if drain_idx > 0 else ""
+                                )
+                                gap = paragraph_gap_samples if is_para else sentence_gap_samples
+                                if gap > 0:
+                                    silence = np.zeros(gap, dtype=np.float32)
+                                    self._play_waveform(silence, playback_rate, blocking=True)
+                                    if self._stop_event.is_set():
+                                        break
+
+                            self._play_waveform(waveform, sr, blocking=True)
+                            sentence_count += 1
+                        drain_idx += 1
+
+                while drain_idx < len(futures):
+                    if self._stop_event.is_set():
+                        break
+                    result = futures[drain_idx].result()
+                    if self._stop_event.is_set():
+                        break
+                    if result is not None:
+                        sr, waveform = result
+                        if not first_played:
+                            playback_rate = sr
+                            sentence_gap_samples = int(sr * TTS_SENTENCE_GAP_MS / 1000)
+                            paragraph_gap_samples = int(sr * TTS_PARAGRAPH_GAP_MS / 1000)
+                            first_played = True
+                            if not first_word_recorded:
+                                first_word_recorded = True
+                                latency_tracker.record(
+                                    "tts_first_word",
+                                    time.perf_counter() - queue_started,
+                                )
+                        else:
+                            is_para = self._is_paragraph_boundary(
+                                sentence_texts[drain_idx - 1] if drain_idx > 0 else ""
+                            )
+                            gap = paragraph_gap_samples if is_para else sentence_gap_samples
+                            if gap > 0:
+                                silence = np.zeros(gap, dtype=np.float32)
+                                self._play_waveform(silence, playback_rate, blocking=True)
+                                if self._stop_event.is_set():
+                                    break
+
+                        self._play_waveform(waveform, sr, blocking=True)
+                        sentence_count += 1
+                    drain_idx += 1
+            except Exception as exc:
+                logger.error("Streaming sentence queue failed: %s", exc)
+            finally:
+                total_elapsed = time.perf_counter() - queue_started
+                record_stage_timing("tts_playback", total_elapsed, backend="streaming")
+                if sentence_count > 0:
+                    backend = str(self._resolve_backend() or "auto").strip().lower()
+                    lang = str(language or "unknown").strip().lower()
+                    logger.info(
+                        "tts engine=%s profile=%s lang=%s sentences=%d playback=%.2fs",
+                        backend,
+                        self._voice.name,
+                        lang,
+                        sentence_count,
+                        total_elapsed,
+                    )
+                pool.shutdown(wait=False)
+                with self._lock:
+                    if (
+                        self._queue_thread
+                        and self._queue_thread.ident == threading.current_thread().ident
+                    ):
+                        self._queue_thread = None
+
+        thread = threading.Thread(
+            target=_run_streaming_queue,
+            name="jarvis-speech-queue",
+            daemon=True,
+        )
+        with self._lock:
+            self._queue_thread = thread
+        thread.start()
+        return True, "Speech queue started."
+
+    def _speak_sentence_queue_sequential(self, sentences_iterator, language=None):
+        """Fallback: synthesize and play each sentence one at a time (pre-Phase 2 behavior)."""
         def _run_sentence_queue():
             try:
                 for sentence in sentences_iterator:
@@ -770,8 +1020,6 @@ class SpeechEngine:
                         and self._queue_thread.ident == threading.current_thread().ident
                     ):
                         self._queue_thread = None
-                # Sentence queue done — release the barge-in monitor.
-                self._stop_barge_in_monitor()
 
         thread = threading.Thread(
             target=_run_sentence_queue,
@@ -781,34 +1029,41 @@ class SpeechEngine:
         with self._lock:
             self._queue_thread = thread
         thread.start()
-        # Phase 2.11 — barge-in monitor is shared across speak_async + queue paths.
-        self._start_barge_in_monitor()
         return True, "Speech queue started."
 
     def _resolve_backend(self):
         return self.get_backend()
 
     def _prepare_text_for_speech(self, text, *, preferred_language=None):
+        from core.tts_prosody import polish_for_voice
+
+        rewrite_started = time.perf_counter()
+
         normalized = " ".join(str(text or "").split()).strip()
         if not normalized:
             return normalized
 
-        if not self._is_arabic_preferred_text(normalized, preferred_language=preferred_language):
-            return normalized
+        is_arabic = self._is_arabic_preferred_text(normalized, preferred_language=preferred_language)
 
-        dialect = str(TTS_ARABIC_SPOKEN_DIALECT or "egyptian").strip().lower()
-        if dialect == "egyptian" and bool(TTS_EGYPTIAN_COLLOQUIAL_REWRITE):
-            rewritten = _rewrite_to_egyptian_colloquial(normalized)
-            if rewritten and rewritten != normalized:
-                logger.info("Applied Egyptian colloquial rewrite for Arabic TTS utterance")
-            return rewritten or normalized
+        if is_arabic:
+            dialect = str(TTS_ARABIC_SPOKEN_DIALECT or "egyptian").strip().lower()
+            if dialect == "egyptian" and bool(TTS_EGYPTIAN_COLLOQUIAL_REWRITE):
+                rewritten = _rewrite_to_egyptian_colloquial(normalized)
+                if rewritten and rewritten != normalized:
+                    logger.info("Applied Egyptian colloquial rewrite for Arabic TTS utterance")
+                normalized = rewritten or normalized
+
+        normalized = polish_for_voice(normalized, language="ar" if is_arabic else "en")
+
+        rewrite_elapsed = time.perf_counter() - rewrite_started
+        record_stage_timing("tts_rewrite", rewrite_elapsed, lang="ar" if is_arabic else "en")
 
         return normalized
 
     def _probe_edge_tts_environment(self):
         info = {
             "available": False,
-            "voice": str(TTS_EDGE_VOICE or "").strip(),
+            "voice": self._voice.edge_voice_en,
             "supports_output_format": False,
             "compressed_decode_available": False,
             "error": "",
@@ -836,8 +1091,8 @@ class SpeechEngine:
 
     def _probe_elevenlabs_environment(self):
         api_key = str(ELEVENLABS_API_KEY or "").strip()
-        voice_id = str(TTS_ELEVENLABS_ARABIC_VOICE_ID or "").strip()
-        model_id = str(TTS_ELEVENLABS_ARABIC_MODEL_ID or "").strip()
+        voice_id = self._voice.elevenlabs_voice_id or ""
+        model_id = str(TTS_ELEVENLABS_MODEL_ID or "").strip()
         enabled = bool(TTS_ELEVENLABS_ARABIC_ENABLED)
         sdk_available = ElevenLabs is not None
         available = bool(enabled and api_key and voice_id and sdk_available)
@@ -949,7 +1204,7 @@ class SpeechEngine:
             )
             return False
 
-        edge_rate = str(TTS_EDGE_RATE or "+0%").strip() or "+0%"
+        edge_rate = self._voice.rate_en or "+0%"
         edge_pitch = ""
         edge_volume = ""
 
@@ -968,12 +1223,18 @@ class SpeechEngine:
             speaker = edge_tts.Communicate(warmup_text, **kwargs)
 
             chunks = []
-            async for event in speaker.stream():
-                if str(event.get("type") or "").lower() != "audio":
-                    continue
-                data = event.get("data")
-                if data:
-                    chunks.append(bytes(data))
+            stream = speaker.stream()
+            try:
+                async for event in stream:
+                    if str(event.get("type") or "").lower() != "audio":
+                        continue
+                    data = event.get("data")
+                    if data:
+                        chunks.append(bytes(data))
+            finally:
+                close_stream = getattr(stream, "aclose", None)
+                if close_stream is not None:
+                    await close_stream()
             return b"".join(chunks)
 
         last_error = ""
@@ -1065,19 +1326,18 @@ class SpeechEngine:
             tts_elapsed = time.perf_counter() - started
             metrics.record_stage("tts", tts_elapsed, success=success)
             record_stage_timing("tts_playback", tts_elapsed, backend=backend)
+            lang = "ar" if arabic_preferred else "en"
+            logger.info(
+                "tts engine=%s profile=%s lang=%s sentences=1 playback=%.2fs",
+                backend,
+                self._voice.name,
+                lang,
+                tts_elapsed,
+            )
             with self._lock:
                 self._process = None
-                released_thread = False
                 if self._thread and self._thread.ident == threading.current_thread().ident:
                     self._thread = None
-                    released_thread = True
-                queue_thread_active = bool(
-                    self._queue_thread and self._queue_thread.is_alive()
-                )
-            # Stop the barge-in monitor only when no other speech path is still
-            # active — the queue path manages its own teardown.
-            if released_thread and not queue_thread_active:
-                self._stop_barge_in_monitor()
 
     def _speak_console(self, text, prefix):
         words = text.split()
@@ -1252,25 +1512,21 @@ class SpeechEngine:
             self._edge_tts_unsupported_voices.add(voice_key)
 
     def _edge_tts_voice_candidates(self, normalized_text, *, preferred_language=None):
-        configured_voice = str(TTS_EDGE_VOICE or "").strip() or "en-US-AriaNeural"
+        profile = self._voice
         with self._lock:
             unsupported = set(self._edge_tts_unsupported_voices)
 
-        # Pick Arabic voices when the text/preferred language calls for Arabic.
-        # This is the offline fallback when ElevenLabs is unavailable.
         wants_arabic = self._is_arabic_preferred_text(
             normalized_text, preferred_language=preferred_language,
         )
         if wants_arabic:
-            primary_arabic = str(TTS_EDGE_ARABIC_VOICE or "").strip() or "ar-EG-SalmaNeural"
-            arabic_fallbacks = [
-                str(v or "").strip()
-                for v in (TTS_EDGE_ARABIC_VOICE_FALLBACKS or ())
-                if str(v or "").strip()
-            ]
-            candidates = [primary_arabic] + arabic_fallbacks
+            primary = profile.edge_voice_ar
+            fallbacks = list(profile.edge_voice_ar_fallbacks)
         else:
-            candidates = [configured_voice]
+            primary = profile.edge_voice_en
+            fallbacks = list(profile.edge_voice_en_fallbacks)
+
+        candidates = [primary] + fallbacks
 
         deduped = []
         seen = set()
@@ -1360,13 +1616,14 @@ class SpeechEngine:
         return finalized or [{"script": default_script, "text": text}]
 
     def _edge_tts_chunk_audio_profile(self, is_arabic_chunk):
+        profile = self._voice
         if is_arabic_chunk:
-            rate = str(TTS_EDGE_ARABIC_RATE or TTS_EDGE_RATE or "+0%").strip() or "+0%"
-            pitch = str(TTS_EDGE_ARABIC_PITCH or "").strip()
-            volume = str(TTS_EDGE_ARABIC_VOLUME or "").strip()
+            rate = profile.rate_ar or "+0%"
+            pitch = profile.pitch_ar or ""
+            volume = ""
         else:
-            rate = str(TTS_EDGE_RATE or "+0%").strip() or "+0%"
-            pitch = ""
+            rate = profile.rate_en or "+0%"
+            pitch = profile.pitch_en or ""
             volume = ""
         return rate, pitch, volume
 
@@ -1440,17 +1697,21 @@ class SpeechEngine:
                 speaker = edge_tts_module.Communicate(chunk_text, **kwargs)
 
             collected = []
-            async for event in speaker.stream():
-                if self._stop_event.is_set():
-                    break
-                if str(event.get("type") or "").lower() != "audio":
-                    continue
-                data = event.get("data")
-                if data:
-                    collected.append(bytes(data))
+            stream = speaker.stream()
+            try:
+                async for event in stream:
+                    if self._stop_event.is_set():
+                        break
+                    if str(event.get("type") or "").lower() != "audio":
+                        continue
+                    data = event.get("data")
+                    if data:
+                        collected.append(bytes(data))
+            finally:
+                close_stream = getattr(stream, "aclose", None)
+                if close_stream is not None:
+                    await close_stream()
             return b"".join(collected)
-
-        import concurrent.futures as _cf
 
         # Sentinel — returned by _synth_chunk when stop_event fired mid-synthesis.
         _SYNTH_STOP = object()
@@ -1530,7 +1791,7 @@ class SpeechEngine:
 
         return True
 
-    def _normalize_audio_samples(self, waveform):
+    def _normalize_audio_samples(self, waveform, sample_rate: int = 24000):
         import numpy as np  # type: ignore
 
         samples = np.asarray(waveform)
@@ -1550,7 +1811,28 @@ class SpeechEngine:
             if peak > 1.0:
                 normalized = normalized / peak
 
-        return np.clip(normalized, -1.0, 1.0)
+        normalized = np.clip(normalized, -1.0, 1.0)
+        return self._apply_edge_fade(normalized, sample_rate=max(8000, int(sample_rate or 24000)))
+
+    def _apply_edge_fade(self, samples, fade_ms: float = 8.0, sample_rate: int = 24000):
+        """Ramp the first/last few ms to zero so playback start/stop doesn't click.
+
+        Edge-TTS and ElevenLabs streams rarely start or end at a zero crossing, and
+        sounddevice opens/closes its output stream per utterance, so an abrupt
+        non-zero sample at either edge produces an audible pop. A short linear fade
+        removes the discontinuity without being perceptible as speech distortion.
+        """
+        import numpy as np  # type: ignore
+
+        fade_len = int(sample_rate * (fade_ms / 1000.0))
+        fade_len = min(fade_len, samples.shape[0] // 2)
+        if fade_len <= 1:
+            return samples
+
+        ramp = np.linspace(0.0, 1.0, fade_len, dtype=np.float32)
+        samples[:fade_len] *= ramp
+        samples[-fade_len:] *= ramp[::-1]
+        return samples
 
     def _is_effectively_silent(self, samples):
         import numpy as np  # type: ignore
@@ -1570,7 +1852,9 @@ class SpeechEngine:
             logger.warning("Waveform playback dependency unavailable: %s", exc)
             return False
 
-        samples = self._normalize_audio_samples(waveform)
+        playback_rate = max(8000, int(sample_rate or 0))
+
+        samples = self._normalize_audio_samples(waveform, sample_rate=playback_rate)
         if samples is None:
             logger.warning("Waveform playback skipped because synthesized audio was empty")
             return False
@@ -1578,26 +1862,13 @@ class SpeechEngine:
             logger.warning("Synthesized audio is effectively silent; triggering fallback")
             return False
 
-        playback_rate = max(8000, int(sample_rate or 0))
-
-        # Report TTS RMS to the barge-in monitor so it can gate out speaker echo.
-        try:
-            import numpy as _np
-            _flat = _np.asarray(samples, dtype=_np.float32).reshape(-1)
-            _tts_rms = float(_np.sqrt(_np.mean(_np.square(_flat)))) if _flat.size else 0.0
-            self._barge_in_monitor.set_tts_rms(_tts_rms)
-        except Exception:
-            pass
-
         try:
             sd.stop()
             if blocking:
                 if self._stop_event.is_set():
                     sd.stop()
-                    self._barge_in_monitor.set_tts_rms(0.0)
                     return False
                 sd.play(samples, samplerate=playback_rate, blocking=True)
-                self._barge_in_monitor.set_tts_rms(0.0)
                 return True
 
             sd.play(samples, samplerate=playback_rate, blocking=False)
@@ -1607,7 +1878,6 @@ class SpeechEngine:
             while True:
                 if self._stop_event.is_set():
                     sd.stop()
-                    self._barge_in_monitor.set_tts_rms(0.0)
                     return False
                 if time.perf_counter() >= playback_deadline:
                     logger.warning("TTS playback watchdog reached; forcing stream stop")
@@ -1620,10 +1890,8 @@ class SpeechEngine:
                 if not stream or not getattr(stream, "active", False):
                     break
                 time.sleep(0.05)
-            self._barge_in_monitor.set_tts_rms(0.0)
             return True
         except Exception as exc:
-            self._barge_in_monitor.set_tts_rms(0.0)
             logger.error("Waveform playback failed: %s", exc)
             try:
                 sd.stop()
@@ -1643,7 +1911,7 @@ class SpeechEngine:
             return False
 
         api_key = str(ELEVENLABS_API_KEY or "").strip()
-        voice_id = str(TTS_ELEVENLABS_ARABIC_VOICE_ID or "").strip()
+        voice_id = self._voice.elevenlabs_voice_id or ""
         if ElevenLabs is None:
             should_log = False
             with self._lock:
@@ -1664,46 +1932,8 @@ class SpeechEngine:
                 logger.warning("ElevenLabs TTS is enabled but not fully configured (missing API key or voice id).")
             return False
 
-        try:
-            client = ElevenLabs(
-                api_key=api_key,
-                base_url=str(ELEVENLABS_BASE_URL or "https://api.elevenlabs.io").rstrip("/"),
-                timeout=float(TTS_ELEVENLABS_TIMEOUT_SECONDS),
-            )
-        except Exception as exc:
-            logger.warning("ElevenLabs client initialization failed: %s", exc)
-            return False
-
-        convert_kwargs = {
-            "voice_id": voice_id,
-            "text": normalized_text,
-            "model_id": str(TTS_ELEVENLABS_ARABIC_MODEL_ID or "eleven_multilingual_v2"),
-            "output_format": "wav_24000",
-            "optimize_streaming_latency": 1,
-        }
-
-        try:
-            response = client.text_to_speech.convert(**convert_kwargs)
-        except Exception as exc:
-            if "quota_exceeded" in str(exc) or "status_code: 401" in str(exc) or "http 401" in str(exc).lower():
-                _set_elevenlabs_tts_cooldown(f"convert:{exc}")
-            logger.warning("ElevenLabs TTS request failed (voice_id=%s): %s", voice_id, exc)
-            return False
-
-        try:
-            audio_bytes = b"".join(response)
-        except Exception as exc:
-            if "quota_exceeded" in str(exc) or "status_code: 401" in str(exc) or "http 401" in str(exc).lower():
-                _set_elevenlabs_tts_cooldown(f"stream:{exc}")
-            logger.warning("ElevenLabs TTS stream read failed (voice_id=%s): %s", voice_id, exc)
-            return False
-        if not audio_bytes:
-            logger.warning("ElevenLabs TTS returned empty audio bytes (voice_id=%s)", voice_id)
-            return False
-
-        decoded = self._decode_edge_audio_bytes(audio_bytes)
+        decoded = self._synthesize_elevenlabs(normalized_text)
         if decoded is None:
-            logger.warning("ElevenLabs TTS audio decode failed; install soundfile for audio decoding support")
             return False
 
         sample_rate, waveform = decoded
@@ -1730,13 +1960,12 @@ class SpeechEngine:
         if not normalized_text:
             return False
 
-        # Phase 5.3: Arabic synthesis is supported via ar-EG-SalmaNeural and the
-        # configured fallback voices. The legacy English-only gate has been removed.
         voice_candidates = self._edge_tts_voice_candidates(normalized_text, preferred_language=preferred_language)
         wants_arabic = self._is_arabic_preferred_text(normalized_text, preferred_language=preferred_language)
-        edge_rate = str((TTS_EDGE_ARABIC_RATE if wants_arabic else TTS_EDGE_RATE) or "+0%").strip() or "+0%"
-        edge_pitch = str(TTS_EDGE_ARABIC_PITCH or "").strip() if wants_arabic else ""
-        edge_volume = str(TTS_EDGE_ARABIC_VOLUME or "").strip() if wants_arabic else ""
+        profile = self._voice
+        edge_rate = (profile.rate_ar if wants_arabic else profile.rate_en) or "+0%"
+        edge_pitch = (profile.pitch_ar if wants_arabic else profile.pitch_en) or ""
+        edge_volume = ""
         supports_output_format = self._edge_tts_supports_output_format(edge_tts)
         supports_pitch = self._edge_tts_supports_parameter(edge_tts, "pitch")
         supports_volume = self._edge_tts_supports_parameter(edge_tts, "volume")
@@ -1762,6 +1991,11 @@ class SpeechEngine:
                 return True
 
         async def _collect_audio_bytes(voice_name):
+            # edge-tts's Communicate always treats `text` as plain text to be
+            # XML-escaped and spoken verbatim — it does not parse SSML passed
+            # this way. Passing a <speak>/<prosody> wrapper here previously
+            # caused the tag markup itself to be read aloud. Rate/pitch must
+            # go through the dedicated constructor kwargs instead.
             kwargs = {
                 "voice": voice_name,
                 "rate": edge_rate,
@@ -1773,19 +2007,24 @@ class SpeechEngine:
 
             if supports_output_format:
                 kwargs["output_format"] = "riff-24khz-16bit-mono-pcm"
-                speaker = edge_tts.Communicate(normalized_text, **kwargs)
-            else:
-                speaker = edge_tts.Communicate(normalized_text, **kwargs)
+
+            speaker = edge_tts.Communicate(normalized_text, **kwargs)
 
             chunks = []
-            async for event in speaker.stream():
-                if self._stop_event.is_set():
-                    break
-                if str(event.get("type") or "").lower() != "audio":
-                    continue
-                data = event.get("data")
-                if data:
-                    chunks.append(bytes(data))
+            stream = speaker.stream()
+            try:
+                async for event in stream:
+                    if self._stop_event.is_set():
+                        break
+                    if str(event.get("type") or "").lower() != "audio":
+                        continue
+                    data = event.get("data")
+                    if data:
+                        chunks.append(bytes(data))
+            finally:
+                close_stream = getattr(stream, "aclose", None)
+                if close_stream is not None:
+                    await close_stream()
             return b"".join(chunks)
 
         last_error = ""

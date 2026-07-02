@@ -8,6 +8,7 @@ from core.config import (
     ENTITY_CLARIFICATION_THRESHOLD_BY_INTENT,
 )
 from os_control.app_ops import resolve_app_request
+from os_control.path_resolver import FOLDER_ALIAS_SET as _PATH_FOLDER_ALIAS_SET
 from core.response_templates import render_template
 
 
@@ -67,21 +68,8 @@ _FS_HINTS = {
     "\u0627\u0644\u062a\u0646\u0632\u064a\u0644\u0627\u062a",
     "\u0627\u0644\u0645\u0633\u062a\u0646\u062f\u0627\u062a",
 }
-_SPECIAL_FOLDER_ALIASES = {
-    "desktop",
-    "downloads",
-    "documents",
-    "pictures",
-    "music",
-    "videos",
-    "\u0633\u0637\u062d \u0627\u0644\u0645\u0643\u062a\u0628",
-    "\u0627\u0644\u062a\u062d\u0645\u064a\u0644\u0627\u062a",
-    "\u0627\u0644\u062a\u0646\u0632\u064a\u0644\u0627\u062a",
-    "\u0627\u0644\u0645\u0633\u062a\u0646\u062f\u0627\u062a",
-    "\u0627\u0644\u0635\u0648\u0631",
-    "\u0627\u0644\u0645\u0648\u0633\u064a\u0642\u0649",
-    "\u0627\u0644\u0641\u064a\u062f\u064a\u0648\u0647\u0627\u062a",
-}
+# Imported from path_resolver \u2014 single source of truth.
+_SPECIAL_FOLDER_ALIASES = _PATH_FOLDER_ALIAS_SET
 _APP_EXPLICIT_HINTS = {"open app", "\u0627\u0641\u062a\u062d \u062a\u0637\u0628\u064a\u0642", "\u0634\u063a\u0644 \u062a\u0637\u0628\u064a\u0642"}
 _QUESTION_HINTS = {
     "?",
@@ -454,7 +442,7 @@ def _has_explicit_app_intent(text):
 def _looks_action_oriented(text):
     lowered = _normalized(text)
     buckets = (_OPEN_VERBS, _DELETE_VERBS, _MOVE_VERBS, _RENAME_VERBS, _SYSTEM_VERBS)
-    return any(any(token in lowered for token in bucket) for bucket in buckets)
+    return any(any(_token_in_text(token, lowered) for token in bucket) for bucket in buckets)
 
 
 def _looks_brief_unclear_query(text):
@@ -481,11 +469,23 @@ def _looks_brief_unclear_query(text):
     return len(lowered) <= 24
 
 
+def _token_in_text(token: str, lowered: str) -> bool:
+    """True when *token* appears as a whole word in *lowered* (not as a substring)."""
+    idx = lowered.find(token)
+    while idx != -1:
+        before = idx == 0 or not lowered[idx - 1].isalnum()
+        after = idx + len(token) >= len(lowered) or not lowered[idx + len(token)].isalnum()
+        if before and after:
+            return True
+        idx = lowered.find(token, idx + 1)
+    return False
+
+
 def _multiple_action_categories(text):
     lowered = _normalized(text)
     categories = 0
     for bucket in (_OPEN_VERBS, _DELETE_VERBS, _MOVE_VERBS, _RENAME_VERBS, _SYSTEM_VERBS):
-        if any(token in lowered for token in bucket):
+        if any(_token_in_text(token, lowered) for token in bucket):
             categories += 1
     return categories >= 2
 

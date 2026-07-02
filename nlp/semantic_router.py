@@ -147,6 +147,9 @@ _ROUTE_DEFINITIONS: list[dict] = [
             "pause music",
             "open new tab",
             "close tab",
+            "close the YouTube tab",
+            "close the Chrome tab",
+            "close the Facebook tab in the browser",
             "search google for",
             "ارفع الصوت",
             "خفض السطوع",
@@ -159,9 +162,19 @@ _ROUTE_DEFINITIONS: list[dict] = [
             "اطفي البلوتوث",
             "كبر الشباك",
             "صغر الشباك",
+            "كبر الشاشة",
+            "صغر الشاشة",
+            "كبر النافذة",
+            "صغر النافذة",
             "الاغنية اللي بعد كده",
             "وقف المزيكا",
             "افتح تاب جديد",
+            "افتح tab جديدة",
+            "تاب جديدة في البراوزر",
+            "اقفل tab الـ يوتيوب",
+            "اقفل tab الـ فيسبوك",
+            "سكر تاب الـ browser",
+            "اقفل تاب اليوتيوب في البراوزر",
             # additional volume / brightness
             "زود الصوت",
             "قلل الصوت",
@@ -279,10 +292,19 @@ _ROUTE_DEFINITIONS: list[dict] = [
             "send email to john",
             "write an email about the meeting",
             "open email draft",
+            "open outlook",
+            "open outlook and draft an email",
+            "launch outlook",
+            "email someone about the project",
+            "write an email to my boss",
             "ابعت ايميل",
             "افتح ايميل جديد",
             "ابعت ايميل عن الميتنج",
             "اكتب ايميل",
+            "افتح أوتلوك",
+            "افتح اوتلوك",
+            "اعملي ايميل",
+            "اكتب إيميل لحد",
         ],
     },
     {
@@ -340,11 +362,19 @@ _ROUTE_DEFINITIONS: list[dict] = [
             "delete this file",
             "rename the file",
             "move file to desktop",
+            "reveal in explorer",
+            "show in file explorer",
+            "open file explorer",
+            "open downloads in explorer",
+            "open folder in file manager",
             "وريني الملفات",
             "روح على فولدر الداونلود",
             "اعمل فولدر جديد",
             "امسح الملف ده",
             "غير اسم الفايل",
+            "افتح المستكشف",
+            "وريني مكان الملف",
+            "فين الملف ده",
         ],
     },
     {
@@ -378,6 +408,79 @@ _ROUTE_DEFINITIONS: list[dict] = [
             "فكرني بعد 10 دقايق",
             "بعد نص ساعة شغل موسيقى",
             "وريني المهام المجدولة",
+        ],
+    },
+    {
+        "name": "OS_NOTE",
+        "utterances": [
+            "create a new note",
+            "take a note",
+            "make a note",
+            "note this down",
+            "write a note",
+            "new note",
+            "save a note",
+            "write this down",
+            "اعملي نوتة",
+            "اعمل نوتة جديدة",
+            "نوتة جديدة",
+            "اكتب نوتة",
+            "سجل نوتة",
+            "دون ملاحظة",
+            "اكتبلي نوتة",
+            "حفظ ملاحظة",
+        ],
+    },
+    {
+        "name": "IDENTITY",
+        "utterances": [
+            "who are you",
+            "what are you",
+            "introduce yourself",
+            "what can you do",
+            "tell me about yourself",
+            "what is your name",
+            "are you an AI",
+            "are you jarvis",
+            "what kind of assistant are you",
+            "how do you work",
+            "انت مين",
+            "إنت مين",
+            "مين انت",
+            "عرفني بنفسك",
+            "عرفني عليك",
+            "بتعمل ايه",
+            "تعرف تعمل ايه",
+            "اسمك ايه",
+            "انت جارفيس",
+            "انت مساعد ايه",
+            "انت بتشتغل ازاي",
+        ],
+    },
+    {
+        "name": "OS_SCREEN_DESCRIBE",
+        "utterances": [
+            "what's on my screen",
+            "what do you see on my screen",
+            "describe my screen",
+            "show me what's open",
+            "what's currently on the screen",
+            "tell me what's on screen",
+            "what apps are open",
+            "what windows are open",
+            "what am I looking at",
+            "describe what's visible",
+            "what's the active window",
+            "what program am I in",
+            "ايه اللي شايفه",
+            "ايه اللي على الشاشة",
+            "وصف الشاشة",
+            "ايه اللي فاتح",
+            "ايه اللي مفتوح دلوقتي",
+            "ايه التطبيق اللي شغال",
+            "انا فين دلوقتي",
+            "ايه اللي بيحصل على الشاشة",
+            "قولي ايه اللي شايفه",
         ],
     },
     {
@@ -502,43 +605,57 @@ def _ensure_loaded() -> bool:
         return False
 
 
-def classify_semantic(text: str) -> Optional[Tuple[str, float]]:
-    """Classify text using embedding similarity against route utterances.
+def classify_semantic_topk(text: str, k: int = 3) -> list[Tuple[str, float]]:
+    """Classify text against every route, returning the top-k (intent, score) pairs.
 
-    Returns (intent_name, confidence) or None if unavailable/below threshold.
-    Confidence is the cosine similarity to the best-matching route.
+    Sorted descending by score. Each route contributes its single best-matching
+    utterance similarity. Returns [] if the router isn't ready or on failure —
+    callers should treat an empty list the same as "no match".
     """
     if not text or not is_router_ready() or _router is None:
-        return None
+        return []
 
     try:
         np = _router["np"]
         model = _router["model"]
 
-        # Encode the query
         query_embedding = model.encode(
             [text], normalize_embeddings=True, show_progress_bar=False,
         )[0]  # shape: (dim,)
 
-        best_intent = "LLM_QUERY"
-        best_score = 0.0
-
+        scores = []
         for route in _router["routes"]:
             # Cosine similarity (embeddings are already normalized → dot product)
             similarities = route["embeddings"] @ query_embedding  # shape: (N,)
             max_sim = float(np.max(similarities))
-            if max_sim > best_score:
-                best_score = max_sim
-                best_intent = route["name"]
+            scores.append((route["name"], max_sim))
 
-        if best_score < SEMANTIC_CONFIDENCE_THRESHOLD:
-            return None
-
-        return best_intent, best_score
+        scores.sort(key=lambda pair: pair[1], reverse=True)
+        return scores[: max(1, int(k))]
 
     except Exception as exc:
-        logger.debug("Semantic router classification failed: %s", exc)
+        logger.debug("Semantic router top-k classification failed: %s", exc)
+        return []
+
+
+def classify_semantic(text: str) -> Optional[Tuple[str, float]]:
+    """Classify text using embedding similarity against route utterances.
+
+    Returns (intent_name, confidence) or None if unavailable/below threshold.
+    Confidence is the cosine similarity to the best-matching route.
+
+    Thin back-compat wrapper over classify_semantic_topk — prefer the top-k
+    function for new callers that need margin scoring.
+    """
+    topk = classify_semantic_topk(text, k=1)
+    if not topk:
         return None
+
+    best_intent, best_score = topk[0]
+    if best_score < SEMANTIC_CONFIDENCE_THRESHOLD:
+        return None
+
+    return best_intent, best_score
 
 
 def get_route_entity_types(intent_name: str) -> tuple[EntityType, ...]:

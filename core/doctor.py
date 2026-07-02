@@ -183,10 +183,11 @@ def collect_diagnostics(*, include_model_load_checks=False):
         )
 
     try:
-        from audio.wake_word import _get_model
+        from audio.wake_word import _get_unified_model
+        from core.config import WAKE_WORD_UNIFIED_ONNX_PATH
 
         if include_model_load_checks:
-            model = _get_model()
+            model = _get_unified_model(WAKE_WORD_UNIFIED_ONNX_PATH)
             details = f"loaded={list(getattr(model, 'models', {}).keys())}"
         else:
             details = "check_skipped(model_load=False)"
@@ -208,6 +209,7 @@ def collect_diagnostics(*, include_model_load_checks=False):
 
     try:
         from audio import stt as stt_runtime
+        from core.metrics import latency_tracker
 
         backend = stt_runtime.get_runtime_stt_backend()
         if include_model_load_checks:
@@ -220,6 +222,29 @@ def collect_diagnostics(*, include_model_load_checks=False):
                 "name": "stt_runtime",
                 "ok": True,
                 "details": details,
+            }
+        )
+
+        latency_report = latency_tracker.report()
+        local_p95 = float((latency_report.get("stt_local_call") or {}).get("p95_ms") or 0.0)
+        cloud_p95 = float((latency_report.get("stt_cloud_call") or {}).get("p95_ms") or 0.0)
+        pick_p95 = float((latency_report.get("stt_lang_pick") or {}).get("p95_ms") or 0.0)
+        recent = stt_runtime.get_recent_transcription_meta()
+        invalid_count = sum(
+            1
+            for row in recent
+            if "stt:invalid_language" in list(row.get("errors") or [])
+        )
+        ok = bool(local_p95 <= 1500.0 and invalid_count <= 1)
+        checks.append(
+            {
+                "name": "stt_health",
+                "ok": ok,
+                "details": (
+                    f"local_p95_ms={local_p95:.1f} cloud_p95_ms={cloud_p95:.1f} "
+                    f"pick_p95_ms={pick_p95:.1f} invalid_language_last10={invalid_count}/{len(recent)}"
+                ),
+                "required": False,
             }
         )
     except Exception as exc:
@@ -296,6 +321,40 @@ def collect_diagnostics(*, include_model_load_checks=False):
                     "required": False,
                 }
             )
+
+    try:
+        from core.metrics import latency_tracker
+        from audio.tts import _elevenlabs_tts_on_cooldown
+
+        latency_report = latency_tracker.report()
+        tts_first_word_p95 = float(
+            (latency_report.get("tts_first_word") or {}).get("p95_ms") or 0.0
+        )
+        tts_playback_stats = latency_report.get("tts_playback") or {}
+        tts_playback_count = int(tts_playback_stats.get("count") or 0)
+        el_cooldown = _elevenlabs_tts_on_cooldown()
+        tts_ok = bool(tts_first_word_p95 <= 1500.0 and not el_cooldown)
+        checks.append(
+            {
+                "name": "tts_health",
+                "ok": tts_ok,
+                "details": (
+                    f"first_word_p95_ms={tts_first_word_p95:.1f} "
+                    f"playback_count={tts_playback_count} "
+                    f"elevenlabs_cooldown={el_cooldown}"
+                ),
+                "required": False,
+            }
+        )
+    except Exception as exc:
+        checks.append(
+            {
+                "name": "tts_health",
+                "ok": True,
+                "details": f"tts_health probe skipped: {exc}",
+                "required": False,
+            }
+        )
 
     vram_ok, vram_details = _probe_vram_status()
     checks.append(

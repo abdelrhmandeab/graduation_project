@@ -1,9 +1,18 @@
 import pathlib
 
-from core.config import KB_MAX_CONTEXT_CHARS, KB_TOP_K, MEMORY_MAX_CONTEXT_CHARS
+from core.config import (
+    KB_MAX_CONTEXT_CHARS,
+    KB_TOP_K,
+    LLM_CTX_AUTOSIZE,
+    LLM_FEWSHOT_MAX,
+    LLM_FEWSHOT_MIN,
+    LLM_OLLAMA_NUM_CTX,
+    LLM_LANG_PIN_ENABLED,
+    MEMORY_MAX_CONTEXT_CHARS,
+)
 from core.knowledge_base import knowledge_base_service
 from core.logger import logger
-from core.persona import persona_manager
+from core.persona import format_persona_block, get_active_persona, persona_manager
 from core.session_memory import session_memory
 
 _PROMPTS_DIR = pathlib.Path(__file__).parent / "prompts"
@@ -37,36 +46,82 @@ def _normalize_response_language(language):
     return "ar" if value == "ar" else "en"
 
 
+def _language_pin_rule(response_language):
+    if not LLM_LANG_PIN_ENABLED:
+        return ""
+    if _normalize_response_language(response_language) == "ar":
+        return "جاوب بالعامية المصرية فقط. ممنوع تستخدم الفصحى أو أي لغة تانية."
+    return "Reply ONLY in English. Never switch to Arabic or any other language."
+
+
+def _filter_template_lines(lines):
+    """Drop older soft language hints once the hard language pin is injected."""
+    if not LLM_LANG_PIN_ENABLED:
+        return list(lines)
+    filtered = []
+    for line in lines:
+        stripped = str(line or "").strip()
+        lowered = stripped.lower()
+        if lowered.startswith("language:"):
+            continue
+        if lowered.startswith("name:"):
+            continue
+        if lowered.startswith("response style:"):
+            continue
+        filtered.append(line)
+    return filtered
+
+
 # ---------------------------------------------------------------------------
 # Few-shot examples for small models (1.7B–4B): minimal set (2-3 examples)
 # Keeps the prompt lean while steering toward Egyptian Arabic and concise English.
 # ---------------------------------------------------------------------------
-_FEW_SHOT_EXAMPLES_MINIMAL = """\
-USER: افتحلي كروم
-ASSISTANT: تمام، بفتح جوجل كروم دلوقتي.
+_FEW_SHOT_EXAMPLES_MINIMAL_EN = """\
+USER: how can I become a better computer engineer?
+ASSISTANT: Start with fundamentals: programming, operating systems, networking, and databases. Then build small real projects every month, read other people's code, and ask for feedback.
 
 USER: what is machine learning?
-ASSISTANT: Machine learning teaches computers to learn from data rather than writing explicit rules."""
+ASSISTANT: Machine learning is teaching computers to spot patterns from examples, instead of hand-writing every rule."""
+
+_FEW_SHOT_EXAMPLES_MINIMAL_AR = """\
+USER: عايز أكون مهندس كمبيوتر شاطر، أعمل إيه؟
+ASSISTANT: ركز على الأساسيات الأول — برمجة وداتا ستركتشر وشبكات. بعد كده ابني مشاريع صغيرة حقيقية كل شهر وخلي حد أحسن منك يراجع شغلك.
+
+USER: مصر هتقابل مين في الدور الثاني من كأس العالم؟
+ASSISTANT: معلوماتي محدودة بتاريخ معين ومش عندي نتايج لحظية دلوقتي. دور على Google أو beIN Sports عشان تعرف آخر الأخبار.
+
+USER: اشرحلي يعني إيه تعلم آلي
+ASSISTANT: ببساطة، الكمبيوتر بيتعلم من أمثلة كتير بدل ما تكتبله كل قاعدة بإيدك. زي فلتر السبام — بيتعلم من إيميلات قديمة إيه اللي سبام وإيه لأ."""
 
 # ---------------------------------------------------------------------------
 # Few-shot examples for large models (8B+): comprehensive set (4+ examples)
 # Provides richer context for higher-capacity models.
 # ---------------------------------------------------------------------------
-_FEW_SHOT_EXAMPLES_FULL = """\
-USER: الجو عامل ازاي؟
-ASSISTANT: مش معايا بيانات طقس دلوقتي، بس لو في القاهرة الأيام دي الجو حر — البس خفيف واشرب مية كتير.
+_FEW_SHOT_EXAMPLES_FULL_EN = """\
+USER: how can I become a successful computer engineer?
+ASSISTANT: Build strong fundamentals first: coding, data structures, operating systems, networking, and databases. Then pick a track, ship projects, read good code, and practice explaining your decisions clearly.
 
-USER: افتحلي كروم
-ASSISTANT: تمام، بفتح جوجل كروم دلوقتي.
+USER: what's the weather in Cairo?
+ASSISTANT: If live weather data is available, use it directly. If not, say you don't have live weather right now and give a useful general suggestion.
 
-USER: what is machine learning?
-ASSISTANT: Machine learning is when computers learn patterns from data instead of being explicitly programmed. Think of it like teaching by example rather than writing rules.
+USER: explain machine learning simply
+ASSISTANT: Machine learning is when software learns patterns from examples. A spam filter, for example, learns from old emails instead of relying only on hand-written rules."""
 
-USER: احكيلي عن الأهرامات
-ASSISTANT: الأهرامات اتبنت من حوالي 4500 سنة في الجيزة. أكبرهم هرم خوفو — ارتفاعه 146 متر وكان أطول مبنى في العالم لمدة 3800 سنة."""
+_FEW_SHOT_EXAMPLES_FULL_AR = """\
+USER: عايز أكون مهندس كمبيوتر ناجح، أعمل إيه؟
+ASSISTANT: ابدأ بالأساسيات — برمجة وداتا ستركتشر وشبكات. بعد كده اختار مسار يعجبك وابني فيه مشاريع حقيقية، واقرأ كود ناس شاطرة عشان تتعلم منهم.
 
-# Backward compat: full examples is the default
-_FEW_SHOT_EXAMPLES = _FEW_SHOT_EXAMPLES_FULL
+USER: الجو عامل إزاي في القاهرة؟
+ASSISTANT: لو معايا بيانات طقس هقولهالك مباشرة. لو مش معايا دلوقتي، البس خفيف واشرب مية كتير لأن الجو حر الأيام دي.
+
+USER: مصر هتقابل مين في الدور الثاني من كأس العالم؟
+ASSISTANT: مش عندي بيانات نتايج لحظية — معلوماتي محدودة بتاريخ معين. دور على beIN Sports أو Google عشان تعرف آخر أخبار البطولة.
+
+USER: إيه التخصصات الموجودة في هندسة الكمبيوتر؟
+ASSISTANT: التخصصات الشائعة في هندسة الكمبيوتر: برمجيات (software engineering)، شبكات ونظم موزعة، ذكاء اصطناعي وتعلم آلي، أمن معلومات، نظم مدمجة (embedded systems)، وعلم البيانات. اختار اللي بيشدك حسب اهتمامك.
+
+USER: اشرحلي التعلم الآلي ببساطة
+ASSISTANT: ببساطة، البرنامج بيتعلم من أمثلة كتير بدل ما تكتبله كل قاعدة بإيدك. زي فلتر السبام — بيشوف إيميلات قديمة ويتعلم يفرق بين العادي والسبام."""
 
 _PROMPT_MEMORY_CONTEXT_MAX_CHARS = 600
 
@@ -86,6 +141,43 @@ def _estimate_token_count(text):
     english_char_count = len(text) - arabic_char_count
     estimated_tokens = (english_char_count / 4.0) + (arabic_char_count / 2.0)
     return int(estimated_tokens)
+
+
+def _tier_ctx_ceiling(tier="medium"):
+    """Return the runtime context ceiling for this turn.
+
+    The configured/runtime Ollama context values are ceilings now; prompt size
+    decides the actual per-call num_ctx.
+    """
+    try:
+        from llm.ollama_client import get_runtime_lightweight_num_ctx, get_runtime_num_ctx
+
+        inferred = _get_model_tier(tier)
+        if inferred in ("minimal", "low"):
+            return int(get_runtime_lightweight_num_ctx(default=LLM_OLLAMA_NUM_CTX))
+        return int(get_runtime_num_ctx(default=LLM_OLLAMA_NUM_CTX))
+    except Exception:
+        return int(LLM_OLLAMA_NUM_CTX)
+
+
+def pick_num_ctx(prompt_tokens, tier="medium"):
+    """Autosize Ollama num_ctx from prompt token count, capped by model tier."""
+    ceiling = max(512, int(_tier_ctx_ceiling(tier)))
+    if not LLM_CTX_AUTOSIZE:
+        return ceiling
+
+    tokens = max(0, int(prompt_tokens or 0))
+    if tokens <= 256:
+        selected = 512
+    elif tokens <= 512:
+        selected = 1024
+    elif tokens <= 1024:
+        selected = 2048
+    elif tokens <= 2048:
+        selected = 4096
+    else:
+        selected = ceiling
+    return max(512, min(int(selected), ceiling))
 
 
 def _get_model_tier(model_name_or_tier):
@@ -121,10 +213,87 @@ def _load_prompt_template(tier: str):
         return None
 
 
+def _fewshot_limit_for_tier(tier: str) -> int:
+    inferred = _get_model_tier(tier)
+    tier_default = 2 if inferred in ("minimal", "low") else 3 if inferred == "medium" else 4
+    lower = max(0, int(LLM_FEWSHOT_MIN or 0))
+    upper = max(lower, int(LLM_FEWSHOT_MAX or tier_default))
+    return min(max(tier_default, lower), upper)
+
+
+def _split_fewshot_examples(examples: str) -> list[str]:
+    blocks = []
+    current = []
+    for line in str(examples or "").splitlines():
+        if line.strip().upper().startswith("USER:") and current:
+            blocks.append("\n".join(current).strip())
+            current = [line]
+        else:
+            current.append(line)
+    if current:
+        block = "\n".join(current).strip()
+        if block:
+            blocks.append(block)
+    return [block for block in blocks if block]
+
+
+def _fewshot_examples_for_tier(tier: str, response_language: str = "en") -> str:
+    lang = _normalize_response_language(response_language)
+    if _get_model_tier(tier) in ("minimal", "low"):
+        source = _FEW_SHOT_EXAMPLES_MINIMAL_AR if lang == "ar" else _FEW_SHOT_EXAMPLES_MINIMAL_EN
+    else:
+        source = _FEW_SHOT_EXAMPLES_FULL_AR if lang == "ar" else _FEW_SHOT_EXAMPLES_FULL_EN
+    return "\n\n".join(_split_fewshot_examples(source)[: _fewshot_limit_for_tier(tier)])
+
+
+def _cap_template_examples(rendered: str, tier: str) -> str:
+    """Strictly cap template Example blocks without touching the core prompt."""
+    lines = str(rendered or "").splitlines()
+    capped = []
+    seen = 0
+    limit = _fewshot_limit_for_tier(tier)
+    skipping = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.lower().startswith("example "):
+            seen += 1
+            skipping = seen > limit
+        elif stripped.upper().startswith("USER:") and not any(
+            ln.strip().lower().startswith("example ") for ln in lines
+        ):
+            seen += 1
+            skipping = seen > limit
+        if not skipping:
+            capped.append(line)
+    return "\n".join(capped).strip()
+
+
 def get_prompt_tier() -> str:
     """Return the current runtime model tier for prompt selection."""
     from llm.ollama_client import get_runtime_model_tier
     return get_runtime_model_tier(default="medium")
+
+
+def _answer_quality_contract(response_language: str) -> list[str]:
+    if _normalize_response_language(response_language) == "ar":
+        return [
+            "مهمتك: افهم طلب المستخدم وجاوب عليه هو بالظبط.",
+            "اكتب بالعربية بالحروف العربية دايماً. ممنوع تكتب عربي بحروف إنجليزي (romanized) زي 'marhaba' أو 'ahlan'.",
+            "جاوب بالعامية المصرية زي ما الناس بتتكلم في الشارع. ممنوع فصحى أو أسلوب رسمي.",
+            "لو السؤال عن حاجة بتتغير زي نتايج ماتشات أو أخبار أو أسعار، قول بوضوح 'أنا مش متأكد' أو 'معلوماتي لحد [سنة]، ممكن اتغير' — ممنوع تخترع معلومات.",
+            "لو السؤال محتاج بيانات لحظية (طقس، أخبار، نتايج)، استخدم البيانات اللي موجودة في الـ CONTEXT أو قول إنك مش عندك بيانات دلوقتي.",
+            "لو في كلمة غلط من الصوت، فهمها من السياق.",
+            "ممنوع تكرر السؤال أو تقول كلام عام فاضي. خليك مباشر ومفيد.",
+        ]
+    return [
+        "Task: answer the user's exact request, not a nearby topic.",
+        "Always write in the same script as the question. Never romanize Arabic (e.g. never write 'marhaba' — write 'مرحبا').",
+        "For advice or explanation questions, give practical concrete steps; do not refuse harmless requests.",
+        "If the question is about live or changing data (scores, news, prices), clearly say 'I'm not sure' or 'my data goes up to [year], this may have changed' — never fabricate facts.",
+        "If speech-to-text looks slightly wrong, infer the likely meaning from context and ask one clarification only if the meaning is impossible.",
+        "Do not repeat the user's question. Do not give generic filler like 'share your goal' when the goal is already present.",
+        "Sound like a helpful human: direct, specific, natural, no fluff.",
+    ]
 
 
 def _build_system_block(response_language, include_few_shot=True, tier="medium"):
@@ -134,51 +303,40 @@ def _build_system_block(response_language, include_few_shot=True, tier="medium")
     {lang} and {ar_rule} placeholders.
     Fallback: inline prompt (used if template files are missing).
     """
-    lang_label = "Arabic (Egyptian dialect)" if response_language == "ar" else "English"
     inferred_tier = _get_model_tier(tier)
-    persona_style = str(persona_manager.get_speech_style() or "neutral").strip().lower() or "neutral"
-    assistant_name = "Jarvis"
+    language_pin = _language_pin_rule(response_language)
+    persona_block = format_persona_block(get_active_persona(), response_language)
     ar_rule = (
         "Use Egyptian colloquial only (تمام، دلوقتي، هعمل كده) — not formal MSA."
         if response_language == "ar"
         else ""
     )
 
-    # --- Template path ---
-    if include_few_shot:
-        template = _load_prompt_template(inferred_tier)
-        if template is not None:
-            try:
-                rendered = template.format(
-                    name=assistant_name,
-                    lang=lang_label,
-                    style=persona_style,
-                    ar_rule=ar_rule,
-                ).strip()
-            except (KeyError, ValueError):
-                rendered = None
-            if rendered:
-                lines = [ln for ln in rendered.splitlines() if ln.strip()]
-                return ["SYSTEM:"] + lines
-
     # --- Inline fallback ---
     sections = [
         "SYSTEM:",
-        f"Name: {assistant_name}",
-        f"Language: {lang_label} only.",
-        f"Response style: {persona_style}.",
-        "Answer in one language only and keep the wording natural for the user.",
     ]
+    if language_pin:
+        sections.append(language_pin)
+    if persona_block:
+        sections.append(persona_block)
+    sections.extend(_answer_quality_contract(response_language))
     if ar_rule:
         sections.append(ar_rule)
     if include_few_shot:
         sections.append("")
         sections.append("Examples:")
-        if inferred_tier in ("minimal", "low"):
-            sections.append(_FEW_SHOT_EXAMPLES_MINIMAL)
-        else:
-            sections.append(_FEW_SHOT_EXAMPLES_FULL)
+        sections.append(_fewshot_examples_for_tier(inferred_tier, response_language))
     return sections
+
+
+def _package_num_ctx(package: dict, query: str = "") -> dict:
+    token_count = int(package.get("token_count") or 0)
+    tier = str(package.get("tier") or "medium")
+    num_ctx = pick_num_ctx(token_count, tier=tier)
+    query_words = len(str(query or "").split())
+    logger.info("num_ctx auto: query_words=%d tokens=%d tier=%s ctx=%d", query_words, token_count, tier, num_ctx)
+    return {**package, "num_ctx": num_ctx}
 
 
 def build_prompt_package(user_text, response_language="en", tier="medium"):
@@ -230,7 +388,7 @@ def build_prompt_package(user_text, response_language="en", tier="medium"):
     token_count = _estimate_token_count(prompt_text)
     _log_first_prompt_build(token_count, effective_tier, response_language, "build_prompt_package")
 
-    return {
+    return _package_num_ctx({
         "prompt": prompt_text,
         "kb_sources": kb_package["sources"],
         "kb_results": kb_package["results"],
@@ -238,11 +396,7 @@ def build_prompt_package(user_text, response_language="en", tier="medium"):
         "memory_used": bool(compact_memory_context),
         "token_count": token_count,
         "tier": effective_tier,
-    }
-
-
-def build_prompt(user_text):
-    return build_prompt_package(user_text)["prompt"]
+    }, query)
 
 
 def build_lightweight_prompt(user_text, response_language="en", tier="medium"):
@@ -265,7 +419,7 @@ def build_lightweight_prompt(user_text, response_language="en", tier="medium"):
     token_count = _estimate_token_count(prompt_text)
     _log_first_prompt_build(token_count, tier, response_language, "build_lightweight_prompt")
 
-    return {
+    return _package_num_ctx({
         "prompt": prompt_text,
         "kb_sources": [],
         "kb_results": [],
@@ -273,7 +427,7 @@ def build_lightweight_prompt(user_text, response_language="en", tier="medium"):
         "memory_used": False,
         "token_count": token_count,
         "tier": tier,
-    }
+    }, query)
 
 
 def build_tool_augmented_prompt(user_text, tool_context, response_language="en", tier="medium"):
@@ -293,19 +447,18 @@ def build_tool_augmented_prompt(user_text, tool_context, response_language="en",
     # Live-data answers need facts quickly; skip few-shot examples and keep the
     # system block lean so weather/news queries spend fewer tokens on prompt setup.
     sections = _build_system_block(response_language, include_few_shot=False, tier=tier)
-    # Per-tool framing lives inside ``tool_context`` (each block carries its own
-    # [WEATHER]/[WEB_SEARCH] header). Here we add the global rule so the model
-    # treats the block as authoritative for facts and never invents numbers.
-    if response_language == "ar":
-        live_data_rule = (
-            "بيانات حية (استخدمها كمصدر حقائق ولا تخترع أرقام أو تفاصيل غير موجودة). "
-            "لا تكرر نص الكتل أو العلامات مثل [WEATHER]/[WEB_SEARCH] في الرد النهائي:"
-        )
-    else:
-        live_data_rule = (
-            "LIVE DATA (treat as authoritative — quote figures verbatim, "
-            "do not invent missing details). Do not repeat block labels or raw tool text:" 
-        )
+    live_data_rule = (
+        "نتايج بحث ممكن تفيدك. لو بتجاوب على سؤال حقيقي/معلومة محتاجة تحديث "
+        "(زي نتيجة ماتش، سعر، خبر، تاريخ، شخص)، استخدم النتايج دي كحقائق. "
+        "لو مش مرتبطة بالسؤال (زي نصيحة أو رأي أو كلام عادي)، تجاهلها تماماً "
+        "وجاوب من فهمك العادي من غير ما تذكرها:"
+        if response_language == "ar"
+        else "Search results that may help. If the user is asking a factual or "
+        "time-sensitive question (scores, prices, news, history, people), use "
+        "these results as facts. If they are not relevant to the question "
+        "(e.g. advice, opinions, casual talk), ignore them completely and "
+        "answer from your own understanding without mentioning them:"
+    )
     sections.extend([
         "",
         live_data_rule,
@@ -321,7 +474,7 @@ def build_tool_augmented_prompt(user_text, tool_context, response_language="en",
     token_count = _estimate_token_count(prompt_text)
     _log_first_prompt_build(token_count, tier, response_language, "build_tool_augmented_prompt")
 
-    return {
+    return _package_num_ctx({
         "prompt": prompt_text,
         "kb_sources": [],
         "kb_results": [],
@@ -329,7 +482,7 @@ def build_tool_augmented_prompt(user_text, tool_context, response_language="en",
         "memory_used": False,
         "token_count": token_count,
         "tier": tier,
-    }
+    }, query)
 
 
 def build_claude_messages(
@@ -506,157 +659,3 @@ def build_intent_extraction_prompt(user_text, language="en"):
         ]
     )
 
-
-# ---------------------------------------------------------------------------
-# TIERED PROMPT BUILDERS – Phase 1 Production Improvement
-# ---------------------------------------------------------------------------
-
-def get_system_prompt_for_model(model_name, response_language="en"):
-    """Get the optimal system prompt for a given model.
-    
-    Dispatches to minimal or full prompt based on model tier.
-    For use in orchestrator and other entry points to select the right prompt style.
-    
-    Args:
-        model_name: e.g. "qwen3:1.7b", "qwen3:4b", "qwen3:8b"
-        response_language: "en" or "ar"
-        
-    Returns:
-        System prompt text (without user query)
-    """
-    tier = _get_model_tier(model_name)
-    sections = _build_system_block(response_language, include_few_shot=True, tier=tier)
-    return "\n".join(sections)
-
-
-def build_minimal_prompt(user_text, response_language="en"):
-    """Build a minimal prompt for small models (1.7B–4B).
-    
-    Features:
-    - 6–8 core system lines (no redundancy)
-    - 2–3 few-shot examples (minimal set)
-    - No KB or session memory (keep it lean)
-    - Target: ≥40% token reduction vs full prompt
-    
-    Args:
-        user_text: User query
-        response_language: "en" or "ar"
-        
-    Returns:
-        Dict with "prompt" and metadata
-    """
-    query = (user_text or "").strip()
-    response_language = _normalize_response_language(response_language)
-    sections = _build_system_block(response_language, include_few_shot=True, tier="low")
-    sections.extend(["", "USER:", query, "", "ASSISTANT:"])
-
-    prompt_text = "\n".join(sections)
-    token_count = _estimate_token_count(prompt_text)
-    _log_first_prompt_build(token_count, "low", response_language, "build_minimal_prompt")
-
-    return {
-        "prompt": prompt_text,
-        "kb_sources": [],
-        "kb_results": [],
-        "kb_context_used": False,
-        "memory_used": False,
-        "token_count": token_count,
-        "tier": "low",
-    }
-
-
-def build_full_prompt(user_text, response_language="en"):
-    """Build a full prompt for large models (8B+).
-    
-    Features:
-    - Rich system prompt with full persona
-    - Comprehensive few-shot examples (4+ examples)
-    - Optional KB and session memory
-    - Full context window utilization
-    
-    Args:
-        user_text: User query
-        response_language: "en" or "ar"
-        
-    Returns:
-        Dict with "prompt" and metadata (same structure as build_prompt_package)
-    """
-    query = (user_text or "").strip()
-    response_language = _normalize_response_language(response_language)
-    memory_context = session_memory.build_context(
-        max_chars=min(int(MEMORY_MAX_CONTEXT_CHARS), _PROMPT_MEMORY_CONTEXT_MAX_CHARS),
-        language=response_language,
-        intents={"LLM_QUERY"},
-    )
-    context_slots = session_memory.context_snapshot()
-    kb_package = knowledge_base_service.retrieve_for_prompt(
-        query,
-        top_k=KB_TOP_K,
-        max_chars=KB_MAX_CONTEXT_CHARS,
-    )
-    kb_context = kb_package["context"]
-    compact_memory_context = " ".join(str(memory_context or "").split()).strip()
-    compact_kb_context = " ".join(str(kb_context or "").split()).strip()
-
-    sections = _build_system_block(response_language, include_few_shot=True, tier="high")
-
-    if compact_memory_context:
-        sections.append(f"MEMORY: {compact_memory_context}")
-
-    last_app = context_slots.get("last_app") or ""
-    last_file = context_slots.get("last_file") or ""
-    pending = context_slots.get("pending_confirmation_token") or ""
-    context_parts = []
-    if last_app:
-        context_parts.append(f"last_app={last_app}")
-    if last_file:
-        context_parts.append(f"last_file={last_file}")
-    if pending:
-        context_parts.append(f"pending_confirmation={pending}")
-    if context_parts:
-        sections.append(f"CONTEXT: {', '.join(context_parts)}")
-
-    if compact_kb_context:
-        sections.append(f"KNOWLEDGE: {compact_kb_context}")
-
-    sections.extend(["", "USER:", query, "", "ASSISTANT:"])
-
-    prompt_text = "\n".join(sections)
-    token_count = _estimate_token_count(prompt_text)
-    _log_first_prompt_build(token_count, "high", response_language, "build_full_prompt")
-
-    return {
-        "prompt": prompt_text,
-        "kb_sources": kb_package["sources"],
-        "kb_results": kb_package["results"],
-        "kb_context_used": bool(compact_kb_context),
-        "memory_used": bool(compact_memory_context),
-        "token_count": token_count,
-        "tier": "high",
-    }
-
-
-def build_prompt_for_tier(user_text, tier="medium", response_language="en"):
-    """Build a prompt optimized for a specific model tier.
-    
-    Main dispatcher for tiered prompt construction. Use this when you know the
-    target model tier and want the optimal prompt for it.
-    
-    Args:
-        user_text: User query
-        tier: One of "minimal", "low", "medium", "high"
-        response_language: "en" or "ar"
-        
-    Returns:
-        Dict with "prompt" and metadata
-    """
-    inferred_tier = _get_model_tier(tier)
-    response_language = _normalize_response_language(response_language)
-    
-    if inferred_tier in ("minimal", "low"):
-        return build_minimal_prompt(user_text, response_language)
-    elif inferred_tier == "high":
-        return build_full_prompt(user_text, response_language)
-    else:
-        # Default to build_prompt_package for medium tier
-        return build_prompt_package(user_text, response_language, tier="medium")

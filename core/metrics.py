@@ -872,10 +872,18 @@ class LatencyTracker:
         "wake_to_stt_start": 0.1,
         "stt_partial_latency": 3.0,
         "stt_total": 1.0,
+        "stt_lang_pick": 0.25,
+        "stt_cloud_call": 0.8,
+        "stt_local_call": 1.2,
+        "stt_validate": 0.02,
+        "stt_retry": 1.5,
         "intent_detection": 0.02,
         "action_execution": 0.1,
         "llm_first_token": 1.5,
-        "tts_first_word": 0.3,
+        "tts_rewrite": 0.03,
+        "tts_synth": 0.8,
+        "tts_first_word": 1.0,
+        "tts_playback": 10.0,
         "e2e_command": 1.5,
         "e2e_llm_query": 4.0,
     }
@@ -962,7 +970,9 @@ def record_stage_timing(stage: str, elapsed: float, **fields) -> None:
     latest[str(stage)] = max(0.0, float(elapsed))
     if TIMING_LOG_ENABLED:
         suffix = " ".join(f"{key}={value}" for key, value in fields.items())
-        get_logger("timing").info(
+        timing_log = get_logger("timing")
+        log_method = timing_log.debug if str(stage) == "wake_inference" else timing_log.info
+        log_method(
             "⏱ %-14s %6.2fs%s",
             stage,
             elapsed,

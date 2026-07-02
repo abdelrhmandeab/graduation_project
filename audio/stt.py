@@ -2,28 +2,52 @@ from __future__ import annotations
 
 import threading
 import time
+import tempfile
+import wave
+import math
+import sys
+from array import array
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 import httpx
 
-from core import metrics
 from core.config import (
     ELEVENLABS_API_KEY,
     ELEVENLABS_BASE_URL,
     STT_BACKEND,
-    STT_ELEVENLABS_ARABIC_LANGUAGE,
+    STT_CLOUD_RACE_LANGUAGES,
+    STT_ELEVENLABS_CONNECT_TIMEOUT_SECONDS,
+    STT_ELEVENLABS_COOLDOWN_SECONDS,
     STT_ELEVENLABS_ENABLED,
+    STT_ELEVENLABS_HTTP2,
+    STT_ELEVENLABS_READ_TIMEOUT_SECONDS,
     STT_ELEVENLABS_STT_MODEL,
-    STT_ELEVENLABS_TIMEOUT_SECONDS,
     STT_ELEVENLABS_WEAK_TEXT_MIN_CHARS,
-    STT_LANGUAGE_DETECT_MODEL,
+    STT_AR_INITIAL_PROMPT,
+    STT_BEAM_SIZE_LONG,
+    STT_BEAM_SIZE_SHORT,
+    STT_BEAM_SIZE_SHORT_THRESHOLD_SECONDS,
+    STT_EN_INITIAL_PROMPT,
+    STT_FORBID_OTHER_LANGUAGES,
     STT_LANGUAGE_HINT,
-    STT_MIXED_TREAT_AS_ARABIC,
+    STT_LANGUAGE_LOCK,
+    STT_MAX_AUDIO_SECONDS,
+    STT_MIN_AUDIO_RMS,
+    STT_NO_SPEECH_THRESHOLD,
     STT_PARTIAL_WHISPER_MODEL,
+    STT_RETRY_OPPOSITE_LANGUAGE,
+    STT_VALIDATION_DOMINANT_SCRIPT_MIN,
+    WHISPER_COMPUTE_TYPE,
+    WHISPER_DEVICE,
     WHISPER_MODEL,
 )
-from core.logger import logger
+from core import hardware_detect
+from core.logger import get_logger, logger
+from core.metrics import get_thread_stage_timing, stage_timer
+from core.shutdown import is_shutdown_requested
 from utils.language_detector import detect_language
 
 _LOCAL_BACKEND = "faster_whisper"
@@ -44,17 +68,56 @@ _BACKEND_ALIASES = {
 }
 
 _ELEVENLABS_COOLDOWN_UNTIL = 0.0
+_STT_LOG = get_logger("stt")
+_ARABIC_PROMPT = "\u0628\u0627\u0644\u0644\u0647\u062c\u0629 \u0627\u0644\u0645\u0635\u0631\u064a\u0629:"
+_CLOUD_HTTP_CLIENT: Optional[httpx.Client] = None
+_CLOUD_HTTP_CLIENT_LOCK = threading.Lock()
 
 
 def _elevenlabs_on_cooldown() -> bool:
     return time.time() < _ELEVENLABS_COOLDOWN_UNTIL
 
 
-def _set_elevenlabs_cooldown(reason: str, *, seconds: float = 1800.0) -> None:
+def _set_elevenlabs_cooldown(reason: str, *, seconds: Optional[float] = None) -> None:
     global _ELEVENLABS_COOLDOWN_UNTIL
-    duration = max(60.0, float(seconds))
+    duration = max(60.0, float(seconds if seconds is not None else STT_ELEVENLABS_COOLDOWN_SECONDS))
     _ELEVENLABS_COOLDOWN_UNTIL = max(_ELEVENLABS_COOLDOWN_UNTIL, time.time() + duration)
     logger.warning("ElevenLabs STT cooldown enabled for %.0fs: %s", duration, reason)
+
+
+def get_cloud_http_client() -> httpx.Client:
+    global _CLOUD_HTTP_CLIENT
+    if _CLOUD_HTTP_CLIENT is not None:
+        return _CLOUD_HTTP_CLIENT
+    with _CLOUD_HTTP_CLIENT_LOCK:
+        if _CLOUD_HTTP_CLIENT is not None:
+            return _CLOUD_HTTP_CLIENT
+        timeout = httpx.Timeout(
+            connect=float(STT_ELEVENLABS_CONNECT_TIMEOUT_SECONDS),
+            read=float(STT_ELEVENLABS_READ_TIMEOUT_SECONDS),
+            write=float(STT_ELEVENLABS_READ_TIMEOUT_SECONDS),
+            pool=float(STT_ELEVENLABS_READ_TIMEOUT_SECONDS),
+        )
+        try:
+            _CLOUD_HTTP_CLIENT = httpx.Client(http2=bool(STT_ELEVENLABS_HTTP2), timeout=timeout)
+        except ImportError as exc:
+            if not bool(STT_ELEVENLABS_HTTP2):
+                raise
+            logger.debug("HTTP/2 unavailable for ElevenLabs STT client; using HTTP/1.1: %s", exc)
+            _CLOUD_HTTP_CLIENT = httpx.Client(http2=False, timeout=timeout)
+        return _CLOUD_HTTP_CLIENT
+
+
+def close_cloud_http_client() -> None:
+    global _CLOUD_HTTP_CLIENT
+    with _CLOUD_HTTP_CLIENT_LOCK:
+        client = _CLOUD_HTTP_CLIENT
+        _CLOUD_HTTP_CLIENT = None
+    if client is not None:
+        try:
+            client.close()
+        except Exception:
+            pass
 
 
 def _normalize_backend_name(name: str) -> str:
@@ -65,17 +128,16 @@ def _normalize_backend_name(name: str) -> str:
 _RUNTIME_STT_BACKEND = _normalize_backend_name(STT_BACKEND)
 _RUNTIME_STT_SETTINGS: Dict[str, Any] = {"language_hint": STT_LANGUAGE_HINT}
 _LAST_TRANSCRIPTION_META: Dict[str, Any] = {}
+_RECENT_TRANSCRIPTION_META = deque(maxlen=10)
 
 _LOCAL_MODEL_LOCK = threading.Lock()
 _LOCAL_MODEL: Any = None
-
-_LANG_DETECT_MODEL_LOCK = threading.Lock()
-_LANG_DETECT_MODEL: Any = None
-_LANG_DETECT_MODEL_NAME = ""
+_LOCAL_MODEL_RUNTIME: Dict[str, Any] = {}
 
 _PARTIAL_MODEL_LOCK = threading.Lock()
 _PARTIAL_MODEL: Any = None
 _PARTIAL_MODEL_NAME = ""
+_PARTIAL_MODEL_RUNTIME: Dict[str, Any] = {}
 
 
 def _runtime_language_hint() -> str:
@@ -98,36 +160,6 @@ def _normalize_detected_language(code: str) -> str:
     return value
 
 
-def _normalize_elevenlabs_language_code(value: Optional[str]) -> str:
-    raw = str(value or "").strip().lower().replace("_", "-")
-    if not raw:
-        return ""
-
-    aliases = {
-        "ar": "ara",
-        "ara": "ara",
-        "arabic": "ara",
-        "ar-eg": "ara",
-        "ar-sa": "ara",
-        "en": "eng",
-        "eng": "eng",
-        "english": "eng",
-        "en-us": "eng",
-        "en-gb": "eng",
-    }
-    if raw in aliases:
-        return aliases[raw]
-
-    base = raw.split("-", 1)[0]
-    if base in aliases:
-        return aliases[base]
-
-    if len(raw) == 3 and raw.isalpha():
-        return raw
-
-    return ""
-
-
 def _classify_language_by_script(text: str) -> str:
     arabic_letters = 0
     latin_letters = 0
@@ -145,9 +177,11 @@ def _classify_language_by_script(text: str) -> str:
             latin_letters += 1
 
     if arabic_letters and latin_letters:
-        if bool(STT_MIXED_TREAT_AS_ARABIC):
-            return "ar"
-        return "ar" if arabic_letters >= latin_letters else "en"
+        # Egyptian Arabic speakers commonly mix English words (app names,
+        # technical terms).  Even a small Arabic presence is a strong signal
+        # the user is speaking Arabic — bias toward Arabic unless Latin
+        # characters dominate by a wide margin (3:1 or more).
+        return "en" if latin_letters > arabic_letters * 3 else "ar"
     if arabic_letters:
         return "ar"
     if latin_letters:
@@ -155,12 +189,233 @@ def _classify_language_by_script(text: str) -> str:
     return ""
 
 
-def _record_stt_metric(backend: str, latency_ms: float, text: str) -> None:
-    stage_name = f"stt_{backend}"
-    try:
-        metrics.record_stage(stage_name, float(latency_ms) / 1000.0, success=bool(text.strip()))
-    except Exception:
-        pass
+def _language_counts(text: str) -> Dict[str, int]:
+    arabic = 0
+    latin = 0
+    other_alpha = 0
+    for ch in str(text or ""):
+        code = ord(ch)
+        if (
+            0x0600 <= code <= 0x06FF
+            or 0x0750 <= code <= 0x077F
+            or 0x08A0 <= code <= 0x08FF
+            or 0xFB50 <= code <= 0xFDFF
+            or 0xFE70 <= code <= 0xFEFF
+        ):
+            arabic += 1
+        elif "a" <= ch.lower() <= "z":
+            latin += 1
+        elif ch.isalpha():
+            other_alpha += 1
+    return {"arabic": arabic, "latin": latin, "other_alpha": other_alpha}
+
+
+def _is_allowed_transcript_char(ch: str, *, allow_arabic: bool) -> bool:
+    if not ch:
+        return True
+    code = ord(ch)
+    if code < 128:
+        return True
+    if allow_arabic and (
+        0x0600 <= code <= 0x06FF
+        or 0x0750 <= code <= 0x077F
+        or 0x08A0 <= code <= 0x08FF
+        or 0xFB50 <= code <= 0xFDFF
+        or 0xFE70 <= code <= 0xFEFF
+    ):
+        return True
+    return not ch.isalpha()
+
+
+def _make_one_second_probe(audio_file: str) -> str:
+    path = Path(audio_file)
+    with wave.open(str(path), "rb") as source:
+        params = source.getparams()
+        frames_to_read = min(source.getnframes(), int(source.getframerate()))
+        audio = source.readframes(max(1, frames_to_read))
+
+    probe = tempfile.NamedTemporaryFile(prefix="jarvis_stt_probe_", suffix=".wav", delete=False)
+    probe_path = probe.name
+    probe.close()
+    with wave.open(probe_path, "wb") as target:
+        target.setparams(params)
+        target.writeframes(audio)
+    return probe_path
+
+
+def _pick_locked_language(
+    audio_file: str,
+    streaming_text: str = "",
+    language_hint: str = "auto",
+    probe_model: Any = None,
+    allow_ambiguous: bool = False,
+) -> str:
+    picked_started = time.perf_counter()
+    with stage_timer("stt_lang_pick"):
+        source = "default"
+        lang = _classify_language_by_script(streaming_text)
+        if lang not in {"ar", "en"}:
+            hint = _normalize_detected_language(language_hint or _runtime_language_hint())
+            if hint in {"ar", "en"}:
+                lang = hint
+                source = "hint"
+            else:
+                preview = ""
+                probe_path = ""
+                whisper_detected_lang = ""
+                try:
+                    probe_path = _make_one_second_probe(audio_file)
+                    model = probe_model if probe_model is not None else _get_partial_whisper_model()
+                    segments, _info = model.transcribe(
+                        str(probe_path),
+                        beam_size=1,
+                        vad_filter=True,
+                        language=None,
+                        task="transcribe",
+                        condition_on_previous_text=False,
+                    )
+                    whisper_detected_lang = _normalize_detected_language(
+                        str(getattr(_info, "language", "") or "")
+                    )
+                    preview_parts: List[str] = []
+                    for segment in segments:
+                        piece = str(getattr(segment, "text", "") or "").strip()
+                        if piece:
+                            preview_parts.append(piece)
+                        if len(" ".join(preview_parts)) >= 80:
+                            break
+                    preview = " ".join(preview_parts).strip()
+                except Exception as exc:
+                    _STT_LOG.warning("lang_pick probe failed: %s", exc)
+                finally:
+                    if probe_path:
+                        try:
+                            Path(probe_path).unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                script_lang = _classify_language_by_script(preview)
+                if script_lang in {"ar", "en"}:
+                    lang = script_lang
+                    source = "probe"
+                elif whisper_detected_lang in {"ar", "en"}:
+                    lang = whisper_detected_lang
+                    source = "probe"
+                else:
+                    source = "default"
+        else:
+            source = "partial"
+
+        if lang not in {"ar", "en"} and allow_ambiguous:
+            lang = "ambiguous"
+        if lang not in {"ar", "en", "ambiguous"}:
+            lang = "en"
+        _LAST_TRANSCRIPTION_META.update(
+            {
+                "lang_pick_source": source,
+                "lang_pick_lang": lang,
+                "lang_pick_seconds": max(0.0, time.perf_counter() - picked_started),
+            }
+        )
+        _STT_LOG.info("stt_lang_pick source=%s lang=%s", source, lang)
+        return lang
+
+
+def _is_weak_transcript_for_language(text: str, locked_lang: str) -> bool:
+    normalized = " ".join(str(text or "").split()).strip()
+    if len(normalized) < int(STT_ELEVENLABS_WEAK_TEXT_MIN_CHARS):
+        return True
+    counts = _language_counts(normalized)
+    if locked_lang == "ar" and counts["arabic"] < 3:
+        return True
+    if locked_lang == "en" and counts["latin"] < 3:
+        return True
+    # Mixed Arabic+Latin text is legitimate code-switched speech — never
+    # reject it as "weak" due to the presence of the "other" script.
+    if counts["arabic"] > 0 and counts["latin"] > 0:
+        return False
+    return any(
+        not _is_allowed_transcript_char(ch, allow_arabic=(locked_lang == "ar"))
+        for ch in normalized
+    )
+
+
+def _validate_transcript_language(text: str, locked_lang: str) -> bool:
+    with stage_timer("stt_validate", lang=locked_lang):
+        normalized = " ".join(str(text or "").split()).strip()
+        if _is_weak_transcript_for_language(normalized, locked_lang):
+            return False
+        counts = _language_counts(normalized)
+        total_alpha = counts["arabic"] + counts["latin"] + counts["other_alpha"]
+        if total_alpha <= 0:
+            return False
+        if bool(STT_FORBID_OTHER_LANGUAGES) and counts["other_alpha"] / float(total_alpha) > 0.05:
+            return False
+        # Accept genuinely mixed Arabic+Latin text (Egyptian Arabic code-switching).
+        # The dominant-script floor only applies when one script is nearly absent —
+        # mixed speech almost never reaches 70% one script, but it is still valid.
+        if counts["arabic"] > 0 and counts["latin"] > 0:
+            return True
+        dominant = counts["arabic"] if locked_lang == "ar" else counts["latin"]
+        return dominant / float(total_alpha) >= float(STT_VALIDATION_DOMINANT_SCRIPT_MIN)
+
+
+def _finalize_stt_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    global _LAST_TRANSCRIPTION_META
+    finalized = dict(result or {})
+    text = str(finalized.get("text", "") or "").strip()
+    errors = [str(item) for item in list(finalized.get("errors") or [])]
+    validation_ok = bool(finalized.get("validation_ok", bool(text)))
+    if "stt:silence" in errors:
+        status = "silence"
+    elif errors and not text:
+        status = "error" if "stt:invalid_language" not in errors else "rejected"
+    elif text and validation_ok:
+        status = "ok"
+    elif text:
+        status = "rejected"
+    else:
+        status = "error"
+
+    call_seconds = max(
+        get_thread_stage_timing("stt_cloud_call"),
+        get_thread_stage_timing("stt_local_call"),
+    )
+    pick_seconds = float(finalized.get("lang_pick_seconds") or get_thread_stage_timing("stt_lang_pick"))
+    validate_seconds = get_thread_stage_timing("stt_validate")
+    audio_duration = float(finalized.get("audio_duration") or finalized.get("duration_seconds") or 0.0)
+    audio_rms = float(finalized.get("audio_rms") or 0.0)
+    retry_used = bool(finalized.get("retry_used") or get_thread_stage_timing("stt_retry") > 0.0)
+    lang = str(finalized.get("language") or finalized.get("lang_pick_lang") or "").strip().lower()
+
+    finalized.update(
+        {
+            "result": status,
+            "lang_pick_source": finalized.get("lang_pick_source") or "",
+            "lang_pick_lang": finalized.get("lang_pick_lang") or lang,
+            "validation_ok": validation_ok,
+            "retry_used": retry_used,
+            "audio_duration": audio_duration,
+            "audio_rms": audio_rms,
+            "call_seconds": call_seconds,
+            "pick_seconds": pick_seconds,
+            "validate_seconds": validate_seconds,
+        }
+    )
+    _LAST_TRANSCRIPTION_META = finalized
+    _RECENT_TRANSCRIPTION_META.append(dict(finalized))
+    _STT_LOG.info(
+        "result=%s backend=%s lang=%s dur=%.2fs call=%.2fs pick=%.2fs validate=%.2fs chars=%d conf=%.2f",
+        status,
+        finalized.get("method") or finalized.get("backend") or "unknown",
+        lang or "unknown",
+        audio_duration,
+        call_seconds,
+        pick_seconds,
+        validate_seconds,
+        len(text),
+        float(finalized.get("confidence") or 0.0),
+    )
+    return finalized
 
 
 def get_runtime_stt_backend() -> str:
@@ -191,10 +446,12 @@ def set_runtime_stt_settings(**kwargs: Any) -> Dict[str, Any]:
 
 def get_runtime_stt_backend_info() -> Dict[str, Any]:
     elevenlabs_key = bool(str(ELEVENLABS_API_KEY or "").strip())
+    runtime = dict(_LOCAL_MODEL_RUNTIME)
     return {
         "backend": _RUNTIME_STT_BACKEND,
-        "whisper_model": str(WHISPER_MODEL),
-        "language_detector_model": str(STT_LANGUAGE_DETECT_MODEL),
+        "whisper_model": str(runtime.get("model") or WHISPER_MODEL),
+        "whisper_device": str(runtime.get("device") or WHISPER_DEVICE),
+        "whisper_compute_type": str(runtime.get("compute_type") or WHISPER_COMPUTE_TYPE),
         "elevenlabs_enabled": bool(STT_ELEVENLABS_ENABLED),
         "elevenlabs_key_configured": elevenlabs_key,
         "elevenlabs_stt_model": str(STT_ELEVENLABS_STT_MODEL),
@@ -205,14 +462,118 @@ def get_last_transcription_meta() -> Dict[str, Any]:
     return dict(_LAST_TRANSCRIPTION_META)
 
 
-def _read_audio_bytes(audio_file: str) -> bytes:
-    path = Path(audio_file)
-    if not path.exists() or not path.is_file():
-        raise FileNotFoundError(f"Audio file not found: {audio_file}")
-    return path.read_bytes()
+def get_recent_transcription_meta() -> List[Dict[str, Any]]:
+    return [dict(row) for row in list(_RECENT_TRANSCRIPTION_META)]
+
+
+def _audio_duration_seconds(audio_file: str) -> float:
+    try:
+        with wave.open(str(audio_file), "rb") as handle:
+            rate = float(handle.getframerate() or 0)
+            if rate <= 0:
+                return 0.0
+            return float(handle.getnframes()) / rate
+    except Exception:
+        return 0.0
+
+
+def _audio_rms(audio_file: str) -> float:
+    try:
+        with wave.open(str(audio_file), "rb") as handle:
+            sample_width = int(handle.getsampwidth() or 2)
+            frame_count = int(handle.getnframes() or 0)
+            if sample_width <= 0 or frame_count <= 0:
+                return 0.0
+            frames = handle.readframes(frame_count)
+        if not frames:
+            return 0.0
+        if sample_width == 2:
+            samples = array("h")
+            samples.frombytes(frames)
+            if sys.byteorder != "little":
+                samples.byteswap()
+            if not samples:
+                return 0.0
+            square_mean = sum(float(sample) * float(sample) for sample in samples) / float(len(samples))
+            return math.sqrt(square_mean) / 32768.0
+
+        signed = sample_width > 1
+        peak = float(1 << (8 * sample_width - 1))
+        total = 0.0
+        count = 0
+        for offset in range(0, len(frames) - sample_width + 1, sample_width):
+            sample = int.from_bytes(frames[offset : offset + sample_width], "little", signed=signed)
+            if sample_width == 1:
+                sample -= 128
+            total += float(sample) * float(sample)
+            count += 1
+        if count <= 0:
+            return 0.0
+        return math.sqrt(total / float(count)) / peak
+    except Exception:
+        return 0.0
+
+
+def _silence_result(*, locked_lang: str, rms: float, duration_seconds: float) -> Dict[str, Any]:
+    return {
+        "text": "",
+        "confidence": 0.0,
+        "language": locked_lang if locked_lang in {"ar", "en"} else "",
+        "backend": _LOCAL_BACKEND,
+        "method": _LOCAL_BACKEND,
+        "fallback_used": False,
+        "errors": ["stt:silence"],
+        "audio_rms": rms,
+        "audio_duration": duration_seconds,
+    }
+
+
+def _shutdown_result(*, backend: str = _LOCAL_BACKEND, method: str = _LOCAL_BACKEND) -> Dict[str, Any]:
+    return {
+        "text": "",
+        "confidence": 0.0,
+        "language": "",
+        "backend": backend,
+        "method": method,
+        "fallback_used": False,
+        "errors": ["stt:shutdown"],
+        "validation_ok": False,
+    }
+
+
+def _manual_whisper_runtime() -> Dict[str, Any]:
+    model = str(WHISPER_MODEL or "auto").strip() or "auto"
+    device = str(WHISPER_DEVICE or "auto").strip().lower() or "auto"
+    compute_type = str(WHISPER_COMPUTE_TYPE or "auto").strip().lower() or "auto"
+    if model == "auto":
+        runtime = dict(hardware_detect.recommend_whisper_runtime())
+    else:
+        runtime = {
+            "model": model,
+            "device": "cpu" if device == "auto" else device,
+            "compute_type": "int8" if compute_type == "auto" else compute_type,
+        }
+    if device != "auto":
+        runtime["device"] = device
+    if compute_type != "auto":
+        runtime["compute_type"] = compute_type
+    return runtime
+
+
+def _partial_whisper_runtime() -> Dict[str, Any]:
+    main_runtime = _manual_whisper_runtime()
+    device = str(main_runtime.get("device") or "cpu")
+    compute_type = str(main_runtime.get("compute_type") or "int8")
+    configured = str(STT_PARTIAL_WHISPER_MODEL or "auto").strip() or "auto"
+    if configured.lower() in {"auto", ""}:
+        model = "base" if device == "cuda" else "tiny"
+    else:
+        model = configured
+    return {"model": model, "device": device, "compute_type": compute_type}
 
 
 def _get_local_whisper_model() -> Any:
+    global _LOCAL_MODEL_RUNTIME
     global _LOCAL_MODEL
     if _LOCAL_MODEL is not None:
         return _LOCAL_MODEL
@@ -222,50 +583,84 @@ def _get_local_whisper_model() -> Any:
             return _LOCAL_MODEL
         from faster_whisper import WhisperModel
 
-        _LOCAL_MODEL = WhisperModel(str(WHISPER_MODEL), device="cpu", compute_type="int8")
-        logger.debug("Loaded local faster-whisper model '%s'", WHISPER_MODEL)
+        runtime = _manual_whisper_runtime()
+        try:
+            _LOCAL_MODEL = WhisperModel(
+                str(runtime["model"]),
+                device=str(runtime["device"]),
+                compute_type=str(runtime["compute_type"]),
+            )
+        except Exception as exc:
+            fallback = {"model": "base", "device": "cpu", "compute_type": "int8"}
+            logger.warning(
+                "Local faster-whisper runtime failed (%s/%s/%s): %s; falling back to base/cpu/int8",
+                runtime.get("model"),
+                runtime.get("device"),
+                runtime.get("compute_type"),
+                exc,
+            )
+            _LOCAL_MODEL = WhisperModel(
+                fallback["model"],
+                device=fallback["device"],
+                compute_type=fallback["compute_type"],
+            )
+            runtime = fallback
+        _LOCAL_MODEL_RUNTIME = dict(runtime)
+        _STT_LOG.info(
+            "model=%s device=%s compute=%s",
+            runtime.get("model"),
+            runtime.get("device"),
+            runtime.get("compute_type"),
+        )
         return _LOCAL_MODEL
 
 
 def _get_partial_whisper_model() -> Any:
     global _PARTIAL_MODEL
     global _PARTIAL_MODEL_NAME
-    model_name = str(STT_PARTIAL_WHISPER_MODEL or WHISPER_MODEL).strip() or str(WHISPER_MODEL)
-    if _PARTIAL_MODEL is not None and _PARTIAL_MODEL_NAME == model_name:
+    global _PARTIAL_MODEL_RUNTIME
+    runtime = _partial_whisper_runtime()
+    model_name = str(runtime["model"])
+    runtime_key = f"{runtime['model']}|{runtime['device']}|{runtime['compute_type']}"
+    if _PARTIAL_MODEL is not None and _PARTIAL_MODEL_NAME == runtime_key:
         return _PARTIAL_MODEL
 
     with _PARTIAL_MODEL_LOCK:
-        if _PARTIAL_MODEL is not None and _PARTIAL_MODEL_NAME == model_name:
+        if _PARTIAL_MODEL is not None and _PARTIAL_MODEL_NAME == runtime_key:
             return _PARTIAL_MODEL
         from faster_whisper import WhisperModel
 
-        _PARTIAL_MODEL = WhisperModel(model_name, device="cpu", compute_type="int8")
-        _PARTIAL_MODEL_NAME = model_name
-        logger.debug("Loaded partial faster-whisper model '%s'", model_name)
+        try:
+            _PARTIAL_MODEL = WhisperModel(
+                model_name,
+                device=str(runtime["device"]),
+                compute_type=str(runtime["compute_type"]),
+            )
+        except Exception as exc:
+            fallback = {"model": "tiny", "device": "cpu", "compute_type": "int8"}
+            logger.debug(
+                "Partial faster-whisper runtime failed (%s/%s/%s): %s; falling back to tiny/cpu/int8",
+                runtime.get("model"),
+                runtime.get("device"),
+                runtime.get("compute_type"),
+                exc,
+            )
+            _PARTIAL_MODEL = WhisperModel(
+                fallback["model"],
+                device=fallback["device"],
+                compute_type=fallback["compute_type"],
+            )
+            runtime = fallback
+            runtime_key = f"{runtime['model']}|{runtime['device']}|{runtime['compute_type']}"
+        _PARTIAL_MODEL_NAME = runtime_key
+        _PARTIAL_MODEL_RUNTIME = dict(runtime)
+        logger.debug(
+            "Loaded partial faster-whisper model '%s' (device=%s compute=%s)",
+            runtime.get("model"),
+            runtime.get("device"),
+            runtime.get("compute_type"),
+        )
         return _PARTIAL_MODEL
-
-
-def _get_language_detector_whisper_model() -> Any:
-    global _LANG_DETECT_MODEL
-    global _LANG_DETECT_MODEL_NAME
-
-    detector_name = str(STT_LANGUAGE_DETECT_MODEL or "small").strip() or "small"
-    if detector_name == str(WHISPER_MODEL):
-        return _get_local_whisper_model()
-
-    if _LANG_DETECT_MODEL is not None and _LANG_DETECT_MODEL_NAME == detector_name:
-        return _LANG_DETECT_MODEL
-
-    with _LANG_DETECT_MODEL_LOCK:
-        if _LANG_DETECT_MODEL is not None and _LANG_DETECT_MODEL_NAME == detector_name:
-            return _LANG_DETECT_MODEL
-
-        from faster_whisper import WhisperModel
-
-        _LANG_DETECT_MODEL = WhisperModel(detector_name, device="cpu", compute_type="int8")
-        _LANG_DETECT_MODEL_NAME = detector_name
-        logger.debug("Loaded STT language detector whisper model '%s'", detector_name)
-        return _LANG_DETECT_MODEL
 
 
 def preload_critical_model() -> Dict[str, Any]:
@@ -284,12 +679,8 @@ def preload_critical_model() -> Dict[str, Any]:
 
 def preload_optional_models() -> Dict[str, Any]:
     backend = get_runtime_stt_backend()
-    detector_loaded = bool(_LANG_DETECT_MODEL)
     partial_loaded = bool(_PARTIAL_MODEL)
 
-    if backend == _HYBRID_BACKEND:
-        _get_language_detector_whisper_model()
-        detector_loaded = True
     try:
         _get_partial_whisper_model()
         partial_loaded = True
@@ -298,7 +689,6 @@ def preload_optional_models() -> Dict[str, Any]:
 
     return {
         "backend": backend,
-        "language_detector_model_loaded": detector_loaded,
         "partial_model_loaded": partial_loaded,
     }
 
@@ -325,31 +715,118 @@ def _transcribe_with_faster_whisper_model(
     language_hint: Optional[str] = None,
     on_partial: Optional[Callable[[str], None]] = None,
     *,
+    locked_lang: Optional[str] = None,
     whisper_kwargs: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    if is_shutdown_requested():
+        return _shutdown_result()
+
     hint = _normalize_detected_language(language_hint or _runtime_language_hint())
-    whisper_language = None
-    if hint in {"ar", "en"}:
-        whisper_language = hint
+    whisper_language = _normalize_detected_language(locked_lang or hint)
+    lock_requested = bool(STT_LANGUAGE_LOCK) and (locked_lang is not None or hint in {"ar", "en"})
+    if lock_requested and whisper_language not in {"ar", "en"}:
+        whisper_language = "en"
+
+    duration_seconds = _audio_duration_seconds(audio_file)
+    rms = _audio_rms(audio_file)
+    if rms < float(STT_MIN_AUDIO_RMS):
+        return _silence_result(
+            locked_lang=whisper_language or "",
+            rms=rms,
+            duration_seconds=duration_seconds,
+        )
 
     extra: Dict[str, Any] = dict(whisper_kwargs or {})
-    segments, info = model.transcribe(
-        str(audio_file),
-        beam_size=extra.pop("beam_size", 5),
-        vad_filter=extra.pop("vad_filter", True),
-        language=extra.pop("language", whisper_language),
-        initial_prompt=extra.pop("initial_prompt", None),
-        condition_on_previous_text=False,
-        **extra,
-    )
+    if lock_requested:
+        extra.pop("language", None)
+        extra.pop("task", None)
+        extra.pop("initial_prompt", None)
+        initial_prompt = (
+            str(STT_AR_INITIAL_PROMPT or _ARABIC_PROMPT)
+            if whisper_language == "ar"
+            else str(STT_EN_INITIAL_PROMPT or "")
+        )
+    else:
+        initial_prompt = extra.pop("initial_prompt", None)
+        whisper_language = extra.pop("language", whisper_language)
 
     parts: List[str] = []
-    for segment in segments:
-        piece = str(getattr(segment, "text", "") or "").strip()
-        if not piece:
-            continue
-        parts.append(piece)
-        _safe_partial_emit(on_partial, " ".join(parts).strip())
+    no_speech_probs: List[float] = []
+    avg_logprobs: List[float] = []
+    compression_ratios: List[float] = []
+    beam_size = (
+        int(STT_BEAM_SIZE_SHORT)
+        if duration_seconds < float(STT_BEAM_SIZE_SHORT_THRESHOLD_SECONDS)
+        else int(STT_BEAM_SIZE_LONG)
+    )
+    with stage_timer("stt_local_call", lang=whisper_language or "auto"):
+        segments, info = model.transcribe(
+            str(audio_file),
+            beam_size=extra.pop("beam_size", beam_size),
+            vad_filter=extra.pop("vad_filter", True),
+            vad_parameters=extra.pop(
+                "vad_parameters",
+                {"threshold": 0.5, "min_silence_duration_ms": 200},
+            ),
+            language=whisper_language,
+            task=extra.pop("task", "transcribe"),
+            initial_prompt=initial_prompt,
+            condition_on_previous_text=False,
+            no_speech_threshold=extra.pop("no_speech_threshold", float(STT_NO_SPEECH_THRESHOLD)),
+            temperature=extra.pop("temperature", 0.0),
+            **extra,
+        )
+        for segment in segments:
+            no_speech_prob = getattr(segment, "no_speech_prob", None)
+            if isinstance(no_speech_prob, (float, int)):
+                no_speech_probs.append(float(no_speech_prob))
+            avg_logprob = getattr(segment, "avg_logprob", None)
+            if isinstance(avg_logprob, (float, int)):
+                avg_logprobs.append(float(avg_logprob))
+            compression_ratio = getattr(segment, "compression_ratio", None)
+            if isinstance(compression_ratio, (float, int)):
+                compression_ratios.append(float(compression_ratio))
+            piece = str(getattr(segment, "text", "") or "").strip()
+            if not piece:
+                continue
+            parts.append(piece)
+            _safe_partial_emit(on_partial, " ".join(parts).strip())
+
+    if no_speech_probs and all(prob > 0.85 for prob in no_speech_probs):
+        return _silence_result(
+            locked_lang=whisper_language or "",
+            rms=rms,
+            duration_seconds=duration_seconds,
+        )
+
+    # Hallucination guard: forced-language decoding on mixed/ambiguous audio
+    # often produces fluent-sounding but fabricated text.  avg_logprob < -1.0
+    # (log-probability of the decode) and compression_ratio > 2.4 (repetitive
+    # output) are the standard Whisper heuristics for low-quality / hallucinated
+    # segments.  If ALL segments fail both checks simultaneously, the transcript
+    # is almost certainly confabulated — return empty rather than send it through.
+    if parts and avg_logprobs and compression_ratios:
+        mean_logprob = sum(avg_logprobs) / len(avg_logprobs)
+        mean_compression = sum(compression_ratios) / len(compression_ratios)
+        if mean_logprob < -1.0 and mean_compression > 2.4:
+            _STT_LOG.warning(
+                "Local Whisper hallucination guard triggered "
+                "(avg_logprob=%.3f compression_ratio=%.2f lang=%s); discarding transcript",
+                mean_logprob,
+                mean_compression,
+                whisper_language,
+            )
+            return {
+                "text": "",
+                "confidence": 0.0,
+                "language": whisper_language or "",
+                "backend": _LOCAL_BACKEND,
+                "method": _LOCAL_BACKEND,
+                "fallback_used": False,
+                "audio_duration": duration_seconds,
+                "audio_rms": rms,
+                "errors": ["stt:hallucination_guard"],
+            }
 
     text = " ".join(parts).strip()
     language = _normalize_detected_language(str(getattr(info, "language", "") or ""))
@@ -362,10 +839,12 @@ def _transcribe_with_faster_whisper_model(
     return {
         "text": text,
         "confidence": confidence_value,
-        "language": language,
+        "language": whisper_language or language,
         "backend": _LOCAL_BACKEND,
         "method": _LOCAL_BACKEND,
         "fallback_used": False,
+        "audio_duration": duration_seconds,
+        "audio_rms": rms,
     }
 
 
@@ -374,14 +853,24 @@ def _transcribe_with_faster_whisper(
     language_hint: Optional[str] = None,
     on_partial: Optional[Callable[[str], None]] = None,
     *,
+    locked_lang: Optional[str] = None,
+    streaming_text: str = "",
     whisper_kwargs: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    if locked_lang is None and bool(STT_LANGUAGE_LOCK):
+        locked_lang = _pick_locked_language(
+            audio_file,
+            streaming_text=streaming_text,
+            language_hint=language_hint or _runtime_language_hint(),
+            probe_model=_get_partial_whisper_model(),
+        )
     model = _get_local_whisper_model()
     return _transcribe_with_faster_whisper_model(
         model,
         audio_file,
         language_hint=language_hint,
         on_partial=on_partial,
+        locked_lang=locked_lang,
         whisper_kwargs=whisper_kwargs,
     )
 
@@ -398,82 +887,23 @@ def transcribe_partial_with_meta(
         audio_file,
         language_hint=language_hint,
         on_partial=None,
+        locked_lang=(
+            _normalize_detected_language(language_hint or "")
+            if _normalize_detected_language(language_hint or "") in {"ar", "en"}
+            else None
+        ),
         whisper_kwargs=whisper_kwargs,
     )
 
 
-def _detect_audio_language_with_whisper(audio_file: str, language_hint: Optional[str] = None) -> str:
-    hint = _normalize_detected_language(language_hint or _runtime_language_hint())
-    # Arabic hint remains a hard preference. English hint is soft and should
-    # not bypass detection, otherwise bilingual users can get Arabic turns
-    # misrouted to local English STT.
-    if hint == "ar":
-        return hint
-
-    model = _get_language_detector_whisper_model()
-    preview_parts: List[str] = []
-    detected = ""
-    confidence = 0.0
-
-    try:
-        segments, info = model.transcribe(
-            str(audio_file),
-            beam_size=1,
-            vad_filter=True,
-            language=None,
-            condition_on_previous_text=False,
-        )
-        detected = _normalize_detected_language(str(getattr(info, "language", "") or ""))
-        confidence = float(getattr(info, "language_probability", 0.0) or 0.0)
-        for segment in segments:
-            piece = str(getattr(segment, "text", "") or "").strip()
-            if not piece:
-                continue
-            preview_parts.append(piece)
-            if len(" ".join(preview_parts)) >= 120:
-                break
-    except Exception as exc:
-        logger.warning("Whisper language detection failed: %s", exc)
-
-    if detected in {"ar", "en"}:
-        preview_text = " ".join(preview_parts).strip()
-        script_guess = _classify_language_by_script(preview_text)
-        if script_guess == "ar":
-            return "ar"
-        if script_guess == "en" and detected == "en" and confidence >= 0.80:
-            return "en"
-        if bool(STT_MIXED_TREAT_AS_ARABIC) and script_guess in {"", "mixed"} and confidence < 0.80:
-            return "auto"
-        # Low confidence on detected language: fall back to script-based detection
-        if confidence < 0.70 and script_guess in {"ar", "en"}:
-            return script_guess
-        return detected if confidence >= 0.80 else "auto"
-
-    preview_text = " ".join(preview_parts).strip()
-    script_guess = _classify_language_by_script(preview_text)
-    if script_guess in {"ar", "en"}:
-        if script_guess == "en" and bool(STT_MIXED_TREAT_AS_ARABIC) and detected != "ar" and confidence < 0.85:
-            return "auto"
-        return script_guess
-
-    if preview_text:
-        detected_text_language = _normalize_detected_language(detect_language(preview_text))
-        if detected_text_language in {"ar", "en"}:
-            if detected_text_language == "en" and bool(STT_MIXED_TREAT_AS_ARABIC) and confidence < 0.85:
-                return "auto"
-            return detected_text_language
-
-    if hint in {"ar", "en"}:
-        return hint
-
-    return "auto"
-
-
 def _transcribe_with_elevenlabs(
     audio_file: str,
-    language_hint: Optional[str] = None,
+    locked_lang: str,
     on_partial: Optional[Callable[[str], None]] = None,
 ) -> Dict[str, Any]:
+    if is_shutdown_requested():
+        raise RuntimeError("STT shutdown requested")
+
     if not bool(STT_ELEVENLABS_ENABLED):
         raise RuntimeError("ElevenLabs STT is disabled")
 
@@ -484,26 +914,36 @@ def _transcribe_with_elevenlabs(
     if not api_key:
         raise RuntimeError("ELEVENLABS_API_KEY is not configured")
 
-    language = _normalize_detected_language(language_hint or "")
-    language_code = _normalize_elevenlabs_language_code(STT_ELEVENLABS_ARABIC_LANGUAGE) or "ara"
-    if language == "en":
-        language_code = "eng"
+    path = Path(audio_file)
+    if not path.exists() or not path.is_file():
+        raise FileNotFoundError(f"Audio file not found: {audio_file}")
+
+    duration_seconds = _audio_duration_seconds(str(path))
+    if duration_seconds > float(STT_MAX_AUDIO_SECONDS):
+        raise RuntimeError(
+            f"Audio duration {duration_seconds:.2f}s exceeds cloud STT cap {float(STT_MAX_AUDIO_SECONDS):.2f}s"
+        )
+
+    language = "ar" if _normalize_detected_language(locked_lang) == "ar" else "en"
+    language_code = "ara" if language == "ar" else "eng"
 
     endpoint = f"{str(ELEVENLABS_BASE_URL or 'https://api.elevenlabs.io').rstrip('/')}/v1/speech-to-text"
-    audio_bytes = _read_audio_bytes(audio_file)
     data = {
         "model_id": str(STT_ELEVENLABS_STT_MODEL or "scribe_v1"),
+        "tag_audio_events": "false",
+        "diarize": "false",
     }
     if language_code:
         data["language_code"] = language_code
 
-    response = httpx.post(
-        endpoint,
-        headers={"xi-api-key": api_key},
-        data=data,
-        files={"file": (Path(audio_file).name or "audio.wav", audio_bytes, "audio/wav")},
-        timeout=float(STT_ELEVENLABS_TIMEOUT_SECONDS),
-    )
+    with stage_timer("stt_cloud_call", lang=language):
+        with path.open("rb") as audio_handle:
+            response = get_cloud_http_client().post(
+                endpoint,
+                headers={"xi-api-key": api_key},
+                data=data,
+                files={"file": (path.name or "audio.wav", audio_handle, "audio/wav")},
+            )
 
     if response.status_code >= 400:
         error_preview = (response.text or "").strip().replace("\n", " ")
@@ -536,89 +976,289 @@ def _transcribe_with_elevenlabs(
     return {
         "text": text,
         "confidence": confidence_value,
-        "language": detected_language,
+        "language": language if detected_language not in {"ar", "en"} else detected_language,
         "backend": _HYBRID_BACKEND,
         "method": _ELEVENLABS_METHOD,
         "fallback_used": False,
+        "audio_duration": duration_seconds,
+        "audio_rms": _audio_rms(str(path)),
     }
 
 
-def _is_weak_transcript(text: str) -> bool:
-    normalized = " ".join(str(text or "").split()).strip()
-    if len(normalized) < int(STT_ELEVENLABS_WEAK_TEXT_MIN_CHARS):
-        return True
-    # Accept Arabic-only transcripts — Arabic has no Latin characters by definition.
-    arabic_chars = sum(1 for c in normalized if '؀' <= c <= 'ۿ')
-    if arabic_chars > 0:
-        return False
-    # Reject transcripts that contain no recognizable Latin or Arabic characters
-    latin_chars = sum(1 for c in normalized if 'a' <= c.lower() <= 'z')
-    if latin_chars == 0 and arabic_chars == 0:
-        return True
-    return False
+def _opposite_language(lang: str) -> str:
+    return "en" if lang == "ar" else "ar"
+
+
+def _invalid_language_result(
+    *,
+    backend: str,
+    method: str,
+    locked_lang: str,
+    errors: List[str],
+    audio_duration: float = 0.0,
+    audio_rms: float = 0.0,
+) -> Dict[str, Any]:
+    result = {
+        "text": "",
+        "confidence": 0.0,
+        "language": locked_lang,
+        "backend": backend,
+        "method": method,
+        "fallback_used": bool(errors),
+        "errors": list(errors) + ["stt:invalid_language"],
+        "validation_ok": False,
+        "audio_duration": audio_duration,
+        "audio_rms": audio_rms,
+    }
+    for key in ("lang_pick_source", "lang_pick_lang", "lang_pick_seconds"):
+        if key in _LAST_TRANSCRIPTION_META:
+            result[key] = _LAST_TRANSCRIPTION_META[key]
+    return result
+
+
+def _validated_backend_result(
+    result: Dict[str, Any],
+    *,
+    locked_lang: str,
+    backend: str,
+    method: str,
+) -> Optional[Dict[str, Any]]:
+    text = str(result.get("text", "") or "").strip()
+    validation_ok = _validate_transcript_language(text, locked_lang)
+    result["validation_ok"] = validation_ok
+    result["language"] = locked_lang
+    result["backend"] = backend
+    result["method"] = method
+    for key in ("lang_pick_source", "lang_pick_lang", "lang_pick_seconds"):
+        if key in _LAST_TRANSCRIPTION_META:
+            result[key] = _LAST_TRANSCRIPTION_META[key]
+    if validation_ok:
+        return result
+    return None
+
+
+def _race_elevenlabs_languages(
+    audio_file: str,
+    *,
+    on_partial: Optional[Callable[[str], None]] = None,
+) -> tuple[Optional[Dict[str, Any]], List[str]]:
+    errors: List[str] = []
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="stt-cloud-race") as executor:
+        future_to_lang = {
+            executor.submit(_transcribe_with_elevenlabs, audio_file, locked_lang=lang, on_partial=on_partial): lang
+            for lang in ("ar", "en")
+        }
+        for future in as_completed(future_to_lang):
+            lang = future_to_lang[future]
+            try:
+                result = future.result()
+            except Exception as exc:
+                errors.append(f"elevenlabs:{lang}:{exc}")
+                continue
+            validated = _validated_backend_result(
+                result,
+                locked_lang=lang,
+                backend=_HYBRID_BACKEND,
+                method=_ELEVENLABS_METHOD,
+            )
+            if validated is not None:
+                validated["cloud_race_used"] = True
+                for pending in future_to_lang:
+                    if pending is not future:
+                        pending.cancel()
+                return validated, errors
+            errors.append(f"elevenlabs:{lang}:invalid_language")
+    return None, errors
 
 
 def _transcribe_with_hybrid_elevenlabs(
     audio_file: str,
     language_hint: Optional[str] = None,
     on_partial: Optional[Callable[[str], None]] = None,
+    *,
+    streaming_text: str = "",
 ) -> Dict[str, Any]:
-    detected_language = _detect_audio_language_with_whisper(audio_file, language_hint=language_hint)
-    errors: List[str] = []
+    if is_shutdown_requested():
+        return _shutdown_result(backend=_HYBRID_BACKEND, method=_HYBRID_BACKEND)
 
-    if detected_language == "ar" and bool(STT_ELEVENLABS_ENABLED):
+    duration_seconds = _audio_duration_seconds(audio_file)
+    rms = _audio_rms(audio_file)
+    if rms < float(STT_MIN_AUDIO_RMS):
+        result = _silence_result(locked_lang="", rms=rms, duration_seconds=duration_seconds)
+        result["backend"] = _HYBRID_BACKEND
+        result["method"] = _LOCAL_BACKEND
+        return result
+
+    locked_lang = _pick_locked_language(
+        audio_file,
+        streaming_text=streaming_text,
+        language_hint=language_hint or _runtime_language_hint(),
+        probe_model=_get_partial_whisper_model(),
+        allow_ambiguous=bool(STT_CLOUD_RACE_LANGUAGES),
+    )
+    if is_shutdown_requested():
+        return _shutdown_result(backend=_HYBRID_BACKEND, method=_HYBRID_BACKEND)
+
+    errors: List[str] = []
+    cloud_allowed = duration_seconds <= float(STT_MAX_AUDIO_SECONDS)
+    cloud_lang = locked_lang
+    local_lang = locked_lang if locked_lang in {"ar", "en"} else "en"
+    # Best cloud result that had text but failed the strict dominance gate.
+    # Used as a last-resort fallback rather than discarding a correct mixed
+    # transcript in favour of forced-lock local Whisper (which hallucinates).
+    best_cloud_mixed: Optional[Dict[str, Any]] = None
+
+    if bool(STT_ELEVENLABS_ENABLED) and cloud_allowed:
         try:
-            primary = _transcribe_with_elevenlabs(
-                audio_file,
-                language_hint=detected_language,
-                on_partial=on_partial,
-            )
-            if not _is_weak_transcript(str(primary.get("text", ""))):
-                primary["language"] = (
-                    _normalize_detected_language(primary.get("language") or detected_language)
-                    or detected_language
+            if cloud_lang == "ambiguous" and bool(STT_CLOUD_RACE_LANGUAGES):
+                raced, race_errors = _race_elevenlabs_languages(audio_file, on_partial=on_partial)
+                errors.extend(race_errors)
+                if raced is not None:
+                    return raced
+            elif cloud_lang in {"ar", "en"}:
+                primary = _transcribe_with_elevenlabs(
+                    audio_file,
+                    locked_lang=cloud_lang,
+                    on_partial=on_partial,
                 )
-                primary["backend"] = _HYBRID_BACKEND
-                primary["method"] = _ELEVENLABS_METHOD
-                return primary
-            errors.append("elevenlabs:weak_transcript")
-            logger.warning("ElevenLabs STT returned a weak transcript; falling back to local whisper")
+                validated = _validated_backend_result(
+                    primary,
+                    locked_lang=cloud_lang,
+                    backend=_HYBRID_BACKEND,
+                    method=_ELEVENLABS_METHOD,
+                )
+                if validated is not None:
+                    return validated
+                errors.append("elevenlabs:invalid_language")
+                primary_text = str(primary.get("text", "") or "").strip()
+                if primary_text:
+                    logger.warning("ElevenLabs STT returned invalid-language text; trying recovery")
+                    # Keep as mixed-language candidate in case local also fails.
+                    counts = _language_counts(primary_text)
+                    if counts["arabic"] > 0 and counts["latin"] > 0:
+                        primary["backend"] = _HYBRID_BACKEND
+                        primary["method"] = _ELEVENLABS_METHOD
+                        primary["validation_ok"] = True
+                        primary["language"] = cloud_lang
+                        best_cloud_mixed = primary
+                else:
+                    logger.debug("ElevenLabs STT returned empty transcript; skipping opposite-language cloud retry")
+                if bool(STT_RETRY_OPPOSITE_LANGUAGE) and primary_text and not is_shutdown_requested():
+                    retry_lang = _opposite_language(cloud_lang)
+                    with stage_timer("stt_retry", lang=retry_lang):
+                        retry = _transcribe_with_elevenlabs(
+                            audio_file,
+                            locked_lang=retry_lang,
+                            on_partial=on_partial,
+                        )
+                    retry_validated = _validated_backend_result(
+                        retry,
+                        locked_lang=retry_lang,
+                        backend=_HYBRID_BACKEND,
+                        method=_ELEVENLABS_METHOD,
+                    )
+                    if retry_validated is not None:
+                        retry_validated["retry_used"] = True
+                        return retry_validated
+                    errors.append("elevenlabs:retry_invalid_language")
+                    # Also check retry as a mixed-language candidate.
+                    retry_text = str(retry.get("text", "") or "").strip()
+                    if retry_text and best_cloud_mixed is None:
+                        retry_counts = _language_counts(retry_text)
+                        if retry_counts["arabic"] > 0 and retry_counts["latin"] > 0:
+                            retry["backend"] = _HYBRID_BACKEND
+                            retry["method"] = _ELEVENLABS_METHOD
+                            retry["validation_ok"] = True
+                            retry["language"] = retry_lang
+                            best_cloud_mixed = retry
         except Exception as exc:
             errors.append(f"elevenlabs:{exc}")
             if "quota_exceeded" in str(exc) or "http 401" in str(exc).lower():
                 _set_elevenlabs_cooldown(f"exception:{exc}")
             logger.warning("ElevenLabs STT failed: %s", exc)
+    elif bool(STT_ELEVENLABS_ENABLED) and not cloud_allowed:
+        errors.append(f"elevenlabs:audio_too_long:{duration_seconds:.2f}s")
+        logger.info(
+            "Skipping ElevenLabs STT for %.2fs audio over %.2fs cap",
+            duration_seconds,
+            float(STT_MAX_AUDIO_SECONDS),
+        )
 
     local = _transcribe_with_faster_whisper(
         audio_file,
-        language_hint=detected_language,
+        language_hint=language_hint,
         on_partial=on_partial,
+        locked_lang=local_lang,
     )
+    if "stt:silence" in list(local.get("errors") or []):
+        local["backend"] = _HYBRID_BACKEND
+        local["method"] = _LOCAL_BACKEND
+        if errors:
+            local["fallback_used"] = True
+            local["errors"] = list(errors) + list(local.get("errors") or [])
+        return local
     local_text = str(local.get("text", "")).strip()
-    local_lang = _normalize_detected_language(local.get("language") or detected_language)
-    local_confidence = float(local.get("confidence") or 0.0)
+    validated_local = _validated_backend_result(
+        local,
+        locked_lang=local_lang,
+        backend=_HYBRID_BACKEND,
+        method=_LOCAL_BACKEND,
+    )
+    if validated_local is not None:
+        if errors:
+            validated_local["fallback_used"] = True
+            validated_local["errors"] = errors
+        return validated_local
 
-    # Arabic Whisper confidence is naturally lower (~0.3) because the model was
-    # pre-trained on mostly English data. Only reject truly empty/garbled output.
-    # Use a lower threshold for Arabic (0.15) than English (0.65).
-    _conf_floor = 0.15 if detected_language == "ar" else 0.65
-    if _is_weak_transcript(local_text) or (local_confidence > 0.0 and local_confidence < _conf_floor):
-        logger.warning(
-            "Local STT returned weak/uncertain result (text_len=%d, lang_conf=%.2f); falling back",
-            len(local_text),
-            local_confidence,
+    if local_text:
+        logger.warning("Local STT returned invalid-language text (text_len=%d); trying recovery", len(local_text))
+    else:
+        logger.debug("Local STT returned empty transcript; skipping opposite-language retry")
+    errors.append("local:invalid_language")
+    if bool(STT_RETRY_OPPOSITE_LANGUAGE) and local_text and not is_shutdown_requested():
+        retry_lang = _opposite_language(local_lang)
+        with stage_timer("stt_retry", lang=retry_lang):
+            retry = _transcribe_with_faster_whisper(
+                audio_file,
+                language_hint=language_hint,
+                on_partial=on_partial,
+                locked_lang=retry_lang,
+            )
+        retry_validated = _validated_backend_result(
+            retry,
+            locked_lang=retry_lang,
+            backend=_HYBRID_BACKEND,
+            method=_LOCAL_BACKEND,
         )
-        errors.append("local:weak_or_uncertain")
-        if detected_language != local_lang:
-            local["language"] = detected_language
-    
-    local["backend"] = _HYBRID_BACKEND
-    local["method"] = _LOCAL_BACKEND
-    local["language"] = local_lang
-    if errors:
-        local["fallback_used"] = True
-        local["errors"] = errors
-    return local
+        if retry_validated is not None:
+            retry_validated["fallback_used"] = True
+            retry_validated["retry_used"] = True
+            retry_validated["errors"] = errors
+            return retry_validated
+        errors.append("local:retry_invalid_language")
+
+    # All local paths failed. If the cloud returned a mixed-language transcript
+    # that only failed the strict dominance gate, use it — it is almost certainly
+    # more accurate than any forced-lock local Whisper output on mixed audio.
+    if best_cloud_mixed is not None:
+        logger.info(
+            "All strict-validation paths failed; using best cloud mixed-language candidate "
+            "(len=%d lang=%s)",
+            len(str(best_cloud_mixed.get("text", "") or "")),
+            best_cloud_mixed.get("language", "?"),
+        )
+        best_cloud_mixed["fallback_used"] = True
+        best_cloud_mixed["errors"] = errors
+        return best_cloud_mixed
+
+    return _invalid_language_result(
+        backend=_HYBRID_BACKEND,
+        method=_LOCAL_BACKEND,
+        locked_lang=local_lang,
+        errors=errors,
+        audio_duration=duration_seconds,
+        audio_rms=rms,
+    )
 
 
 def transcribe_backend_direct_with_meta(
@@ -627,22 +1267,98 @@ def transcribe_backend_direct_with_meta(
     language_hint: Optional[str] = None,
     on_partial: Optional[Callable[[str], None]] = None,
     *,
+    streaming_text: str = "",
     whisper_kwargs: Optional[Dict[str, Any]] = None,
+    finalize: bool = True,
 ) -> Dict[str, Any]:
+    if is_shutdown_requested():
+        result = _shutdown_result(backend=_normalize_backend_name(backend), method=_normalize_backend_name(backend))
+        result["latency_ms"] = 0.0
+        return _finalize_stt_result(result) if finalize else result
+
     normalized_backend = _normalize_backend_name(backend)
     start = time.perf_counter()
 
     if normalized_backend == _LOCAL_BACKEND:
+        locked_lang = None
+        if bool(STT_LANGUAGE_LOCK):
+            locked_lang = _pick_locked_language(
+                audio_file,
+                streaming_text=streaming_text,
+                language_hint=language_hint or _runtime_language_hint(),
+                probe_model=_get_partial_whisper_model(),
+            )
         result = _transcribe_with_faster_whisper(
-            audio_file, language_hint=language_hint, on_partial=on_partial, whisper_kwargs=whisper_kwargs
+            audio_file,
+            language_hint=language_hint,
+            on_partial=on_partial,
+            locked_lang=locked_lang,
+            streaming_text=streaming_text,
+            whisper_kwargs=whisper_kwargs,
         )
+        if "stt:silence" in list(result.get("errors") or []):
+            latency_ms = (time.perf_counter() - start) * 1000.0
+            result["latency_ms"] = latency_ms
+            return _finalize_stt_result(result) if finalize else result
+        if bool(STT_LANGUAGE_LOCK) and locked_lang in {"ar", "en"}:
+            validated = _validated_backend_result(
+                result,
+                locked_lang=locked_lang,
+                backend=_LOCAL_BACKEND,
+                method=_LOCAL_BACKEND,
+            )
+            if validated is None and bool(STT_RETRY_OPPOSITE_LANGUAGE):
+                result_text = str(result.get("text", "") or "").strip()
+                if not result_text or is_shutdown_requested():
+                    result = _invalid_language_result(
+                        backend=_LOCAL_BACKEND,
+                        method=_LOCAL_BACKEND,
+                        locked_lang=locked_lang,
+                        errors=[],
+                        audio_duration=float(result.get("audio_duration") or 0.0),
+                        audio_rms=float(result.get("audio_rms") or 0.0),
+                    )
+                    latency_ms = (time.perf_counter() - start) * 1000.0
+                    result["latency_ms"] = latency_ms
+                    return _finalize_stt_result(result) if finalize else result
+                retry_lang = _opposite_language(locked_lang)
+                with stage_timer("stt_retry", lang=retry_lang):
+                    retry = _transcribe_with_faster_whisper(
+                        audio_file,
+                        language_hint=language_hint,
+                        on_partial=on_partial,
+                        locked_lang=retry_lang,
+                        whisper_kwargs=whisper_kwargs,
+                    )
+                validated = _validated_backend_result(
+                    retry,
+                    locked_lang=retry_lang,
+                    backend=_LOCAL_BACKEND,
+                    method=_LOCAL_BACKEND,
+                )
+                if validated is not None:
+                    validated["retry_used"] = True
+                    result = validated
+            if validated is None:
+                result = _invalid_language_result(
+                    backend=_LOCAL_BACKEND,
+                    method=_LOCAL_BACKEND,
+                    locked_lang=locked_lang,
+                    errors=[],
+                    audio_duration=float(result.get("audio_duration") or 0.0),
+                    audio_rms=float(result.get("audio_rms") or 0.0),
+                )
     else:
-        result = _transcribe_with_hybrid_elevenlabs(audio_file, language_hint=language_hint, on_partial=on_partial)
+        result = _transcribe_with_hybrid_elevenlabs(
+            audio_file,
+            language_hint=language_hint,
+            on_partial=on_partial,
+            streaming_text=streaming_text,
+        )
 
     latency_ms = (time.perf_counter() - start) * 1000.0
     result["latency_ms"] = latency_ms
-    _record_stt_metric(normalized_backend, latency_ms, str(result.get("text", "")))
-    return result
+    return _finalize_stt_result(result) if finalize else result
 
 
 def transcribe_streaming_with_meta(
@@ -650,15 +1366,19 @@ def transcribe_streaming_with_meta(
     on_partial: Optional[Callable[[str], None]] = None,
     language_hint: Optional[str] = None,
     *,
+    streaming_text: str = "",
     whisper_kwargs: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    global _LAST_TRANSCRIPTION_META
-
     preferred_backend = get_runtime_stt_backend()
     attempted: List[str] = []
     errors: List[str] = []
 
     for backend in [preferred_backend, _LOCAL_BACKEND]:
+        if is_shutdown_requested():
+            failed = _shutdown_result(backend=preferred_backend, method=preferred_backend)
+            failed["errors"] = list(errors) + list(failed.get("errors") or [])
+            failed["latency_ms"] = 0.0
+            return _finalize_stt_result(failed)
         if backend in attempted:
             continue
         attempted.append(backend)
@@ -668,7 +1388,9 @@ def transcribe_streaming_with_meta(
                 backend,
                 language_hint=language_hint,
                 on_partial=on_partial,
+                streaming_text=streaming_text,
                 whisper_kwargs=whisper_kwargs,
+                finalize=False,
             )
             if backend != preferred_backend:
                 result["fallback_used"] = True
@@ -680,8 +1402,7 @@ def transcribe_streaming_with_meta(
                 )
             if errors:
                 result["errors"] = list(errors)
-            _LAST_TRANSCRIPTION_META = dict(result)
-            return result
+            return _finalize_stt_result(result)
         except Exception as exc:
             message = f"{backend}: {exc}"
             errors.append(message)
@@ -697,26 +1418,27 @@ def transcribe_streaming_with_meta(
         "errors": errors,
         "latency_ms": 0.0,
     }
-    _LAST_TRANSCRIPTION_META = dict(failed)
-    return failed
+    return _finalize_stt_result(failed)
 
 
 def transcribe_streaming(
     audio_file: str,
     on_partial: Optional[Callable[[str], None]] = None,
     language_hint: Optional[str] = None,
+    streaming_text: str = "",
 ) -> str:
     return str(
         transcribe_streaming_with_meta(
             audio_file,
             on_partial=on_partial,
             language_hint=language_hint,
+            streaming_text=streaming_text,
         ).get("text", "")
     )
 
 
-def transcribe(audio_file: str, language_hint: Optional[str] = None) -> str:
-    return transcribe_streaming(audio_file, on_partial=None, language_hint=language_hint)
+def transcribe(audio_file: str, language_hint: Optional[str] = None, streaming_text: str = "") -> str:
+    return transcribe_streaming(audio_file, on_partial=None, language_hint=language_hint, streaming_text=streaming_text)
 
 
 import re as _re  # noqa: E402 – module-level import kept at bottom for minimal diff

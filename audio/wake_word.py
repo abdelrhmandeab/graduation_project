@@ -1,8 +1,13 @@
+"""Unified bilingual wake-word listener.
+
+One custom openWakeWord-compatible ONNX model detects the configured English
+and Egyptian-Arabic phrases. Legacy language modes are accepted by the public
+runtime API but map to the same unified model.
+"""
+
 import pathlib
 import time
 import wave
-import urllib.request
-from concurrent.futures import ThreadPoolExecutor
 from collections import deque
 
 import numpy as np
@@ -15,62 +20,73 @@ except Exception as exc:
 else:
     _SOUNDDEVICE_IMPORT_ERROR = None
 
-from audio.barge_in import consume_barge_in_wake
-from core.dialogue_manager import consume_follow_up_wake
 from core.config import (
-    BARGE_IN_INTERRUPT_ON_WAKE,
     SAMPLE_RATE,
-    WAKE_WORD,
-    WAKE_WORD_AR_ONNX_PATH,
-    WAKE_WORD_AR_ENABLED,
     WAKE_WORD_AUDIO_GAIN,
     WAKE_WORD_CHUNK_SIZE,
+    WAKE_WORD_CONFIRM_FRAMES,
+    WAKE_WORD_DEPRECATED_KEYS,
     WAKE_WORD_DETECTION_COOLDOWN_SECONDS,
-    WAKE_WORD_IGNORE_WHILE_SPEAKING,
     WAKE_WORD_INPUT_DEVICE,
-    WAKE_WORD_MODE,
+    WAKE_WORD_MIN_RMS,
     WAKE_WORD_SCORE_DEBUG,
     WAKE_WORD_SCORE_DEBUG_INTERVAL_SECONDS,
     WAKE_WORD_THRESHOLD,
-    WAKE_WORD_EN_THRESHOLD,
-    WAKE_WORD_AR_THRESHOLD,
+    WAKE_WORD_UNIFIED_ONNX_PATH,
     WAKE_WORD_USER_SPEAKER_ID,
     WAKE_WORD_USER_SAMPLES_DIR,
 )
-from core.logger import logger
+from core.dialogue_manager import consume_follow_up_wake
+from core.logger import get_logger, kv
+from core.metrics import stage_timer
+from core.shutdown import is_shutdown_requested
 
-_model = None
-_arabic_onnx_model = None
-_arabic_onnx_model_path = ""
+log = get_logger("wakeword")
+
+_unified_model = None
+_unified_model_path = ""
 _last_detection_ts = 0.0
-_OPENWAKEWORD_RELEASE = "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1"
+_deprecated_keys_logged = False
+_WAKE_SAMPLE_CAPTURE_SECONDS = 2.5
+_last_detection_audio: list | None = None
+
 _runtime_wake_word_settings = {
     "threshold": float(WAKE_WORD_THRESHOLD),
-    "en_threshold": float(WAKE_WORD_EN_THRESHOLD),
-    "ar_threshold": float(WAKE_WORD_AR_THRESHOLD),
     "audio_gain": float(WAKE_WORD_AUDIO_GAIN),
     "detection_cooldown_seconds": float(WAKE_WORD_DETECTION_COOLDOWN_SECONDS),
+    "confirm_frames": int(WAKE_WORD_CONFIRM_FRAMES),
+    "min_rms": float(WAKE_WORD_MIN_RMS),
 }
 _runtime_wake_word_phrase_settings = {
-    "mode": str(WAKE_WORD_MODE or "both").strip().lower(),
-    "arabic_enabled": bool(WAKE_WORD_AR_ENABLED),
-    "arabic_onnx_path": str(WAKE_WORD_AR_ONNX_PATH or "").strip(),
+    "mode": "unified",
+    "unified_onnx_path": str(WAKE_WORD_UNIFIED_ONNX_PATH or "").strip(),
 }
 _runtime_wake_word_behavior = {
-    "ignore_while_speaking": bool(WAKE_WORD_IGNORE_WHILE_SPEAKING),
-    "barge_in_interrupt_on_wake": bool(BARGE_IN_INTERRUPT_ON_WAKE),
+    "ignore_while_speaking": False,
+    "barge_in_interrupt_on_wake": True,
 }
 
-_WAKE_SAMPLE_CAPTURE_SECONDS = 2.5
+
+def _log_deprecated_keys_once() -> None:
+    global _deprecated_keys_logged
+    if _deprecated_keys_logged or not WAKE_WORD_DEPRECATED_KEYS:
+        return
+    _deprecated_keys_logged = True
+    log.warning(
+        "Ignoring legacy wake-word settings now replaced by the unified model: %s",
+        ", ".join(WAKE_WORD_DEPRECATED_KEYS),
+    )
 
 
-def _save_wake_activation_sample(audio_chunks, wake_source: str) -> None:
+def _save_wake_activation_sample(audio_chunks) -> None:
     sample_dir = str(WAKE_WORD_USER_SAMPLES_DIR or "").strip()
     if not sample_dir:
         return
 
     try:
-        directory = pathlib.Path(sample_dir)
+        # Automatic detections are useful for later review but are not trusted
+        # positives. Keep them outside the curated enrollment directory.
+        directory = pathlib.Path(sample_dir).parent / "auto_captured"
         directory.mkdir(parents=True, exist_ok=True)
         if not audio_chunks:
             return
@@ -80,8 +96,7 @@ def _save_wake_activation_sample(audio_chunks, wake_source: str) -> None:
             return
 
         timestamp = time.strftime("%Y%m%d-%H%M%S")
-        suffix = "arabic" if str(wake_source or "").strip().lower() == "arabic" else "english"
-        filename = f"wake_{suffix}_{timestamp}_{int(time.time() * 1000) % 1000:03d}.wav"
+        filename = f"wake_unified_{timestamp}_{int(time.time() * 1000) % 1000:03d}.wav"
         speaker_id = str(WAKE_WORD_USER_SPEAKER_ID or "speaker").strip() or "speaker"
         speaker_id = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in speaker_id)
         target_dir = directory / speaker_id
@@ -94,26 +109,11 @@ def _save_wake_activation_sample(audio_chunks, wake_source: str) -> None:
             handle.setframerate(int(SAMPLE_RATE))
             handle.writeframes(audio.tobytes())
     except Exception as exc:
-        logger.warning("Failed to save wake activation sample: %s", exc)
+        log.warning("Failed to save wake activation sample: %s", exc)
 
 
-def _normalize_wake_mode(value) -> str:
-    mode = str(value or "both").strip().lower()
-    aliases = {
-        "en": "english",
-        "ar": "arabic",
-        "dual": "both",
-        "bilingual": "both",
-    }
-    mode = aliases.get(mode, mode)
-    if mode not in {"english", "arabic", "both"}:
-        return "both"
-    return mode
-
-
-_runtime_wake_word_phrase_settings["mode"] = _normalize_wake_mode(
-    _runtime_wake_word_phrase_settings.get("mode")
-)
+def _normalize_wake_mode(_value) -> str:
+    return "unified"
 
 
 def get_runtime_wake_word_settings():
@@ -121,21 +121,15 @@ def get_runtime_wake_word_settings():
 
 
 def set_runtime_wake_word_settings(
-    *, threshold=None, en_threshold=None, ar_threshold=None,
-    audio_gain=None, detection_cooldown_seconds=None
+    *,
+    threshold=None,
+    audio_gain=None,
+    detection_cooldown_seconds=None,
+    confirm_frames=None,
+    min_rms=None,
 ):
     if threshold is not None:
-        v = max(0.05, min(0.95, float(threshold)))
-        _runtime_wake_word_settings["threshold"] = v
-        # Also propagate to per-language if not separately overridden
-        if "en_threshold" not in _runtime_wake_word_settings or en_threshold is None:
-            _runtime_wake_word_settings["en_threshold"] = v
-        if "ar_threshold" not in _runtime_wake_word_settings or ar_threshold is None:
-            _runtime_wake_word_settings["ar_threshold"] = v
-    if en_threshold is not None:
-        _runtime_wake_word_settings["en_threshold"] = max(0.05, min(0.95, float(en_threshold)))
-    if ar_threshold is not None:
-        _runtime_wake_word_settings["ar_threshold"] = max(0.05, min(0.95, float(ar_threshold)))
+        _runtime_wake_word_settings["threshold"] = max(-100.0, min(1.0, float(threshold)))
     if audio_gain is not None:
         _runtime_wake_word_settings["audio_gain"] = max(0.5, min(3.0, float(audio_gain)))
     if detection_cooldown_seconds is not None:
@@ -143,6 +137,10 @@ def set_runtime_wake_word_settings(
             0.2,
             min(3.0, float(detection_cooldown_seconds)),
         )
+    if confirm_frames is not None:
+        _runtime_wake_word_settings["confirm_frames"] = max(1, int(confirm_frames))
+    if min_rms is not None:
+        _runtime_wake_word_settings["min_rms"] = max(0.0, float(min_rms))
     return get_runtime_wake_word_settings()
 
 
@@ -150,23 +148,16 @@ def get_runtime_wake_word_phrase_settings():
     return dict(_runtime_wake_word_phrase_settings)
 
 
-def set_runtime_wake_word_phrase_settings(
-    *,
-    mode=None,
-    arabic_enabled=None,
-    arabic_onnx_path=None,
-):
+def set_runtime_wake_word_phrase_settings(*, mode=None, unified_onnx_path=None):
     if mode is not None:
         _runtime_wake_word_phrase_settings["mode"] = _normalize_wake_mode(mode)
-    if arabic_enabled is not None:
-        _runtime_wake_word_phrase_settings["arabic_enabled"] = bool(arabic_enabled)
-    if arabic_onnx_path is not None:
-        _runtime_wake_word_phrase_settings["arabic_onnx_path"] = str(arabic_onnx_path or "").strip()
+    if unified_onnx_path is not None:
+        _runtime_wake_word_phrase_settings["unified_onnx_path"] = str(unified_onnx_path or "").strip()
     return get_runtime_wake_word_phrase_settings()
 
 
 def get_runtime_wake_mode() -> str:
-    return str(_runtime_wake_word_phrase_settings.get("mode") or "both")
+    return "unified"
 
 
 def set_runtime_wake_mode(mode: str) -> str:
@@ -186,95 +177,38 @@ def set_runtime_wake_word_behavior(*, ignore_while_speaking=None, barge_in_inter
     return get_runtime_wake_word_behavior()
 
 
-def _get_arabic_onnx_model(model_path: str):
-    """Load a custom Arabic wake-word ONNX model trained via openWakeWord.
-
-    TRAINING GUIDE for jarvis_ar model (replaces Whisper-tiny fallback):
-      1. Collect 200-500 audio clips (2-3 sec each) of "جارفيس" pronunciations
-      2. Use openWakeWord/tools/training to fine-tune on jarvis_ar keyword
-      3. Export to ONNX: ~4MB model, ~25ms inference (matches English speed)
-      4. Set JARVIS_WAKE_WORD_AR_ONNX_PATH=/path/to/jarvis_ar_v0.1.onnx
-      5. Enable: JARVIS_WAKE_WORD_MODE=both, JARVIS_WAKE_WORD_AR_ENABLED=true
-
-    Model path requirements:
-      - ONNX format (.onnx file)
-      - Trained on openWakeWord framework
-      - Must contain jarvis_ar weights (not generic model)
-      - Recommended size: 2-6 MB for <30ms inference on CPU
-
-    If loading fails we disable the Arabic layer so the assistant can still run.
-    """
-    global _arabic_onnx_model
-    global _arabic_onnx_model_path
-
-    candidate_path = str(model_path or "").strip()
-    if not candidate_path:
-        return None
-    if _arabic_onnx_model is not None and _arabic_onnx_model_path == candidate_path:
-        return _arabic_onnx_model
-
-    try:
-        from openwakeword.model import Model
-    except Exception as exc:
-        raise RuntimeError(
-            "openwakeword is unavailable for the Arabic ONNX wake model."
-        ) from exc
-
-    path = pathlib.Path(candidate_path)
-    if not path.exists():
-        raise RuntimeError(f"Configured Arabic wake-word ONNX model was not found: {candidate_path}")
-
-    _ensure_onnx_resources()
-    _arabic_onnx_model = Model(wakeword_models=[str(path)], inference_framework="onnx")
-    _arabic_onnx_model_path = candidate_path
-    logger.debug("Loaded custom Arabic wake-word ONNX model from %s", candidate_path)
-    return _arabic_onnx_model
+def invalidate_model_cache() -> None:
+    """Force the next ``_get_unified_model`` call to reload from disk."""
+    global _unified_model, _unified_model_path
+    _unified_model = None
+    _unified_model_path = ""
+    log.info("Wake-word model cache invalidated; next listen cycle will reload.")
 
 
-def _download_file(url, target_path):
-    pathlib.Path(target_path).parent.mkdir(parents=True, exist_ok=True)
-    with urllib.request.urlopen(url, timeout=60) as response:
-        data = response.read()
-    with open(target_path, "wb") as handle:
-        handle.write(data)
+def get_last_detection_audio() -> list | None:
+    """Return the audio chunks captured around the most recent detection."""
+    return _last_detection_audio
 
 
-def _ensure_onnx_resources():
-    try:
-        import openwakeword
-    except Exception as exc:
-        raise RuntimeError(
-            "openwakeword is unavailable. Install openwakeword in the active Python environment."
-        ) from exc
-
-    package_dir = pathlib.Path(openwakeword.__file__).resolve().parent
-    model_dir = package_dir / "resources" / "models"
-    model_dir.mkdir(parents=True, exist_ok=True)
-
-    wakeword_key = WAKE_WORD.replace(" ", "_").strip().lower()
-    required = [
-        "melspectrogram.onnx",
-        "embedding_model.onnx",
-        f"{wakeword_key}_v0.1.onnx",
-    ]
-
-    for filename in required:
-        target = model_dir / filename
-        if target.exists():
-            continue
-        url = f"{_OPENWAKEWORD_RELEASE}/{filename}"
-        try:
-            _download_file(url, str(target))
-        except Exception as exc:
-            raise RuntimeError(
-                f"Failed to download wake-word model resource '{filename}' from {url}."
-            ) from exc
+def _resolve_unified_model_path(model_path: str) -> pathlib.Path:
+    candidate = pathlib.Path(str(model_path or "").strip())
+    if not str(candidate):
+        raise RuntimeError("JARVIS_WAKE_WORD_UNIFIED_ONNX_PATH is empty.")
+    if not candidate.is_absolute():
+        candidate = pathlib.Path(__file__).resolve().parents[1] / candidate
+    candidate = candidate.resolve()
+    if not candidate.is_file():
+        raise RuntimeError(f"Unified wake-word ONNX model was not found: {candidate}")
+    return candidate
 
 
-def _get_model():
-    global _model
-    if _model is not None:
-        return _model
+def _get_unified_model(model_path: str):
+    global _unified_model, _unified_model_path
+
+    candidate = _resolve_unified_model_path(model_path)
+    candidate_text = str(candidate)
+    if _unified_model is not None and _unified_model_path == candidate_text:
+        return _unified_model
 
     try:
         from openwakeword.model import Model
@@ -284,65 +218,29 @@ def _get_model():
         ) from exc
 
     try:
-        _ensure_onnx_resources()
-        _model = Model(wakeword_models=[WAKE_WORD], inference_framework="onnx")
+        _unified_model = Model(wakeword_models=[candidate_text], inference_framework="onnx")
     except Exception as exc:
-        raise RuntimeError(
-            "Failed to initialize wake-word model with ONNX resources. "
-            "Ensure network access for first-time model download."
-        ) from exc
-    return _model
+        raise RuntimeError(f"Failed to load unified wake-word model: {candidate}") from exc
+    _unified_model_path = candidate_text
+    log.info("Unified wake-word model loaded: %s", candidate)
+    return _unified_model
 
 
 def preload_runtime_wake_word():
-    """Preload wake-word runtime resources so first listen has no cold start."""
+    """Preload the single unified model and validate the configured microphone."""
     if sd is None:
         raise RuntimeError(
             "sounddevice is unavailable. Install sounddevice in the active Python environment."
         ) from _SOUNDDEVICE_IMPORT_ERROR
 
-    phrase_runtime = get_runtime_wake_word_phrase_settings()
-    wake_mode = _normalize_wake_mode(phrase_runtime.get("mode"))
-    english_layer_enabled = wake_mode in {"english", "both"}
-    arabic_layer_enabled = bool(phrase_runtime.get("arabic_enabled")) and wake_mode in {
-        "english",
-        "arabic",
-        "both",
-    }
-
-    if not english_layer_enabled and not arabic_layer_enabled:
-        raise RuntimeError("Wake word mode disabled all wake layers. Enable english, arabic, or both.")
-
+    _log_deprecated_keys_once()
     input_device = _resolve_input_device()
-
-    english_model_loaded = False
-    arabic_model_loaded = False
-    arabic_onnx_model_loaded = False
-
-    if english_layer_enabled:
-        _get_model()
-        english_model_loaded = True
-
-    arabic_onnx_path = str(phrase_runtime.get("arabic_onnx_path") or WAKE_WORD_AR_ONNX_PATH or "").strip()
-    if arabic_layer_enabled:
-        if not arabic_onnx_path:
-            if wake_mode == "arabic":
-                raise RuntimeError("Arabic wake mode requires JARVIS_WAKE_WORD_AR_ONNX_PATH.")
-            logger.warning("Arabic wake-word ONNX path missing; Arabic wake is disabled.")
-            arabic_layer_enabled = False
-        else:
-            _get_arabic_onnx_model(arabic_onnx_path)
-            arabic_onnx_model_loaded = True
-            arabic_model_loaded = True
-
+    model_path = _runtime_wake_word_phrase_settings["unified_onnx_path"]
+    _get_unified_model(model_path)
     return {
-        "mode": wake_mode,
+        "mode": "unified",
         "input_device": input_device if input_device is not None else "default",
-        "english_layer_enabled": bool(english_layer_enabled),
-        "arabic_layer_enabled": bool(arabic_layer_enabled),
-        "english_model_loaded": bool(english_model_loaded),
-        "arabic_onnx_model_loaded": bool(arabic_onnx_model_loaded),
-        "arabic_model_loaded": bool(arabic_model_loaded),
+        "unified_model_loaded": True,
     }
 
 
@@ -350,8 +248,8 @@ def _resolve_input_device():
     cfg = WAKE_WORD_INPUT_DEVICE
     if cfg is None or str(cfg).strip() == "":
         return None
-    if isinstance(cfg, int):
-        return cfg
+    if isinstance(cfg, int) or str(cfg).strip().isdigit():
+        return int(cfg)
 
     name_query = str(cfg).strip().lower()
     try:
@@ -360,154 +258,141 @@ def _resolve_input_device():
         raise RuntimeError(f"Failed to list audio devices: {exc}") from exc
 
     for idx, device in enumerate(devices):
-        if int(device.get("max_input_channels", 0)) <= 0:
-            continue
-        if name_query in str(device.get("name", "")).lower():
+        if int(device.get("max_input_channels", 0)) > 0 and name_query in str(device.get("name", "")).lower():
             return idx
 
-    available = []
-    for idx, device in enumerate(devices):
-        if int(device.get("max_input_channels", 0)) > 0:
-            available.append(f"{idx}:{device.get('name')}")
+    available = [
+        f"{idx}:{device.get('name')}"
+        for idx, device in enumerate(devices)
+        if int(device.get("max_input_channels", 0)) > 0
+    ]
     raise RuntimeError(
         "Configured wake-word input device was not found. "
-        f"WAKE_WORD_INPUT_DEVICE={cfg!r}. "
+        f"JARVIS_WAKE_WORD_INPUT_DEVICE={cfg!r}. "
         f"Available input devices: {', '.join(available[:12])}"
     )
 
 
+def _prediction_score(model, prediction) -> float:
+    if not prediction:
+        return 0.0
+    prediction_key = next(iter(getattr(model, "prediction_buffer", {}) or {}), None)
+    score = prediction.get(prediction_key) if prediction_key else None
+    if score is None:
+        score = next(iter(prediction.values()), 0.0)
+    return float(score or 0.0)
+
+
 def listen_for_wake_word():
-    global _last_detection_ts
+    global _last_detection_ts, _last_detection_audio
 
     if sd is None:
         raise RuntimeError(
             "sounddevice is unavailable. Install sounddevice in the active Python environment."
         ) from _SOUNDDEVICE_IMPORT_ERROR
 
+    _log_deprecated_keys_once()
     runtime = get_runtime_wake_word_settings()
-    phrase_runtime = get_runtime_wake_word_phrase_settings()
-
-    wake_threshold = float(runtime["threshold"])
-    wake_en_threshold = float(runtime.get("en_threshold", wake_threshold))
-    wake_ar_threshold = float(runtime.get("ar_threshold", wake_threshold))
-    wake_audio_gain = float(runtime["audio_gain"])
-    wake_cooldown = float(runtime["detection_cooldown_seconds"])
-
-    wake_mode = _normalize_wake_mode(phrase_runtime.get("mode"))
-    english_layer_enabled = wake_mode in {"english", "both"}
-    arabic_layer_enabled = bool(phrase_runtime.get("arabic_enabled")) and wake_mode in {"english", "arabic", "both"}
-
-    if not english_layer_enabled and not arabic_layer_enabled:
-        raise RuntimeError("Wake word mode disabled all wake layers. Enable english, arabic, or both.")
-
-    model = _get_model() if english_layer_enabled else None
-    arabic_model = None
-    if arabic_layer_enabled:
-        arabic_onnx_path = str(phrase_runtime.get("arabic_onnx_path") or WAKE_WORD_AR_ONNX_PATH or "").strip()
-        if not arabic_onnx_path:
-            if wake_mode == "arabic":
-                raise RuntimeError("Arabic wake mode requires JARVIS_WAKE_WORD_AR_ONNX_PATH.")
-            logger.warning("Arabic wake-word ONNX path missing; Arabic wake is disabled.")
-            arabic_layer_enabled = False
-        else:
-            arabic_model = _get_arabic_onnx_model(arabic_onnx_path)
-
+    threshold = float(runtime["threshold"])
+    cooldown = float(runtime["detection_cooldown_seconds"])
+    confirm_frames = max(1, int(runtime["confirm_frames"]))
+    min_rms = max(0.0, float(runtime["min_rms"]))
+    model = _get_unified_model(_runtime_wake_word_phrase_settings["unified_onnx_path"])
     input_device = _resolve_input_device()
-    print(
-        "[WakeWord] Waiting for wake word... "
-        f"mode={wake_mode} device={input_device if input_device is not None else 'default'}"
+
+    log.info(
+        "Listening for wake word; say 'Jarvis' / 'يا جارفس' "
+        "(device=%s, threshold=%.2f, confirm_frames=%d, min_rms=%.4f).",
+        input_device if input_device is not None else "default",
+        threshold,
+        confirm_frames,
+        min_rms,
     )
 
-    predictor_executor = None
-    if english_layer_enabled and arabic_layer_enabled:
-        predictor_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="jarvis-wake-onnx")
+    last_summary_ts = time.perf_counter()
+    inference_durations_ms = []
+    summary_max_score = float("-inf")
+    summary_max_rms = 0.0
+    consecutive_hits = 0
 
-    last_debug_ts = 0.0
-    try:
-        with sd.InputStream(
-            samplerate=SAMPLE_RATE,
-            channels=1,
-            dtype=np.int16,
-            device=input_device,
-            blocksize=WAKE_WORD_CHUNK_SIZE,
-        ) as stream:
-            recent_audio = deque(
-                maxlen=max(1, int(round((_WAKE_SAMPLE_CAPTURE_SECONDS * SAMPLE_RATE) / float(WAKE_WORD_CHUNK_SIZE)))),
-            )
-            while True:
-                # Exit immediately when the VAD barge-in monitor already captured
-                # user speech — no need for a new wake word.
-                if consume_barge_in_wake():
-                    return "barge_in"
-                # Exit immediately when the dialogue manager has opened a
-                # follow-up window — the orchestrator will record directly.
-                if consume_follow_up_wake():
-                    return "follow_up"
+    _PRIME_SECONDS = 3.0
 
-                audio_chunk, _ = stream.read(WAKE_WORD_CHUNK_SIZE)
-                audio_chunk = np.asarray(audio_chunk).reshape(-1).astype(np.int16, copy=False)
-                recent_audio.append(audio_chunk.copy())
-                if wake_audio_gain and wake_audio_gain != 1.0:
-                    boosted = audio_chunk.astype(np.float32) * wake_audio_gain
-                    audio_chunk = np.clip(boosted, -32768, 32767).astype(np.int16, copy=False)
+    with sd.InputStream(
+        samplerate=SAMPLE_RATE,
+        channels=1,
+        dtype=np.int16,
+        device=input_device,
+        blocksize=WAKE_WORD_CHUNK_SIZE,
+    ) as stream:
+        prime_chunks = max(1, int(round((_PRIME_SECONDS * SAMPLE_RATE) / float(WAKE_WORD_CHUNK_SIZE))))
+        for _ in range(prime_chunks):
+            chunk, _ = stream.read(WAKE_WORD_CHUNK_SIZE)
+            chunk = np.asarray(chunk).reshape(-1).astype(np.int16, copy=False)
+            model.predict(chunk)
+        log.debug("Feature extractor primed with %d chunks of live audio.", prime_chunks)
 
-                if english_layer_enabled and arabic_layer_enabled and predictor_executor:
-                    futures = {
-                        "english": predictor_executor.submit(model.predict, audio_chunk),
-                        "arabic": predictor_executor.submit(arabic_model.predict, audio_chunk),
-                    }
-                    predictions = {}
-                    for key, future in futures.items():
-                        try:
-                            predictions[key] = future.result()
-                        except Exception as exc:
-                            logger.warning("Wake-word predictor failed (%s): %s", key, exc)
-                            predictions[key] = {}
-                else:
-                    predictions = {}
-                    if english_layer_enabled:
-                        predictions["english"] = model.predict(audio_chunk)
-                    if arabic_layer_enabled:
-                        predictions["arabic"] = arabic_model.predict(audio_chunk)
+        recent_audio = deque(
+            maxlen=max(1, int(round((_WAKE_SAMPLE_CAPTURE_SECONDS * SAMPLE_RATE) / float(WAKE_WORD_CHUNK_SIZE))))
+        )
+        while True:
+            if is_shutdown_requested():
+                log.debug("Wake-word listener stopped for shutdown.")
+                return "shutdown"
+            if consume_follow_up_wake():
+                return "follow_up"
 
-                if english_layer_enabled:
-                    prediction = predictions.get("english") or {}
-                    score = prediction.get(WAKE_WORD)
-                    if score is None and prediction:
-                        score = max(prediction.values())
+            audio_chunk, _ = stream.read(WAKE_WORD_CHUNK_SIZE)
+            audio_chunk = np.asarray(audio_chunk).reshape(-1).astype(np.int16, copy=False)
+            recent_audio.append(audio_chunk.copy())
 
-                    if WAKE_WORD_SCORE_DEBUG and score is not None:
-                        now = time.perf_counter()
-                        if now - last_debug_ts >= float(WAKE_WORD_SCORE_DEBUG_INTERVAL_SECONDS):
-                            rms = float(np.sqrt(np.mean(np.square(audio_chunk.astype(np.float32) / 32768.0))))
-                            print(
-                                f"[WakeWord] score={float(score):.6f} threshold={wake_threshold:.3f} "
-                                f"rms={rms:.4f}"
-                            )
-                            last_debug_ts = now
+            with stage_timer("wake_inference") as inference_timing:
+                prediction = model.predict(audio_chunk)
+            inference_durations_ms.append(inference_timing.elapsed * 1000.0)
+            score = _prediction_score(model, prediction)
+            summary_max_score = max(summary_max_score, score)
+            rms = float(np.sqrt(np.mean(np.square(audio_chunk.astype(np.float32) / 32768.0))))
+            summary_max_rms = max(summary_max_rms, rms)
 
-                    if score is not None and score > wake_en_threshold:
-                        now = time.perf_counter()
-                        if now - _last_detection_ts < wake_cooldown:
-                            continue
-                        _last_detection_ts = now
-                        _save_wake_activation_sample(recent_audio, "english")
-                        print("[WakeWord] Wake word detected (english).")
-                        return "english"
+            now = time.perf_counter()
+            debug_interval = 1.0 if WAKE_WORD_SCORE_DEBUG else float(WAKE_WORD_SCORE_DEBUG_INTERVAL_SECONDS)
+            if now - last_summary_ts >= debug_interval:
+                if inference_durations_ms:
+                    durations = np.asarray(inference_durations_ms, dtype=np.float64)
+                    kv(
+                        "wakeword",
+                        inferences=len(inference_durations_ms),
+                        p50_ms=f"{float(np.percentile(durations, 50)):.2f}",
+                        p95_ms=f"{float(np.percentile(durations, 95)):.2f}",
+                        score=f"{score:.4f}",
+                        max_score=f"{summary_max_score:.3f}",
+                        max_rms=f"{summary_max_rms:.4f}",
+                    )
+                inference_durations_ms.clear()
+                summary_max_score = float("-inf")
+                summary_max_rms = 0.0
+                last_summary_ts = now
 
-                if arabic_layer_enabled:
-                    prediction = predictions.get("arabic") or {}
-                    score = max(prediction.values()) if prediction else 0.0
-                    if WAKE_WORD_SCORE_DEBUG and score is not None:
-                        print(f"[WakeWord][AR] score={float(score):.6f}")
-                    if score and float(score) > wake_ar_threshold:
-                        now = time.perf_counter()
-                        if now - _last_detection_ts < wake_cooldown:
-                            continue
-                        _last_detection_ts = now
-                        _save_wake_activation_sample(recent_audio, "arabic")
-                        print("[WakeWord] Wake word detected (arabic).")
-                        return "arabic"
-    finally:
-        if predictor_executor is not None:
-            predictor_executor.shutdown(wait=False, cancel_futures=True)
+            consecutive_hits = consecutive_hits + 1 if score >= threshold and rms >= min_rms else 0
+            if consecutive_hits < confirm_frames:
+                continue
+            consecutive_hits = 0
+            if now - _last_detection_ts < cooldown:
+                continue
+
+            _last_detection_ts = now
+            _last_detection_audio = list(recent_audio)
+            _save_wake_activation_sample(recent_audio)
+
+            from core.runtime_coordinator import RuntimePhase, coordinator
+            phase = coordinator.current_phase
+            if phase in (RuntimePhase.THINKING, RuntimePhase.SPEAKING):
+                coordinator.request_interrupt()
+                log.info("Wake interrupt fired (was %s, score=%.3f).", phase.value, score)
+                return "wake"
+            elif phase == RuntimePhase.EXECUTING_COMMAND:
+                log.info("Wake heard but blocked (phase=%s, score=%.3f).", phase.value, score)
+                consecutive_hits = 0
+                continue
+            else:
+                log.info("Wake word detected (score=%.3f, rms=%.4f).", score, rms)
+                return "wake"

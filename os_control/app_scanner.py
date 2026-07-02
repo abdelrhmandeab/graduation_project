@@ -19,9 +19,10 @@ import json
 import os
 import platform
 import re
+import threading
 import time
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable, Optional
 
 from core.logger import logger
 
@@ -427,3 +428,103 @@ def scan_installed_apps(base_catalog: dict | None = None, force: bool = False) -
     elif cached is not None:
         discovered = cached["catalog"]
     return _merge_catalogs(base_catalog, discovered)
+
+
+def get_catalog_age_seconds() -> float:
+    """Return how many seconds ago the cache was written, or infinity if missing."""
+    try:
+        if not _CACHE_PATH.exists():
+            return float("inf")
+        with _CACHE_PATH.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        timestamp = float(data.get("timestamp") or 0.0)
+        return max(0.0, time.time() - timestamp)
+    except Exception:
+        return float("inf")
+
+
+# ── Start Menu watchdog ────────────────────────────────────────────────────
+
+_START_MENU_PATHS = [
+    Path(os.environ.get("ProgramData", r"C:\ProgramData"))
+    / "Microsoft" / "Windows" / "Start Menu" / "Programs",
+    Path(os.environ.get("APPDATA", ""))
+    / "Microsoft" / "Windows" / "Start Menu" / "Programs",
+]
+
+_WATCH_THREAD: Optional[threading.Thread] = None
+_WATCH_STOP = threading.Event()
+
+
+def start_startmenu_watch(
+    on_change: Callable[[dict], None],
+    base_catalog: dict | None = None,
+    debounce_seconds: float = 5.0,
+) -> bool:
+    """Watch Start Menu folders; call on_change(new_catalog) after debounce.
+
+    Returns True if the watcher started, False if watchdog is unavailable.
+    """
+    global _WATCH_THREAD, _WATCH_STOP
+
+    try:
+        from watchdog.observers import Observer  # type: ignore[import-not-found]
+        from watchdog.events import FileSystemEventHandler  # type: ignore[import-not-found]
+    except ImportError:
+        logger.debug("watchdog not installed; Start Menu watch disabled")
+        return False
+
+    _WATCH_STOP.clear()
+
+    class _Handler(FileSystemEventHandler):
+        def __init__(self):
+            self._timer: Optional[threading.Timer] = None
+            self._lock = threading.Lock()
+
+        def _schedule(self):
+            with self._lock:
+                if self._timer:
+                    self._timer.cancel()
+                self._timer = threading.Timer(debounce_seconds, self._rescan)
+                self._timer.daemon = True
+                self._timer.start()
+
+        def _rescan(self):
+            try:
+                catalog = scan_installed_apps(base_catalog, force=True)
+                on_change(catalog)
+                logger.info("app_scanner: Start Menu change detected — catalog refreshed (%d entries)", len(catalog))
+            except Exception as exc:
+                logger.warning("app_scanner: watchdog rescan failed: %s", exc)
+
+        def on_created(self, event): self._schedule()
+        def on_deleted(self, event): self._schedule()
+        def on_moved(self, event): self._schedule()
+
+    handler = _Handler()
+    observer = Observer()
+    watched = 0
+    for path in _START_MENU_PATHS:
+        if path.exists():
+            observer.schedule(handler, str(path), recursive=True)
+            watched += 1
+
+    if not watched:
+        logger.debug("app_scanner: no Start Menu paths found to watch")
+        return False
+
+    def _run():
+        observer.start()
+        logger.debug("app_scanner: Start Menu watcher running on %d path(s)", watched)
+        _WATCH_STOP.wait()
+        observer.stop()
+        observer.join()
+        logger.debug("app_scanner: Start Menu watcher stopped")
+
+    _WATCH_THREAD = threading.Thread(target=_run, name="jarvis-startmenu-watch", daemon=True)
+    _WATCH_THREAD.start()
+    return True
+
+
+def stop_startmenu_watch() -> None:
+    _WATCH_STOP.set()

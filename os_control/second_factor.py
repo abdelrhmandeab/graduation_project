@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import re
 import threading
 import time
 
@@ -17,6 +18,48 @@ _PASSPHRASE_HASH = hashlib.sha256(SECOND_FACTOR_PASSPHRASE.encode("utf-8")).hexd
 _LOCK = threading.Lock()
 _ATTEMPTS = {}
 _CONFIRM_ATTEMPTS = {}
+
+# Spoken digit words, English + Egyptian Arabic, for normalizing a PIN
+# spoken as words ("one two three four" / "واحد اتنين تلاتة اربعة").
+_EN_DIGIT_WORDS = {
+    "zero": "0", "oh": "0", "o": "0",
+    "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
+    "six": "6", "seven": "7", "eight": "8", "nine": "9",
+}
+_AR_DIGIT_WORDS = {
+    "صفر": "0",
+    "واحد": "1", "وحدة": "1",
+    "اتنين": "2", "اثنين": "2", "اتنان": "2",
+    "تلاتة": "3", "ثلاثة": "3", "تلات": "3",
+    "اربعة": "4", "اربعه": "4", "اربع": "4",
+    "خمسة": "5", "خمسه": "5", "خمس": "5",
+    "ستة": "6", "سته": "6", "ست": "6",
+    "سبعة": "7", "سبعه": "7", "سبع": "7",
+    "تمانية": "8", "ثمانية": "8", "تمانيه": "8", "تمن": "8",
+    "تسعة": "9", "تسعه": "9", "تسع": "9",
+}
+_ARABIC_INDIC_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
+
+
+def normalize_spoken_pin(text):
+    """Normalize a spoken PIN (digits or EN/AR number-words) to a digit string."""
+    value = str(text or "").strip().translate(_ARABIC_INDIC_DIGITS)
+    if not value:
+        return ""
+
+    collapsed = re.sub(r"[\s-]+", "", value)
+    if collapsed.isdigit():
+        return collapsed
+
+    digits = []
+    for token in re.findall(r"[a-zA-Z؀-ۿ]+|\d+", value.lower()):
+        if token.isdigit():
+            digits.append(token)
+            continue
+        mapped = _EN_DIGIT_WORDS.get(token) or _AR_DIGIT_WORDS.get(token)
+        if mapped is not None:
+            digits.append(mapped)
+    return "".join(digits)
 
 
 def _hash(value):

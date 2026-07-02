@@ -10,10 +10,14 @@ from core.config import (
     CONFIRMATION_TIMEOUT_SECONDS,
     DEFAULT_SEARCH_PATH,
     DEFAULT_WORKING_DIRECTORY,
+    FILE_DEFAULT_SEARCH_ROOTS,
+    FILE_HUMANIZE_PATHS,
+    FILE_SPOKEN_RESULTS_MAX,
     MAX_FILE_RESULTS,
     ROLLBACK_DIR_NAME,
     SECOND_FACTOR_REQUIRED_FOR_DESTRUCTIVE,
 )
+from os_control.path_resolver import humanize_path, resolve_location, KNOWN_FOLDERS
 from core.logger import logger
 from core.response_templates import format_confirmation_prompt
 from os_control.action_log import log_action
@@ -120,6 +124,10 @@ def _resolve_path(path):
     if not path:
         return _current_directory
     cleaned = path.strip().strip('"').strip("'")
+    # Try spoken-location resolution first (Desktop, Downloads, C partition …).
+    resolved = resolve_location(cleaned)
+    if resolved is not None:
+        return str(resolved)
     cleaned = os.path.expanduser(cleaned)
     if os.path.isabs(cleaned):
         return os.path.abspath(cleaned)
@@ -180,7 +188,50 @@ def _prepare_move_paths(source, destination):
     return True, "", src, dst
 
 
-def _prepare_delete_path(path):
+def resolve_name_in_location(name, location):
+    """Resolve a bare file/folder name within a specific directory.
+
+    Used when the user says "delete X from Y" / "rename X in Y" instead of
+    giving an exact path — X is searched for inside Y rather than treated
+    as a literal subpath of the current directory.
+
+    Returns (status, value):
+      "single"    -> value is the resolved absolute path
+      "ambiguous" -> value is a list of candidate absolute paths
+      "not_found" -> value is None
+    """
+    if not location or not os.path.isdir(location):
+        return "not_found", None
+
+    name = str(name or "").strip()
+    if not name:
+        return "not_found", None
+
+    # Exact match (file or folder) first — case-insensitive.
+    try:
+        entries = list(os.scandir(location))
+    except Exception:
+        return "not_found", None
+
+    name_lower = name.lower()
+    exact = [e.path for e in entries if e.name.lower() == name_lower]
+    if len(exact) == 1:
+        return "single", exact[0]
+    if len(exact) > 1:
+        return "ambiguous", exact
+
+    # Fuzzy match: name without extension, or name as a substring/prefix.
+    name_tokens, ext_tokens = _split_file_query(name)
+    candidates = [e.path for e in entries if _file_matches_query(e.name, name_tokens, ext_tokens)]
+    if len(candidates) == 1:
+        return "single", candidates[0]
+    if len(candidates) > 1:
+        return "ambiguous", candidates
+
+    return "not_found", None
+
+
+def _prepare_delete_path(path, location=None):
     raw_ok, raw_reason, raw_path = _validate_raw_path_input(path, "Path")
     if not raw_ok:
         return False, raw_reason, None
@@ -191,6 +242,12 @@ def _prepare_delete_path(path):
     ok, reason = _check_path_policy(target, write=True)
     if not ok:
         return False, reason, None
+    if not os.path.exists(target) and location:
+        status, value = resolve_name_in_location(raw_path, location)
+        if status == "single":
+            target = value
+        elif status == "ambiguous":
+            return False, "AMBIGUOUS", value
     if not os.path.exists(target):
         return False, f"Path does not exist: {target}", None
     return True, "", target
@@ -508,8 +565,14 @@ def list_directory_result(path=None, limit=50):
                 if len(entries) >= safe_limit:
                     break
         log_action("list_directory", "success", details={"path": target, "count": len(entries)})
+        if not entries:
+            msg = "Directory is empty."
+        else:
+            loc = humanize_path(target) if FILE_HUMANIZE_PATHS else {"en": target, "ar": target}
+            header = f"Contents of {loc['en']}:"
+            msg = header + "\n" + "\n".join(entries)
         return success_result(
-            "\n".join(entries) if entries else "Directory is empty.",
+            msg,
             debug_info={"path": target, "count": len(entries), "limit": safe_limit},
         )
     except Exception as exc:
@@ -668,32 +731,48 @@ def search_windows_index(query, max_results=10):
         return []
 
 
+def _search_root_paths(search_path=None):
+    """Resolve search_path to a list of absolute root paths to search."""
+    if search_path:
+        resolved = resolve_location(search_path)
+        if resolved:
+            return [str(resolved)]
+        return [_resolve_path(search_path)]
+    # No explicit location — search the configured default roots.
+    roots = []
+    for name in FILE_DEFAULT_SEARCH_ROOTS:
+        folder = KNOWN_FOLDERS.get(name)
+        if folder and folder.is_dir():
+            roots.append(str(folder))
+    return roots or [DEFAULT_SEARCH_PATH]
+
+
 def find_files(filename, search_path=None):
     if not policy_engine.is_command_allowed("file_search"):
         return []
     if not filename:
         return []
 
-    root = _resolve_path(search_path) if search_path else DEFAULT_SEARCH_PATH
-    ok, reason = _check_path_policy(root, write=False)
+    roots = _search_root_paths(search_path)
+    # Use the first valid root for legacy index queries; walk all roots below.
+    primary_root = roots[0] if roots else DEFAULT_SEARCH_PATH
+    ok, reason = _check_path_policy(primary_root, write=False)
     if not ok:
         logger.warning("Search blocked by policy: %s", reason)
         return []
 
     try:
-        # Fast path: query Windows Search Index (if available) and filter results
-        # to the allowed root/policy scope. Falls back to directory walk below.
+        # Fast path: Windows Search Index across all roots.
         indexed_results = search_windows_index(filename, max_results=max(MAX_FILE_RESULTS * 4, 20))
         if indexed_results:
-            root_abs = os.path.abspath(root)
             filtered = []
             for candidate in indexed_results:
                 try:
                     candidate_abs = os.path.abspath(candidate)
                 except Exception:
                     continue
-
-                if not _is_subpath(candidate_abs, root_abs):
+                in_any_root = any(_is_subpath(candidate_abs, os.path.abspath(r)) for r in roots)
+                if not in_any_root:
                     continue
                 path_ok, _ = _check_path_policy(candidate_abs, write=False)
                 if not path_ok:
@@ -703,58 +782,42 @@ def find_files(filename, search_path=None):
                     break
 
             if filtered:
-                log_action(
-                    "find_files",
-                    "success",
-                    details={
-                        "query": filename,
-                        "root": root,
-                        "count": len(filtered),
-                        "method": "windows_index",
-                    },
-                )
+                log_action("find_files", "success", details={
+                    "query": filename, "root": primary_root,
+                    "count": len(filtered), "method": "windows_index",
+                })
                 return filtered
 
         name_tokens, ext_tokens = _split_file_query(filename)
         matches = []
-        deadline = time.monotonic() + 15  # max 15 seconds for walk
-        for current_root, _, files in os.walk(root):
-            if time.monotonic() > deadline:
-                logger.warning("File walk timed out after 15s searching for '%s'", filename)
-                break
-            for name in files:
-                if not _file_matches_query(name, name_tokens, ext_tokens):
-                    continue
-                path = os.path.join(current_root, name)
-                path_ok, _ = _check_path_policy(path, write=False)
-                if not path_ok:
-                    continue
-                matches.append(path)
+        deadline = time.monotonic() + 15
+        for root in roots:
+            for current_root, _, files in os.walk(root):
+                if time.monotonic() > deadline:
+                    logger.warning("File walk timed out after 15s searching for '%s'", filename)
+                    break
+                for name in files:
+                    if not _file_matches_query(name, name_tokens, ext_tokens):
+                        continue
+                    path = os.path.join(current_root, name)
+                    path_ok, _ = _check_path_policy(path, write=False)
+                    if not path_ok:
+                        continue
+                    matches.append(path)
+                    if len(matches) >= MAX_FILE_RESULTS:
+                        break
                 if len(matches) >= MAX_FILE_RESULTS:
-                    log_action(
-                        "find_files",
-                        "success",
-                        details={
-                            "query": filename,
-                            "root": root,
-                            "count": len(matches),
-                            "method": "directory_walk",
-                        },
-                    )
-                    return matches
-        log_action(
-            "find_files",
-            "success",
-            details={
-                "query": filename,
-                "root": root,
-                "count": len(matches),
-                "method": "directory_walk",
-            },
-        )
+                    break
+            if len(matches) >= MAX_FILE_RESULTS:
+                break
+
+        log_action("find_files", "success", details={
+            "query": filename, "root": primary_root,
+            "count": len(matches), "method": "directory_walk",
+        })
         return matches
     except Exception as exc:
-        log_action("find_files", "failed", details={"query": filename, "root": root}, error=exc)
+        log_action("find_files", "failed", details={"query": filename, "root": primary_root}, error=exc)
         logger.error("File search failed: %s", exc)
         return []
 
@@ -844,14 +907,41 @@ def request_move_item(source, destination):
     )
 
 
-def request_rename_item(source, new_name):
+def request_rename_item(source, new_name, location=None):
     write_ok, write_reason = _validate_file_write_enabled()
     if not write_ok:
         return failure_result(write_reason, error_code="policy_blocked")
 
     ok, reason, src, dst = _prepare_rename_paths(source, new_name)
+    if not ok and reason.startswith("Source does not exist") and location:
+        # Source not found as a literal path — search for it in the given location.
+        location_path = resolve_location(location) if location else None
+        loc_str = str(location_path) if location_path else location
+        status, value = resolve_name_in_location(source, loc_str)
+        if status == "single":
+            ok, reason, src, dst = _prepare_rename_paths(value, new_name)
+        elif status == "ambiguous":
+            return failure_result(
+                "Multiple items match that name.",
+                error_code="ambiguous_target",
+                debug_info={"candidates": value or []},
+            )
+
     if not ok:
-        return failure_result(reason, error_code="validation_error")
+        if not location:
+            # No explicit location — search in default roots.
+            for root_name in FILE_DEFAULT_SEARCH_ROOTS:
+                folder = KNOWN_FOLDERS.get(root_name)
+                if not folder:
+                    continue
+                status, value = resolve_name_in_location(source, str(folder))
+                if status == "single":
+                    ok, reason, src, dst = _prepare_rename_paths(value, new_name)
+                    if ok:
+                        break
+        if not ok:
+            return failure_result(reason, error_code="validation_error")
+
     description = f"Rename item `{src}` to `{os.path.basename(dst)}`"
     return _request_file_operation_confirmation(
         "rename_item",
@@ -860,7 +950,7 @@ def request_rename_item(source, new_name):
     )
 
 
-def request_delete_item(path, permanent=False):
+def request_delete_item(path, permanent=False, location=None):
     write_ok, write_reason = _validate_file_write_enabled()
     if not write_ok:
         return failure_result(write_reason, error_code="policy_blocked")
@@ -871,8 +961,15 @@ def request_delete_item(path, permanent=False):
             error_code="policy_blocked",
         )
 
-    ok, reason, target = _prepare_delete_path(path)
+    location_path = resolve_location(location) if location else None
+    ok, reason, target = _prepare_delete_path(path, location=str(location_path) if location_path else location)
     if not ok:
+        if reason == "AMBIGUOUS":
+            return failure_result(
+                "Multiple items match that name.",
+                error_code="ambiguous_target",
+                debug_info={"candidates": target or []},
+            )
         return failure_result(reason, error_code="validation_error")
 
     operation = "delete_item_permanent" if permanent else "delete_item"

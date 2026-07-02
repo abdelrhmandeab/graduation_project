@@ -21,6 +21,7 @@ data/wake_samples/
 data/test_train/
 data/test_val/
 data/arabic_wake_training/
+data/jarvis_unified_training/
 data/openwakeword/
 data/vad/*.onnx
 models/

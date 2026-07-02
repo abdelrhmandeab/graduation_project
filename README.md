@@ -99,8 +99,8 @@ the configured / hardware-recommended model on first launch.
 python main.py
 ```
 
-Wake word: say **"Jarvis"** (English wake-word ONNX model). Arabic wake-word
-support requires a custom ONNX model path via `JARVIS_WAKE_WORD_AR_ONNX_PATH`.
+Wake word: say **"Jarvis"** in English or Egyptian Arabic. Both languages use
+the unified model configured by `JARVIS_WAKE_WORD_UNIFIED_ONNX_PATH`.
 
 ## Health check
 

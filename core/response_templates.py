@@ -50,6 +50,18 @@ _TEMPLATES = {
         "en": "There is no pending confirmation token right now.",
         "ar": "مفيش كود تأكيد معلق دلوقتي.",
     },
+    "pin_required_prompt": {
+        "en": "This needs your PIN to continue.",
+        "ar": "محتاج الرقم السري عشان أكمل.",
+    },
+    "pin_wrong": {
+        "en": "Wrong PIN.",
+        "ar": "الرقم السري غلط.",
+    },
+    "pin_locked": {
+        "en": "Too many wrong PIN attempts. {message}",
+        "ar": "محاولات كتير غلط بالرقم السري. {message}",
+    },
     "missing_last_file_delete": {
         "en": "I need a recent file reference first. Say `delete <path>` once, then you can say `delete it`.",
         "ar": "محتاج مرجع قريب لملف الاول. قول `delete <path>` مرة واحدة وبعدها تقدر تقول `امسحه`.",
@@ -271,6 +283,10 @@ def format_confirmation_prompt(
     require_second_factor=False,
     language="en",
 ):
+    if str(token or "").strip().upper() == "PIN_REQUIRED":
+        # Spoken-PIN flow: never read a token aloud, just ask for the PIN.
+        return render_template("pin_required_prompt", language)
+
     message = render_template(
         "confirmation_prompt_base",
         language,

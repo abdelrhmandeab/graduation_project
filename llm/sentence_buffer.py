@@ -1,89 +1,72 @@
 """Streaming sentence accumulator for TTS chunking.
 
-Arabic mode: flushes on Egyptian punctuation (؟/.!/\n); requires ≥6 tokens + boundary.
-Soft-splits at connectors (و/ف/ثم) after `soft_flush_chars`; hard-cuts at `hard_flush_chars`.
-English mode: flushes on . ! ? \n (same as prior regex behaviour).
+Phase 5: language-aware streaming boundaries.
 
-Q2 2026: Egyptian Arabic-aware boundary list added to prevent mid-clause TTS cuts.
+English:
+  - Soft flush when there is punctuation and at least EN_SOFT_WORDS.
+  - Hard flush when the buffer reaches EN_HARD_WORDS.
+
+Egyptian Arabic:
+  - Boundary chars include . ! ? ؟ ، ؛ and newline.
+  - Soft flush when there is a boundary and at least AR_SOFT_WORDS.
+  - Hard flush at AR_HARD_WORDS, but connector endings are held.
 """
+
+from __future__ import annotations
+
 import re
 from typing import Optional
 
-try:
-    from core.config import STREAM_AR_SOFT_FLUSH_CHARS as _CFG_SOFT, STREAM_AR_HARD_FLUSH_CHARS as _CFG_HARD
-except Exception:
-    _CFG_SOFT, _CFG_HARD = 50, 100
-
-# Arabic sentence-enders and newline. Commas stay inside the current chunk to
-# avoid restarting TTS playback at mid-sentence pauses.
-_AR_PUNCT_RE = re.compile(r"[.!?؟\n]")
-# English sentence-end: punctuation + whitespace, or punctuation at string end
-_EN_SENT_END_RE = re.compile(r"[.!?؟\n]\s+|[.!?؟]$")
-# Arabic connectors flanked by spaces — preferred soft-split points
-_AR_CONNECTOR_RE = re.compile(r"(?<= )(?:ثم|و|ف)(?= )")
-
-# Egyptian Arabic boundary list: avoid splitting mid-clause at these weak markers
-_EGYAR_CLAUSE_MARKERS = (
-    "،",  # Egyptian comma (used instead of Western comma)
-    "؛",  # Arabic semicolon
-    ":",  # Colon (common in lists)
-    "-",  # Dash (common in Egyptian speech)
+from core.config import (
+    SENTENCE_BUFFER_AR_HARD_WORDS,
+    SENTENCE_BUFFER_AR_SOFT_WORDS,
+    SENTENCE_BUFFER_EN_HARD_WORDS,
+    SENTENCE_BUFFER_EN_SOFT_WORDS,
+    SENTENCE_BUFFER_HOLD_CONNECTORS,
 )
+
+_EN_BOUNDARY_CHARS = {".", "!", "?", "\n"}
+_AR_BOUNDARY_CHARS = {".", "!", "?", "؟", "،", "؛", "\n"}
+_CONNECTORS_EN = {"and", "then"}
+_CONNECTORS_AR = {"و", "ف", "ثم"}
+_WORD_RE = re.compile(r"\S+")
 
 
 class SentenceBuffer:
-    """Token-by-token accumulator that emits complete speakable sentences.
-
-    Usage:
-        buf = SentenceBuffer(is_arabic=True)
-        for token in stream:
-            sentence = buf.add_token(token)
-            if sentence:
-                speak(sentence)
-        remainder = buf.flush()
-        if remainder:
-            speak(remainder)
-    """
+    """Token-by-token accumulator that emits complete speakable chunks."""
 
     def __init__(
         self,
         is_arabic: bool = False,
         soft_flush_chars: Optional[int] = None,
         hard_flush_chars: Optional[int] = None,
+        *,
+        en_soft_words: Optional[int] = None,
+        en_hard_words: Optional[int] = None,
+        ar_soft_words: Optional[int] = None,
+        ar_hard_words: Optional[int] = None,
+        hold_connectors: Optional[bool] = None,
     ):
-        self.is_arabic = is_arabic
-        self.soft_flush_chars = int(soft_flush_chars if soft_flush_chars is not None else _CFG_SOFT)
-        self.hard_flush_chars = int(hard_flush_chars if hard_flush_chars is not None else _CFG_HARD)
+        self.is_arabic = bool(is_arabic)
+        self.en_soft_words = int(en_soft_words or SENTENCE_BUFFER_EN_SOFT_WORDS)
+        self.en_hard_words = int(en_hard_words or SENTENCE_BUFFER_EN_HARD_WORDS)
+        self.ar_soft_words = int(ar_soft_words or SENTENCE_BUFFER_AR_SOFT_WORDS)
+        self.ar_hard_words = int(ar_hard_words or SENTENCE_BUFFER_AR_HARD_WORDS)
+        self.hold_connectors = bool(SENTENCE_BUFFER_HOLD_CONNECTORS if hold_connectors is None else hold_connectors)
+        # Backward-compatible parameters are accepted but no longer drive flushes.
+        _ = soft_flush_chars, hard_flush_chars
         self._buf = ""
-        self._token_count = 0  # Track tokens (not just chars) to avoid mid-clause splits
 
     def add_token(self, token: str) -> Optional[str]:
-        """Append *token* and return a flushed sentence if a boundary is found.
-        
-        For Egyptian Arabic: requires ≥6 tokens + punctuation boundary to avoid
-        mid-clause splits at weak markers (commas, semicolons).
-        """
         if not token:
             return None
-        self._buf += token
-        # Token count increments on space boundaries (word-like tokens) or every 5 chars (subword)
-        token_words = len(token.split())
-        if token_words > 0:
-            self._token_count += token_words
-        else:
-            self._token_count += max(1, len(token) // 5)
+        self._buf += str(token)
         return self._check()
 
     def flush(self) -> str:
-        """Force-flush whatever remains in the buffer."""
         result = self._buf.strip()
         self._buf = ""
-        self._token_count = 0
         return result
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
 
     def _check(self) -> Optional[str]:
         if not self._buf.strip():
@@ -91,64 +74,76 @@ class SentenceBuffer:
         return self._check_arabic() if self.is_arabic else self._check_english()
 
     def _check_arabic(self) -> Optional[str]:
-        # Strong boundary: Punctuation + ≥6 tokens = emit
-        m = _AR_PUNCT_RE.search(self._buf)
-        if m:
-            min_tokens_for_emission = 6
-            if self._token_count >= min_tokens_for_emission:
-                sentence = self._buf[: m.end()].strip()
-                self._buf = self._buf[m.end() :].lstrip()
-                self._token_count = 0  # Reset token counter for next buffer
-                return sentence or None
-            # If < 6 tokens, wait for more (don't split mid-clause)
-            return None
-
-        text = self._buf.strip()
-        length = len(text)
-
-        # Soft flush: split at last Arabic connector or space (only after 6+ tokens)
-        if length >= self.soft_flush_chars and self._token_count >= 6:
-            pos = self._soft_split_pos(text)
-            if pos > 0:
-                sentence = text[:pos].strip()
-                if self._is_single_word(sentence):
-                    return None
-                self._buf = text[pos:].lstrip()
-                self._token_count = max(0, self._token_count - len(sentence.split()))  # Adjust token count
-                return sentence or None
-
-        # Hard flush: cut unconditionally after 100+ chars
-        if length >= self.hard_flush_chars:
-            if self._is_single_word(text):
-                return None
-            self._buf = ""
-            self._token_count = 0
-            return text
-
-        return None
-
-    def _soft_split_pos(self, text: str) -> int:
-        """Return the rightmost connector-word boundary, falling back to last space."""
-        best = -1
-        for m in _AR_CONNECTOR_RE.finditer(text):
-            if m.start() > 0:
-                best = m.start()
-        if best > 0:
-            return best
-        pos = text.rfind(" ")
-        return pos if pos > 0 else -1
+        return self._check_language(
+            boundary_chars=_AR_BOUNDARY_CHARS,
+            soft_words=self.ar_soft_words,
+            hard_words=self.ar_hard_words,
+            connectors=_CONNECTORS_AR,
+        )
 
     def _check_english(self) -> Optional[str]:
-        m = _EN_SENT_END_RE.search(self._buf)
-        if m:
-            sentence = self._buf[: m.end()].strip()
-            if self._is_single_word(sentence):
+        return self._check_language(
+            boundary_chars=_EN_BOUNDARY_CHARS,
+            soft_words=self.en_soft_words,
+            hard_words=self.en_hard_words,
+            connectors=_CONNECTORS_EN,
+        )
+
+    def _check_language(self, *, boundary_chars: set[str], soft_words: int, hard_words: int, connectors: set[str]) -> Optional[str]:
+        text = self._buf
+        word_count = self._word_count(text)
+        boundary_pos = self._last_boundary_pos(text, boundary_chars)
+
+        if boundary_pos >= 0 and word_count >= soft_words:
+            candidate = text[: boundary_pos + 1].strip()
+            if candidate and not self._ends_with_connector(candidate, connectors):
+                self._buf = text[boundary_pos + 1 :].lstrip()
+                return candidate
+
+        if word_count >= hard_words:
+            if self.hold_connectors and self._ends_with_connector(text, connectors):
                 return None
-            self._buf = self._buf[m.end() :].lstrip()
-            return sentence or None
+            cut = self._hard_cut_pos(text, hard_words)
+            candidate = text[:cut].strip() if cut > 0 else ""
+            if self.hold_connectors and candidate and self._ends_with_connector(candidate, connectors):
+                next_cut = self._hard_cut_pos(text, hard_words + 1)
+                if next_cut > cut:
+                    cut = next_cut
+            if cut > 0:
+                candidate = text[:cut].strip()
+                if candidate and not self._is_single_word(candidate):
+                    self._buf = text[cut:].lstrip()
+                    return candidate
+
         return None
 
     @staticmethod
+    def _word_count(text: str) -> int:
+        return len(_WORD_RE.findall(str(text or "")))
+
+    @staticmethod
+    def _last_boundary_pos(text: str, boundary_chars: set[str]) -> int:
+        best = -1
+        for index, char in enumerate(str(text or "")):
+            if char in boundary_chars:
+                best = index
+        return best
+
+    @staticmethod
+    def _hard_cut_pos(text: str, hard_words: int) -> int:
+        matches = list(_WORD_RE.finditer(str(text or "")))
+        if len(matches) < hard_words:
+            return -1
+        return matches[hard_words - 1].end()
+
+    @staticmethod
+    def _ends_with_connector(text: str, connectors: set[str]) -> bool:
+        words = _WORD_RE.findall(str(text or "").strip())
+        if not words:
+            return False
+        last = words[-1].strip(".,!?؟،؛:;-").lower()
+        return last in connectors
+
+    @staticmethod
     def _is_single_word(text: str) -> bool:
-        words = [part for part in str(text or "").split() if part]
-        return len(words) <= 1
+        return SentenceBuffer._word_count(text) <= 1

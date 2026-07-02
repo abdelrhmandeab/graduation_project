@@ -6,10 +6,15 @@ import httpx
 
 from core.config import (
     LLM_FALLBACK_MODELS,
+    LLM_MAX_RESPONSE_TOKENS,
     LLM_MODEL,
     LLM_OLLAMA_BASE_URL,
     LLM_OLLAMA_NUM_CTX,
+    LLM_REPEAT_PENALTY,
+    LLM_STOP_TOKENS,
+    LLM_TEMPERATURE,
     LLM_TIMEOUT_SECONDS,
+    LLM_TOP_P,
 )
 from core.logger import logger
 from core.metrics import metrics, record_stage_timing
@@ -18,17 +23,15 @@ from llm.sentence_buffer import SentenceBuffer
 _OLLAMA_BASE_URL = str(LLM_OLLAMA_BASE_URL or "http://localhost:11434").rstrip("/")
 _GENERATE_ENDPOINT = f"{_OLLAMA_BASE_URL}/api/generate"
 
+import threading
+
+llm_cancel_event = threading.Event()
+
 # Resolved at startup by set_runtime_model(); falls back to config value.
 _runtime_model = None
 _runtime_num_ctx = None
 _runtime_lightweight_num_ctx = None
-_runtime_model_tier = None  # Track tier for tiered prompt selection
-
-# Sentence boundary characters for streaming sentence detection
-_SENTENCE_END_RE = re.compile(r"(?<=[.!?؟\n])\s+|(?<=[.!?؟])$")
-_ARABIC_CHAR_RE = re.compile(r"[\u0600-\u06FF]")
-_STREAM_FLUSH_WORDS = 7
-_STREAM_FLUSH_CHARS = 90
+_runtime_model_tier = None
 
 # qwen3 family emits <think>...</think> reasoning blocks that burn predict tokens
 # and (depending on Ollama version) leak into the response field. Strip them.
@@ -55,6 +58,16 @@ def _strip_thinking_tags(text):
     return cleaned.strip()
 
 
+def _decode_stop_tokens(tokens):
+    decoded = []
+    for token in tokens or []:
+        value = str(token or "")
+        if not value:
+            continue
+        decoded.append(value.replace("\\n", "\n").replace("\\t", "\t"))
+    return decoded
+
+
 def _build_request_payload(model_name, prompt, num_ctx, stream):
     """Construct an Ollama /api/generate payload, suppressing thinking when needed.
 
@@ -67,7 +80,14 @@ def _build_request_payload(model_name, prompt, num_ctx, stream):
         "prompt": effective_prompt,
         "stream": bool(stream),
         "keep_alive": "30m",
-        "options": {"num_ctx": int(num_ctx)},
+        "options": {
+            "num_ctx": int(num_ctx),
+            "temperature": float(LLM_TEMPERATURE),
+            "top_p": float(LLM_TOP_P),
+            "repeat_penalty": float(LLM_REPEAT_PENALTY),
+            "num_predict": int(LLM_MAX_RESPONSE_TOKENS),
+            "stop": _decode_stop_tokens(LLM_STOP_TOKENS),
+        },
     }
     if _is_thinking_mode_model(model_name):
         # Belt-and-suspenders: top-level think flag (Ollama 0.9+) + prompt suffix
@@ -162,31 +182,39 @@ def _resolve_model_candidates(primary_model: str):
     return ordered
 
 
-def detect_sentence_boundaries(text: str, is_arabic: bool) -> list[str]:
-    """Split streamed text into speakable chunks.
+def prewarm_model(timeout_seconds=None):
+    """Load the active Ollama model into memory without generating text.
 
-    Arabic text often arrives with weak punctuation, so we keep normal sentence
-    splitting for punctuation and add a conservative forced flush when a chunk is
-    clearly long enough to speak naturally but still has no boundary.
+    Ollama treats an empty prompt as a load-only request. This avoids spending
+    startup time generating a throwaway response and works reliably on slower
+    CPU-only machines.
     """
-    value = str(text or "").strip()
-    if not value:
-        return []
+    model_name = _resolve_model_name()
+    effective_num_ctx = int(_runtime_lightweight_num_ctx or _runtime_num_ctx or LLM_OLLAMA_NUM_CTX)
+    request_timeout = float(timeout_seconds or LLM_TIMEOUT_SECONDS)
+    response = httpx.post(
+        _GENERATE_ENDPOINT,
+        json={
+            "model": model_name,
+            "prompt": "",
+            "stream": False,
+            "keep_alive": "30m",
+            "options": {
+                "num_ctx": effective_num_ctx,
+                "temperature": float(LLM_TEMPERATURE),
+                "top_p": float(LLM_TOP_P),
+                "repeat_penalty": float(LLM_REPEAT_PENALTY),
+                "num_predict": int(LLM_MAX_RESPONSE_TOKENS),
+                "stop": _decode_stop_tokens(LLM_STOP_TOKENS),
+            },
+        },
+        timeout=request_timeout,
+    )
+    response.raise_for_status()
+    return model_name
 
-    parts = [part.strip() for part in _SENTENCE_END_RE.split(value) if part.strip()]
-    if len(parts) > 1:
-        return parts
 
-    if is_arabic:
-        word_count = len(value.split())
-        char_count = len(value)
-        if word_count >= _STREAM_FLUSH_WORDS or char_count >= _STREAM_FLUSH_CHARS:
-            return [value]
-
-    return []
-
-
-def ask_llm_streaming(prompt, on_sentence=None, num_ctx=None, is_arabic=False):
+def ask_llm_streaming(prompt, on_sentence=None, num_ctx=None, is_arabic=False, cancel_event=None):
     """Stream tokens from Ollama; call on_sentence(text) at each sentence boundary.
 
     Returns the complete accumulated response text, or an error string.
@@ -195,9 +223,14 @@ def ask_llm_streaming(prompt, on_sentence=None, num_ctx=None, is_arabic=False):
     Args:
         is_arabic: When True, uses Arabic-aware sentence splitting (splits on ؟،؛
                    and performs soft/hard char-count flushes for un-punctuated text).
+        cancel_event: Optional threading.Event checked after each token chunk.
+                      When set, the stream is closed and partial text returned.
     """
     if on_sentence is None:
         return ask_llm(prompt, num_ctx=num_ctx)
+
+    if cancel_event is None:
+        cancel_event = llm_cancel_event
 
     started = time.perf_counter()
     success = False
@@ -241,6 +274,10 @@ def ask_llm_streaming(prompt, on_sentence=None, num_ctx=None, is_arabic=False):
                 return "I could not run the local model."
 
             for raw_line in stream_response.iter_lines():
+                if cancel_event is not None and cancel_event.is_set():
+                    logger.info("LLM stream cancelled by wake-word interrupt.")
+                    break
+
                 elapsed = time.perf_counter() - started
                 if elapsed >= hard_timeout_seconds:
                     hard_timeout_hit = True
