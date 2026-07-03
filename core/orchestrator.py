@@ -477,9 +477,33 @@ def _prune_futures(futures):
     return active
 
 
+def _emit_ui_event(event_type, **fields):
+    """Best-effort broadcast to connected desktop UI clients via the optional bridge.
+
+    No-ops when the UI bridge isn't running/available; never raises into the
+    voice pipeline.
+    """
+    try:
+        from ui.bridge import broadcast_event
+        from ui.events import make_event
+
+        broadcast_event(make_event(event_type, **fields))
+    except Exception:
+        logger.debug("UI event emit failed: type=%s", event_type, exc_info=True)
+
+
+def _guess_language(text):
+    return "ar" if _ARABIC_CHAR_RE.search(str(text or "")) else "en"
+
+
 def _on_partial_transcript(partial_text):
     if partial_text:
         logger.debug("STT partial: %s", partial_text[-180:])
+        _emit_ui_event(
+            "partial_transcript",
+            text=str(partial_text),
+            language=_guess_language(partial_text),
+        )
 
 
 def _safe_log_text(text, max_chars=220):
@@ -770,8 +794,13 @@ def _process_utterance(
             logger.info("Skipping non-speech STT annotation: %s", _safe_log_text(text))
             return
         logger.info("Transcript[%s]: %s", detected_language or "unknown", _safe_log_text(text))
+        _emit_ui_event(
+            "final_transcript",
+            text=str(text),
+            language=detected_language or _guess_language(text),
+        )
 
-        
+
 
         # Demo mode: print intent/confidence overlay to console for presentations.
         if DEMO_MODE:
@@ -819,6 +848,11 @@ def _process_utterance(
                 early_resp = pipeline.get_early_response()
                 if early_resp:
                     print(f"Jarvis (early): {early_resp}")
+                    _emit_ui_event(
+                        "response",
+                        text=str(early_resp),
+                        language=detected_language or _guess_language(early_resp),
+                    )
                 logger.info("ConcurrentPipeline: skipping full route — already handled via early execution.")
                 timing_parts.update(pipeline.get_early_timings())
                 route_success = True
@@ -972,6 +1006,11 @@ def _process_utterance(
 
         if not is_compound:
             print(f"Jarvis: {response}")
+        _emit_ui_event(
+            "response",
+            text=str(response or ""),
+            language=tts_language or detected_language or _guess_language(response),
+        )
         interrupted = coordinator.current_phase == RuntimePhase.LISTENING
         if (
             should_speak_response
