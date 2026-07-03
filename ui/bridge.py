@@ -174,6 +174,7 @@ class JarvisBridge:
 
         if command_type == COMMAND_MUTE_TOGGLE:
             self.muted = bool(message.get("muted"))
+            self._apply_mute(self.muted)
             logger.info("UI bridge mute toggled: %s", self.muted)
             return
 
@@ -186,17 +187,23 @@ class JarvisBridge:
             return
 
         if command_type == COMMAND_SETTING_UPDATE:
-            # TODO: Apply runtime-safe setting updates in a later bridge phase.
-            logger.info("UI bridge setting_update received: key=%s", message.get("key"))
+            key = str(message.get("key") or "")
+            value = message.get("value")
+            applied = self._apply_setting(key, value)
+            logger.info("UI bridge setting_update: key=%s applied=%s", key, applied)
+            if applied:
+                await self._broadcast(self._config_event())
             return
 
         if command_type == COMMAND_FEATURE_FLAG:
-            # TODO: Apply runtime-safe feature flag updates in a later bridge phase.
+            flag = str(message.get("flag") or "")
+            enabled = bool(message.get("enabled"))
+            applied = self._apply_feature_flag(flag, enabled)
             logger.info(
-                "UI bridge feature_flag received: flag=%s enabled=%s",
-                message.get("flag"),
-                message.get("enabled"),
+                "UI bridge feature_flag: flag=%s enabled=%s applied=%s", flag, enabled, applied
             )
+            if applied:
+                await self._broadcast(self._config_event())
             return
 
         logger.info("UI bridge ignored unknown command type: %s", command_type)
@@ -209,6 +216,62 @@ class JarvisBridge:
         except Exception:
             logger.exception("UI bridge text_command routing failed")
             return "I could not process that command."
+
+    def _apply_mute(self, muted: bool) -> None:
+        """Mute/unmute the assistant's spoken output (TTS)."""
+        try:
+            from audio.tts import speech_engine
+
+            speech_engine.set_enabled(not bool(muted))
+        except Exception:
+            logger.debug("Failed to apply mute to speech engine", exc_info=True)
+
+    def _apply_setting(self, key: str, value) -> bool:
+        """Apply a runtime-safe setting update. Returns True when applied."""
+        try:
+            if key == "JARVIS_STT_LANGUAGE_HINT":
+                from audio import stt as stt_runtime
+
+                stt_runtime.set_runtime_stt_settings(language_hint=value)
+                return True
+            if key == "JARVIS_LLM_MODEL":
+                model = str(value or "").strip()
+                if not model or model.lower() == "auto":
+                    return False
+                from llm.ollama_client import set_runtime_model
+
+                set_runtime_model(model)
+                try:
+                    setattr(config, "LLM_MODEL", model)
+                except Exception:
+                    logger.debug("Failed to mirror LLM_MODEL onto config", exc_info=True)
+                return True
+            if key == "JARVIS_PERSONA":
+                from core.persona import persona_manager
+
+                ok, _msg = persona_manager.set_profile(str(value or ""))
+                if ok:
+                    try:
+                        setattr(config, "PERSONA_DEFAULT", str(value or ""))
+                    except Exception:
+                        logger.debug("Failed to mirror PERSONA_DEFAULT onto config", exc_info=True)
+                return bool(ok)
+            logger.info("UI bridge ignored unsupported setting key: %s", key)
+        except Exception:
+            logger.debug("Failed to apply setting key=%s", key, exc_info=True)
+        return False
+
+    def _apply_feature_flag(self, flag: str, enabled: bool) -> bool:
+        """Toggle a feature flag in the live FEATURE_FLAGS dict. Returns True when applied."""
+        try:
+            flags = getattr(config, "FEATURE_FLAGS", None)
+            if isinstance(flags, dict) and flag in flags:
+                flags[flag] = bool(enabled)
+                return True
+            logger.info("UI bridge ignored unknown feature flag: %s", flag)
+        except Exception:
+            logger.debug("Failed to apply feature flag=%s", flag, exc_info=True)
+        return False
 
     def _register_client(self, websocket: WebSocket) -> None:
         with self.lock:
