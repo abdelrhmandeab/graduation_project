@@ -154,7 +154,7 @@ export function Dashboard({ send }: DashboardProps) {
     <div className="frameless-scroll relative h-screen overflow-y-auto px-4 py-6 text-gray-900 sm:px-6 lg:px-8 dark:text-white">
       {/* theme base + subtle pink / blue / amber gradient glow (same colors in
           light and dark) */}
-      <div aria-hidden="true" className="pointer-events-none fixed inset-0 z-0 bg-[#e9ebf5]/95 backdrop-blur-xl dark:bg-[#0A0A0F]/95">
+      <div aria-hidden="true" className="pointer-events-none fixed inset-0 z-0 bg-[#e9ebf5]/70 backdrop-blur-xl dark:bg-[#0A0A0F]/70">
         <div className="absolute inset-0 opacity-35">
           <GradientBackground
             containerClassName="h-full w-full"
