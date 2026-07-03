@@ -8,7 +8,7 @@ import threading
 from typing import Any
 
 from core import config
-from core.dialogue_manager import dialogue_manager
+from core.dialogue_manager import DialogueState, dialogue_manager
 from core.logger import get_logger
 from ui.events import (
     COMMAND_CONFIG_REQUEST,
@@ -168,8 +168,22 @@ class JarvisBridge:
             language = message.get("language")
             if not text:
                 return
-            response = await asyncio.to_thread(self._route_text_command, text, language)
-            self.broadcast(make_event(EVENT_RESPONSE, text=str(response or ""), language=language))
+            # Drive the dialogue state so the avatar animates and the overlay pops
+            # for typed prompts, just like a voice turn. Guarded to idle-only so it
+            # never disrupts an in-flight voice interaction.
+            animate = self._begin_text_turn()
+            try:
+                response = await asyncio.to_thread(self._route_text_command, text, language)
+                if animate:
+                    self._safe_transition(DialogueState.RESPONDING)
+                self.broadcast(make_event(EVENT_RESPONSE, text=str(response or ""), language=language))
+                if animate:
+                    # Hold RESPONDING briefly so the reply is visible before the
+                    # overlay sinks back to idle.
+                    await asyncio.sleep(2.0)
+            finally:
+                if animate:
+                    self._safe_transition(DialogueState.IDLE)
             return
 
         if command_type == COMMAND_MUTE_TOGGLE:
@@ -216,6 +230,23 @@ class JarvisBridge:
         except Exception:
             logger.exception("UI bridge text_command routing failed")
             return "I could not process that command."
+
+    def _safe_transition(self, state) -> None:
+        try:
+            dialogue_manager.transition(state)
+        except Exception:
+            logger.debug("Dialogue transition failed: %s", state, exc_info=True)
+
+    def _begin_text_turn(self) -> bool:
+        """Enter PROCESSING for a typed command, but only from IDLE so a live
+        voice turn is never interrupted. Returns True when the animation started."""
+        try:
+            if dialogue_manager.state != DialogueState.IDLE:
+                return False
+        except Exception:
+            return False
+        self._safe_transition(DialogueState.PROCESSING)
+        return True
 
     def _apply_mute(self, muted: bool) -> None:
         """Mute/unmute the assistant's spoken output (TTS)."""
