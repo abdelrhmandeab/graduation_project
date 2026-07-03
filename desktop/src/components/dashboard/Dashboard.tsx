@@ -78,6 +78,20 @@ function ChipGroup<T extends string>({
   );
 }
 
+function HeaderButton({ onClick, children }: { onClick: () => void; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="group flex cursor-pointer rounded-lg bg-gradient-to-t from-gray-800 via-gray-600 to-gray-800 p-[3px] shadow-inner outline-none transition-all duration-150 active:scale-95"
+    >
+      <span className="rounded-md bg-black/10 px-3 py-1.5 text-sm font-medium text-gray-200 backdrop-blur-sm transition-colors group-hover:text-white">
+        {children}
+      </span>
+    </button>
+  );
+}
+
 function Section({
   title,
   className = '',
@@ -146,19 +160,15 @@ export function Dashboard({ send }: DashboardProps) {
             <h1 className="mt-1 text-2xl font-semibold tracking-normal text-white">Jarvis Dashboard</h1>
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            <Chip onClick={() => send({ type: 'config_request' })} className="h-9 px-3 text-sm font-medium">
-              Refresh
-            </Chip>
-            <Chip
-              active
+          <div className="flex flex-wrap items-center gap-2">
+            <HeaderButton onClick={() => send({ type: 'config_request' })}>Refresh</HeaderButton>
+            <HeaderButton
               onClick={() => {
                 void backToOverlay();
               }}
-              className="h-9 px-3 text-sm font-medium"
             >
               Hide
-            </Chip>
+            </HeaderButton>
             <button
               type="button"
               aria-label="Close Jarvis"
@@ -166,10 +176,10 @@ export function Dashboard({ send }: DashboardProps) {
               onClick={() => {
                 void closeApp().catch((error: unknown) => console.error('Failed to close app.', error));
               }}
-              className="grid h-9 w-9 place-items-center rounded border border-red-300/25 bg-red-400/12 text-red-100 transition-opacity hover:opacity-90"
+              className="flex cursor-pointer items-center p-1 text-red-400/70 transition-all duration-300 hover:-translate-y-1 hover:text-red-400"
             >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path d="M4 4 L12 12 M12 4 L4 12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+                <path d="M5 5 L13 13 M13 5 L5 13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
               </svg>
             </button>
           </div>
