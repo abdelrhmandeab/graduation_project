@@ -82,56 +82,54 @@ export function Overlay({ send }: OverlayProps) {
 
         {textPromptEnabled ? (
           <div className="relative m-3 flex items-center gap-2 rounded border border-white/10 bg-[#0A0A0F]/70 p-2 shadow-2xl shadow-black/40 backdrop-blur-xl">
-            <PromptInput send={send} />
-          <button
-            type="button"
-            onClick={toggleMuted}
-            aria-label={muted ? 'Unmute' : 'Mute'}
-            title={muted ? 'Unmute' : 'Mute'}
-            className={`grid h-10 w-10 shrink-0 place-items-center rounded border transition ${
-              muted
-                ? 'border-red-300/30 bg-red-400/15 text-red-100 hover:bg-red-400/20'
-                : 'border-white/10 bg-white/[0.06] text-white/75 hover:bg-white/[0.1]'
-            }`}
-          >
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path
-                d="M4 9 L8 9 L13 5 L13 19 L8 15 L4 15 Z"
-                fill="currentColor"
-                stroke="currentColor"
-                strokeWidth="1.4"
-                strokeLinejoin="round"
-              />
-              {muted ? (
-                <path d="M17 9 L22 15 M22 9 L17 15" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-              ) : (
+            <button
+              type="button"
+              onClick={toggleMuted}
+              aria-label={muted ? 'Unmute' : 'Mute'}
+              title={muted ? 'Unmute' : 'Mute'}
+              className={`flex shrink-0 cursor-pointer items-center bg-transparent p-1 transition-all duration-300 hover:-translate-y-1 ${
+                muted ? 'text-red-400 hover:text-red-300' : 'text-white/25 hover:text-white'
+              }`}
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <path
-                  d="M16.5 8.5 A5 5 0 0 1 16.5 15.5 M19 6 A9 9 0 0 1 19 18"
+                  d="M4 9 L8 9 L13 5 L13 19 L8 15 L4 15 Z"
+                  fill="currentColor"
                   stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
+                  strokeWidth="1.4"
+                  strokeLinejoin="round"
                 />
-              )}
-            </svg>
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              void openDashboard();
-            }}
-            aria-label="Dashboard"
-            title="Dashboard"
-            className="grid h-10 w-10 shrink-0 place-items-center rounded border border-white/10 bg-white/[0.06] text-white/80 transition hover:border-[#8EEBFF]/35 hover:text-white"
-          >
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path
-                d="M4 4 H10 V11 H4 Z M14 4 H20 V8 H14 Z M14 12 H20 V20 H14 Z M4 15 H10 V20 H4 Z"
-                stroke="currentColor"
-                strokeWidth="1.7"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </button>
+                {muted ? (
+                  <path d="M17 9 L22 15 M22 9 L17 15" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                ) : (
+                  <path
+                    d="M16.5 8.5 A5 5 0 0 1 16.5 15.5 M19 6 A9 9 0 0 1 19 18"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                  />
+                )}
+              </svg>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                void openDashboard();
+              }}
+              aria-label="Dashboard"
+              title="Dashboard"
+              className="flex shrink-0 cursor-pointer items-center bg-transparent p-1 text-white/25 transition-all duration-300 hover:-translate-y-1 hover:text-white"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path
+                  d="M4 4 H10 V11 H4 Z M14 4 H20 V8 H14 Z M14 12 H20 V20 H14 Z M4 15 H10 V20 H4 Z"
+                  stroke="currentColor"
+                  strokeWidth="1.7"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+            <PromptInput send={send} />
           </div>
         ) : null}
       </div>

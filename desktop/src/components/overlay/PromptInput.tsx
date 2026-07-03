@@ -5,7 +5,7 @@ interface PromptInputProps {
   send: (cmd: UICommand) => void;
 }
 
-const ARABIC_TEXT_PATTERN = /[\u0600-\u06FF]/;
+const ARABIC_TEXT_PATTERN = /[؀-ۿ]/;
 
 function detectLanguage(text: string): Language {
   return ARABIC_TEXT_PATTERN.test(text) ? 'ar' : 'en';
@@ -37,23 +37,26 @@ export function PromptInput({ send }: PromptInputProps) {
         value={text}
         onChange={(event) => setText(event.target.value)}
         placeholder="Type a prompt"
-        className="h-10 min-w-0 flex-1 rounded border border-white/10 bg-white/[0.07] px-3 text-sm text-white outline-none transition focus:border-[#8EEBFF]/70 focus:bg-white/[0.1]"
+        className="min-w-0 flex-1 bg-transparent px-2 py-2 font-sans text-sm font-medium text-white outline-none placeholder:text-white/40"
       />
+      {/* Gradient inset submit button (design style) */}
       <button
         type="submit"
         aria-label="Send"
         title="Send"
-        className="grid h-10 w-10 shrink-0 place-items-center rounded border border-[#8EEBFF]/30 bg-[#8EEBFF]/12 text-[#DDFBFF] transition hover:bg-[#8EEBFF]/18"
+        className="group flex shrink-0 cursor-pointer rounded-lg bg-gradient-to-t from-gray-800 via-gray-600 to-gray-800 p-1 shadow-inner outline-none transition-all duration-150 active:scale-95"
       >
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path
-            d="M22 2 L11 13 M22 2 L15 22 L11 13 L2 9 Z"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
+        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-black/10 text-gray-300 backdrop-blur-sm transition-all duration-300 group-hover:text-white group-hover:drop-shadow-[0_0_5px_#fff]">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path
+              d="M22 2 L11 13 M22 2 L15 22 L11 13 L2 9 Z"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </span>
       </button>
     </form>
   );
