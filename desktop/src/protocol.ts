@@ -114,12 +114,16 @@ export const STATE_COLORS: Record<DialogueState, string> = {
 
 export const MOCK_WS_PORT = 8765;
 
-// WebSocket URL the UI connects to.
-// Defaults to the in-process Vite mock server (port 8765, no path).
-// Set VITE_JARVIS_WS_URL to target the real Python bridge, e.g.
-//   VITE_JARVIS_WS_URL=ws://127.0.0.1:9720/ws
+// Real Python UI bridge (ui/bridge.py) — FastAPI websocket on 127.0.0.1:9720/ws.
+export const DEFAULT_BRIDGE_WS_URL = 'ws://127.0.0.1:9720/ws';
+
+// WebSocket URL the UI connects to. Defaults to the real Python bridge so the
+// desktop app talks to the live engine. The in-process Vite mock server is
+// opt-in via `npm run dev:mock` (Vite `--mode mock`) for UI-only development.
+// `VITE_JARVIS_WS_URL` overrides either.
 // `import.meta.env` is undefined when this module is evaluated in a plain Node
 // context (e.g. vite.config.ts loading the mock server), so guard the access.
 const viteEnv = import.meta.env as ImportMetaEnv | undefined;
 export const JARVIS_WS_URL =
-  viteEnv?.VITE_JARVIS_WS_URL ?? `ws://localhost:${MOCK_WS_PORT}`;
+  viteEnv?.VITE_JARVIS_WS_URL ??
+  (viteEnv?.MODE === 'mock' ? `ws://localhost:${MOCK_WS_PORT}` : DEFAULT_BRIDGE_WS_URL);
