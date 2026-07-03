@@ -38,7 +38,7 @@ export function Transcript() {
           exit={{ opacity: 0 }}
           transition={{ duration: 0.2 }}
           dir={getDirection(language)}
-          className="max-w-[300px] text-center font-mono text-base text-white"
+          className="max-w-[300px] text-center font-mono text-base text-gray-900 dark:text-white"
         >
           {text}
         </motion.div>

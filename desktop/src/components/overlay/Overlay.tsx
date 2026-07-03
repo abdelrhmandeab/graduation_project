@@ -57,7 +57,7 @@ export function Overlay({ send }: OverlayProps) {
   };
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden bg-transparent text-white">
+    <div className="relative h-screen w-screen overflow-hidden bg-transparent text-gray-900 dark:text-white">
       <div className="absolute inset-0 flex flex-col" style={stageStyle}>
         {/* persistent ambient light at the bottom, tinted with the state color —
             stays visible even when the input bar is hidden */}
@@ -81,14 +81,16 @@ export function Overlay({ send }: OverlayProps) {
         </main>
 
         {textPromptEnabled ? (
-          <div className="relative m-3 flex items-center gap-2 rounded border border-white/10 bg-[#0A0A0F]/70 p-2 shadow-2xl shadow-black/40 backdrop-blur-xl">
+          <div className="relative m-3 flex items-center gap-2 rounded border border-black/10 bg-white/70 p-2 shadow-2xl shadow-black/20 backdrop-blur-xl dark:border-white/10 dark:bg-[#0A0A0F]/70 dark:shadow-black/40">
             <button
               type="button"
               onClick={toggleMuted}
               aria-label={muted ? 'Unmute' : 'Mute'}
               title={muted ? 'Unmute' : 'Mute'}
               className={`flex shrink-0 cursor-pointer items-center bg-transparent p-1 transition-all duration-300 hover:-translate-y-1 ${
-                muted ? 'text-red-400 hover:text-red-300' : 'text-white/25 hover:text-white'
+                muted
+                  ? 'text-red-500 hover:text-red-400 dark:text-red-400 dark:hover:text-red-300'
+                  : 'text-gray-500 hover:text-gray-900 dark:text-white/25 dark:hover:text-white'
               }`}
             >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -118,7 +120,7 @@ export function Overlay({ send }: OverlayProps) {
               }}
               aria-label="Dashboard"
               title="Dashboard"
-              className="flex shrink-0 cursor-pointer items-center bg-transparent p-1 text-white/25 transition-all duration-300 hover:-translate-y-1 hover:text-white"
+              className="flex shrink-0 cursor-pointer items-center bg-transparent p-1 text-gray-500 transition-all duration-300 hover:-translate-y-1 hover:text-gray-900 dark:text-white/25 dark:hover:text-white"
             >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <path

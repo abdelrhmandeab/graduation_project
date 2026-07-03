@@ -37,16 +37,16 @@ export function PromptInput({ send }: PromptInputProps) {
         value={text}
         onChange={(event) => setText(event.target.value)}
         placeholder="Type a prompt"
-        className="min-w-0 flex-1 bg-transparent px-2 py-2 font-sans text-sm font-medium text-white outline-none placeholder:text-white/40"
+        className="min-w-0 flex-1 bg-transparent px-2 py-2 font-sans text-sm font-medium text-gray-900 outline-none placeholder:text-gray-500 dark:text-white dark:placeholder:text-white/40"
       />
       {/* Gradient inset submit button (design style) */}
       <button
         type="submit"
         aria-label="Send"
         title="Send"
-        className="group flex shrink-0 cursor-pointer rounded-lg bg-gradient-to-t from-gray-800 via-gray-600 to-gray-800 p-1 shadow-inner outline-none transition-all duration-150 active:scale-95"
+        className="group flex shrink-0 cursor-pointer rounded-lg bg-gradient-to-t from-gray-400 via-gray-300 to-gray-500 p-1 shadow-inner outline-none transition-all duration-150 active:scale-95 dark:from-gray-800 dark:via-gray-600 dark:to-gray-800"
       >
-        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-black/10 text-gray-300 backdrop-blur-sm transition-all duration-300 group-hover:text-white group-hover:drop-shadow-[0_0_5px_#fff]">
+        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/20 text-gray-600 backdrop-blur-sm transition-all duration-300 group-hover:text-gray-900 group-hover:drop-shadow-[0_0_4px_rgba(0,0,0,0.35)] dark:bg-black/10 dark:text-gray-300 dark:group-hover:text-white dark:group-hover:drop-shadow-[0_0_5px_#fff]">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
             <path
               d="M22 2 L11 13 M22 2 L15 22 L11 13 L2 9 Z"

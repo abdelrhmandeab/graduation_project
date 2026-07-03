@@ -14,12 +14,12 @@ interface SelectProps {
 export function Select({ label, value, options, onChange, disabled = false }: SelectProps) {
   return (
     <label className="grid gap-2 text-sm">
-      <span className="font-medium text-white/72">{label}</span>
+      <span className="font-medium text-gray-600 dark:text-white/72">{label}</span>
       <select
         value={value}
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
-        className="h-11 rounded border border-white/10 bg-[#111118] px-3 text-white outline-none transition focus:border-[#8EEBFF]/65 disabled:cursor-not-allowed disabled:opacity-45"
+        className="h-11 rounded border border-black/10 bg-white px-3 text-gray-900 outline-none transition focus:border-[#8EEBFF]/65 disabled:cursor-not-allowed disabled:opacity-45 dark:border-white/10 dark:bg-[#111118] dark:text-white"
       >
         {options.map((option) => (
           <option key={option.value} value={option.value}>

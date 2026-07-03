@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Dashboard } from './components/dashboard/Dashboard';
 import { Overlay } from './components/overlay/Overlay';
@@ -19,7 +20,24 @@ function tauriWindowView(): 'overlay' | 'dashboard' | null {
 export default function App() {
   const { send } = useJarvisSocket();
   const appView = useJarvisStore((state) => state.appView);
+  const theme = useJarvisStore((state) => state.theme);
   const view = tauriWindowView() ?? appView;
+
+  // Apply the theme by toggling `.dark` on <html>. In auto mode, follow the OS
+  // and keep following as it changes.
+  useEffect(() => {
+    const root = document.documentElement;
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const apply = () => {
+      const dark = theme === 'dark' || (theme === 'auto' && media.matches);
+      root.classList.toggle('dark', dark);
+    };
+    apply();
+    if (theme === 'auto') {
+      media.addEventListener('change', apply);
+      return () => media.removeEventListener('change', apply);
+    }
+  }, [theme]);
 
   return view === 'overlay' ? <Overlay send={send} /> : <Dashboard send={send} />;
 }

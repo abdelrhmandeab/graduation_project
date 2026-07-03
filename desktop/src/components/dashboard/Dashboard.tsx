@@ -3,7 +3,12 @@ import type { UICommand, FeatureFlags } from '../../protocol';
 import { backToOverlay, closeApp } from '../../lib/app';
 import { GradientBackground } from '../GradientBackground';
 import { PromptInput } from '../overlay/PromptInput';
-import { useJarvisStore, type AvatarDirection, type UiLanguage } from '../../stores/jarvisStore';
+import {
+  useJarvisStore,
+  type AvatarDirection,
+  type ThemeMode,
+  type UiLanguage,
+} from '../../stores/jarvisStore';
 import { Chip, PanelLabel } from '../ui/Chip';
 import { Select, type SelectOption } from './Select';
 import { Toggle } from './Toggle';
@@ -27,6 +32,12 @@ const avatarOptions: Array<DashboardOption<AvatarDirection>> = [
 const languageOptions: Array<DashboardOption<UiLanguage>> = [
   { label: 'English', value: 'en' },
   { label: 'Arabic', value: 'ar' },
+  { label: 'Auto', value: 'auto' },
+];
+
+const themeOptions: Array<DashboardOption<ThemeMode>> = [
+  { label: 'Dark', value: 'dark' },
+  { label: 'Light', value: 'light' },
   { label: 'Auto', value: 'auto' },
 ];
 
@@ -83,9 +94,9 @@ function HeaderButton({ onClick, children }: { onClick: () => void; children: Re
     <button
       type="button"
       onClick={onClick}
-      className="group flex cursor-pointer rounded-lg bg-gradient-to-t from-gray-800 via-gray-600 to-gray-800 p-[3px] shadow-inner outline-none transition-all duration-150 active:scale-95"
+      className="group flex cursor-pointer rounded-lg bg-gradient-to-t from-gray-400 via-gray-300 to-gray-500 p-[3px] shadow-inner outline-none transition-all duration-150 active:scale-95 dark:from-gray-800 dark:via-gray-600 dark:to-gray-800"
     >
-      <span className="rounded-md bg-black/10 px-3 py-1.5 text-sm font-medium text-gray-200 backdrop-blur-sm transition-colors group-hover:text-white">
+      <span className="rounded-md bg-white/20 px-3 py-1.5 text-sm font-medium text-gray-700 backdrop-blur-sm transition-colors group-hover:text-gray-900 dark:bg-black/10 dark:text-gray-200 dark:group-hover:text-white">
         {children}
       </span>
     </button>
@@ -103,7 +114,7 @@ function Section({
 }) {
   return (
     <section
-      className={`rounded-md border border-white/10 bg-black/70 p-3 text-white shadow-2xl shadow-black/35 backdrop-blur ${className}`}
+      className={`rounded-md border border-black/10 bg-white/70 p-3 text-gray-900 shadow-2xl shadow-black/15 backdrop-blur dark:border-white/10 dark:bg-black/70 dark:text-white dark:shadow-black/35 ${className}`}
     >
       <PanelLabel>{title}</PanelLabel>
       <div className="grid gap-3">{children}</div>
@@ -117,11 +128,13 @@ export function Dashboard({ send }: DashboardProps) {
   const uiLanguage = useJarvisStore((state) => state.uiLanguage);
   const muted = useJarvisStore((state) => state.muted);
   const textPromptEnabled = useJarvisStore((state) => state.textPromptEnabled);
+  const theme = useJarvisStore((state) => state.theme);
   const connectionStatus = useJarvisStore((state) => state.connectionStatus);
   const setAvatarDirection = useJarvisStore((state) => state.setAvatarDirection);
   const setUiLanguage = useJarvisStore((state) => state.setUiLanguage);
   const setMuted = useJarvisStore((state) => state.setMuted);
   const setTextPromptEnabled = useJarvisStore((state) => state.setTextPromptEnabled);
+  const setTheme = useJarvisStore((state) => state.setTheme);
   const setFeatureFlagLocal = useJarvisStore((state) => state.setFeatureFlagLocal);
   const setConfigValueLocal = useJarvisStore((state) => state.setConfigValueLocal);
 
@@ -138,10 +151,10 @@ export function Dashboard({ send }: DashboardProps) {
   };
 
   return (
-    <div className="frameless-scroll relative h-screen overflow-y-auto px-4 py-6 text-white sm:px-6 lg:px-8">
-      {/* dark base with a subtle pink / blue / amber gradient glow — matches the
-          app's dark-glass style */}
-      <div aria-hidden="true" className="pointer-events-none fixed inset-0 z-0 bg-[#0A0A0F]/95 backdrop-blur-xl">
+    <div className="frameless-scroll relative h-screen overflow-y-auto px-4 py-6 text-gray-900 sm:px-6 lg:px-8 dark:text-white">
+      {/* theme base + subtle pink / blue / amber gradient glow (same colors in
+          light and dark) */}
+      <div aria-hidden="true" className="pointer-events-none fixed inset-0 z-0 bg-[#e9ebf5]/95 backdrop-blur-xl dark:bg-[#0A0A0F]/95">
         <div className="absolute inset-0 opacity-35">
           <GradientBackground
             containerClassName="h-full w-full"
@@ -156,8 +169,8 @@ export function Dashboard({ send }: DashboardProps) {
           className="flex flex-col gap-3 border-b border-white/10 pb-4 sm:flex-row sm:items-center sm:justify-between"
         >
           <div data-tauri-drag-region>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-50/70">Control Center</p>
-            <h1 className="mt-1 text-2xl font-semibold tracking-normal text-white">Jarvis Dashboard</h1>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-700 dark:text-cyan-50/70">Control Center</p>
+            <h1 className="mt-1 text-2xl font-semibold tracking-normal text-gray-900 dark:text-white">Jarvis Dashboard</h1>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -186,7 +199,7 @@ export function Dashboard({ send }: DashboardProps) {
         </header>
 
         {!hasConfig ? (
-          <div className="rounded-md border border-cyan-200/20 bg-cyan-200/10 p-3 text-[12px] text-cyan-50/80">
+          <div className="rounded-md border border-cyan-500/25 bg-cyan-500/10 p-3 text-[12px] text-cyan-800 dark:border-cyan-200/20 dark:bg-cyan-200/10 dark:text-cyan-50/80">
             Engine config has not arrived yet. Use Refresh to request the current values from the bridge.
           </div>
         ) : null}
@@ -199,6 +212,10 @@ export function Dashboard({ send }: DashboardProps) {
 
           <Section title="Avatar">
             <ChipGroup value={avatarDirection} options={avatarOptions} onChange={setAvatarDirection} />
+          </Section>
+
+          <Section title="Theme">
+            <ChipGroup value={theme} options={themeOptions} onChange={setTheme} />
           </Section>
 
           <Section title="Voice Persona">
@@ -253,14 +270,14 @@ export function Dashboard({ send }: DashboardProps) {
           <Section title="Status">
             <dl className="grid gap-3 text-sm">
               <div className="flex items-center justify-between gap-4">
-                <dt className="text-white/58">Connection</dt>
-                <dd className="rounded border border-white/10 bg-white/5 px-2 py-1 font-medium capitalize text-white/80">
+                <dt className="text-gray-500 dark:text-white/58">Connection</dt>
+                <dd className="rounded border border-black/10 bg-black/5 px-2 py-1 font-medium dark:border-white/10 dark:bg-white/5 capitalize text-gray-800 dark:text-white/80">
                   {connectionStatus}
                 </dd>
               </div>
               <div className="flex items-center justify-between gap-4">
-                <dt className="text-white/58">Current model</dt>
-                <dd className="rounded border border-white/10 bg-white/5 px-2 py-1 font-medium text-white/80">
+                <dt className="text-gray-500 dark:text-white/58">Current model</dt>
+                <dd className="rounded border border-black/10 bg-black/5 px-2 py-1 font-medium dark:border-white/10 dark:bg-white/5 text-gray-800 dark:text-white/80">
                   {config?.model ?? 'Unknown'}
                 </dd>
               </div>

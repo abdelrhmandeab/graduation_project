@@ -6,6 +6,7 @@ type ConnectionStatus = 'connecting' | 'connected' | 'disconnected';
 export type AvatarDirection = 'aurora' | 'glyph' | 'glassai' | 'companion';
 export type AppView = 'overlay' | 'dashboard';
 export type UiLanguage = Language | 'auto';
+export type ThemeMode = 'dark' | 'light' | 'auto';
 
 interface JarvisState {
   connectionStatus: ConnectionStatus;
@@ -25,6 +26,7 @@ interface JarvisState {
   avatarDirection: AvatarDirection;
   previewDialogueState: DialogueState | null;
   textPromptEnabled: boolean;
+  theme: ThemeMode;
   dispatch: (event: EngineEvent) => void;
   setConnectionStatus: (status: ConnectionStatus) => void;
   setMuted: (muted: boolean) => void;
@@ -32,6 +34,7 @@ interface JarvisState {
   setAppView: (view: AppView) => void;
   setUiLanguage: (language: UiLanguage) => void;
   setTextPromptEnabled: (enabled: boolean) => void;
+  setTheme: (theme: ThemeMode) => void;
   setFeatureFlagLocal: (flag: keyof FeatureFlags, enabled: boolean) => void;
   setConfigValueLocal: <K extends keyof ConfigValues>(key: K, value: ConfigValues[K]) => void;
   previewState: (state: DialogueState | null) => void;
@@ -58,6 +61,7 @@ const initialState = {
   avatarDirection: 'glassai' as AvatarDirection,
   previewDialogueState: null,
   textPromptEnabled: true,
+  theme: 'dark' as ThemeMode,
   lastError: null,
 };
 
@@ -121,6 +125,7 @@ export const useJarvisStore = create<JarvisState>()(
       setAppView: (appView) => set({ appView }),
       setUiLanguage: (uiLanguage) => set({ uiLanguage }),
       setTextPromptEnabled: (textPromptEnabled) => set({ textPromptEnabled }),
+      setTheme: (theme) => set({ theme }),
       setFeatureFlagLocal: (flag, enabled) =>
         set((state) => {
           if (!state.config) {
@@ -162,6 +167,7 @@ export const useJarvisStore = create<JarvisState>()(
         appView: state.appView,
         textPromptEnabled: state.textPromptEnabled,
         muted: state.muted,
+        theme: state.theme,
       }),
     },
   ),

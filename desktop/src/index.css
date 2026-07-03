@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+/* Class-based dark mode: `dark:` variants apply when <html> carries `.dark`.
+   The ThemeController in App.tsx toggles that class from the theme setting. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 html,
 body,
 #root {
@@ -9,18 +13,17 @@ body,
   background: transparent;
 }
 
-/* Thin, subtle scrollbar for frameless windows so the OS scrollbar doesn't
-   read as a gray "sidebar" against the dark glass. */
+/* Thin, neutral scrollbar for frameless windows (reads fine in light + dark). */
 .frameless-scroll {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+  scrollbar-color: rgba(120, 120, 140, 0.45) transparent;
 }
 .frameless-scroll::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 .frameless-scroll::-webkit-scrollbar-thumb {
-  background-color: rgba(255, 255, 255, 0.16);
+  background-color: rgba(120, 120, 140, 0.45);
   border-radius: 9999px;
 }
 .frameless-scroll::-webkit-scrollbar-track {

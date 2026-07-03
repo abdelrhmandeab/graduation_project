@@ -14,7 +14,7 @@ export function FloatingPanel({
 }) {
   return (
     <aside
-      className={`z-50 rounded-md border border-white/10 bg-black/70 p-3 text-[11px] text-white shadow-2xl backdrop-blur ${className}`}
+      className={`z-50 rounded-md border border-black/10 bg-white/70 p-3 text-[11px] text-gray-900 shadow-2xl backdrop-blur dark:border-white/10 dark:bg-black/70 dark:text-white ${className}`}
     >
       {children}
     </aside>
@@ -23,7 +23,7 @@ export function FloatingPanel({
 
 /** Small uppercase-ish section label used inside a FloatingPanel. */
 export function PanelLabel({ children }: { children: ReactNode }) {
-  return <div className="mb-2 text-xs font-semibold text-white/80">{children}</div>;
+  return <div className="mb-2 text-xs font-semibold text-gray-600 dark:text-white/80">{children}</div>;
 }
 
 /**
@@ -48,8 +48,8 @@ export function Chip({
       onClick={onClick}
       className={`rounded border px-2 py-1 transition-opacity hover:opacity-90 ${
         active
-          ? 'border-cyan-200 bg-cyan-200/18 text-cyan-50'
-          : 'border-white/10 bg-white/5 text-white/70'
+          ? 'border-cyan-400 bg-cyan-400/15 text-cyan-800 dark:border-cyan-200 dark:bg-cyan-200/18 dark:text-cyan-50'
+          : 'border-black/10 bg-black/[0.04] text-gray-600 dark:border-white/10 dark:bg-white/5 dark:text-white/70'
       } ${className}`}
     >
       {children}
