@@ -1,0 +1,143 @@
+/* Animated glowing search bar — rotating conic-gradient glow layers behind a
+   dark input. The glow drifts on hover and sweeps further on focus. */
+
+.glow-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  isolation: isolate;
+}
+
+.glow-search .glow-layer {
+  position: absolute;
+  inset: -3px;
+  z-index: -1;
+  overflow: hidden;
+  border-radius: 0.75rem;
+}
+
+.glow-search .glow-layer::before {
+  content: "";
+  position: absolute;
+  z-index: -2;
+  width: 600px;
+  height: 600px;
+  top: 50%;
+  left: 50%;
+  background-repeat: no-repeat;
+  transform: translate(-50%, -50%) rotate(var(--rot, 82deg));
+  transition: transform 2s ease;
+}
+
+.glow-search:hover .glow-layer::before {
+  transform: translate(-50%, -50%) rotate(var(--rot-hover, -98deg));
+}
+
+.glow-search:focus-within .glow-layer::before {
+  transform: translate(-50%, -50%) rotate(var(--rot-focus, 442deg));
+  transition-duration: 4s;
+}
+
+/* Wide outer halo */
+.glow-search .glow-outer {
+  filter: blur(3px);
+  --rot: 60deg;
+  --rot-hover: -120deg;
+  --rot-focus: 420deg;
+}
+.glow-search .glow-outer::before {
+  width: 999px;
+  height: 999px;
+  background: conic-gradient(#000, #402fb5 5%, #000 38%, #000 50%, #cf30aa 60%, #000 87%);
+}
+
+/* Blue/magenta mid glow (two stacked copies for intensity) */
+.glow-search .glow-mid {
+  filter: blur(3px);
+  --rot: 82deg;
+  --rot-hover: -98deg;
+  --rot-focus: 442deg;
+}
+.glow-search .glow-mid::before {
+  background: conic-gradient(
+    rgba(0, 0, 0, 0),
+    #18116a,
+    rgba(0, 0, 0, 0) 10%,
+    rgba(0, 0, 0, 0) 50%,
+    #6e1b60,
+    rgba(0, 0, 0, 0) 60%
+  );
+}
+
+/* Bright thin highlight */
+.glow-search .glow-bright {
+  filter: blur(2px) brightness(1.4);
+  --rot: 83deg;
+  --rot-hover: -97deg;
+  --rot-focus: 443deg;
+}
+.glow-search .glow-bright::before {
+  background: conic-gradient(
+    rgba(0, 0, 0, 0) 0%,
+    #a099d8,
+    rgba(0, 0, 0, 0) 8%,
+    rgba(0, 0, 0, 0) 50%,
+    #dfa2da,
+    rgba(0, 0, 0, 0) 58%
+  );
+}
+
+/* Crisp border ring */
+.glow-search .glow-border {
+  filter: blur(0.5px) brightness(1.3);
+  --rot: 70deg;
+  --rot-hover: -110deg;
+  --rot-focus: 430deg;
+}
+.glow-search .glow-border::before {
+  background: conic-gradient(#1c191c, #402fb5 5%, #1c191c 14%, #1c191c 50%, #cf30aa 60%, #1c191c 64%);
+}
+
+/* Spinning gradient border behind the send button */
+.glow-search .icon-spin {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 0.5rem;
+  z-index: -1;
+}
+.glow-search .icon-spin::before {
+  content: "";
+  position: absolute;
+  width: 400px;
+  height: 400px;
+  top: 50%;
+  left: 50%;
+  background: conic-gradient(
+    rgba(0, 0, 0, 0),
+    #3d3a4f,
+    rgba(0, 0, 0, 0) 50%,
+    rgba(0, 0, 0, 0) 50%,
+    #3d3a4f,
+    rgba(0, 0, 0, 0) 100%
+  );
+  filter: brightness(1.35);
+  animation: glow-search-spin 4s linear infinite;
+}
+
+@keyframes glow-search-spin {
+  from {
+    transform: translate(-50%, -50%) rotate(0deg);
+  }
+  to {
+    transform: translate(-50%, -50%) rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .glow-search .glow-layer::before,
+  .glow-search .icon-spin::before {
+    transition: none;
+    animation: none;
+  }
+}

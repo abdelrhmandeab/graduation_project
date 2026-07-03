@@ -81,7 +81,7 @@ export function Overlay({ send }: OverlayProps) {
         </main>
 
         {textPromptEnabled ? (
-          <div className="relative m-3 flex items-center gap-2 rounded border border-black/10 bg-white/70 p-2 shadow-2xl shadow-black/20 backdrop-blur-xl dark:border-white/10 dark:bg-[#0A0A0F]/70 dark:shadow-black/40">
+          <div className="relative m-3 flex items-center gap-2">
             <button
               type="button"
               onClick={toggleMuted}
