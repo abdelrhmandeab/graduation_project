@@ -1862,6 +1862,7 @@ def run():
             record_started = time.perf_counter()
 
             _partial_latency_recorded = False
+            _last_amplitude_at = 0.0
 
             def _pipeline_partial(partial_text):
                 nonlocal _partial_latency_recorded
@@ -1870,6 +1871,20 @@ def run():
                 if not _partial_latency_recorded and (partial_text or "").strip():
                     _partial_latency_recorded = True
                     latency_tracker.record("stt_partial_latency", time.perf_counter() - record_started)
+
+            def _pipeline_level(level):
+                # Stream mic loudness to the UI (avatar reactivity), throttled to
+                # ~20/s and scaled from chunk RMS to a 0..1 range.
+                nonlocal _last_amplitude_at
+                now = time.perf_counter()
+                if now - _last_amplitude_at < 0.05:
+                    return
+                _last_amplitude_at = now
+                try:
+                    scaled = max(0.0, min(1.0, float(level) * 8.0))
+                except (TypeError, ValueError):
+                    return
+                _emit_ui_event("amplitude", level=scaled)
 
             with stage_timer("recording", source=wake_source or "unknown") as recording_timing:
                 capture = record_utterance_streaming(
@@ -1884,6 +1899,7 @@ def run():
                     ),
                     enable_partials=True,
                     on_partial=_pipeline_partial,
+                    on_level=_pipeline_level,
                 )
             metrics.record_stage(
                 "record_audio",
